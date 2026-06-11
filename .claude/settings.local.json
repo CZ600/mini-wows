@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create *)",
+      "Bash(npm install *)",
+      "Bash(npx vite *)",
+      "Bash(powershell *)",
+      "Bash(pip install *)",
+      "Bash(timeout 8 python -c ' *)",
+      "Bash(rm -f game.db)",
+      "Bash(python -c ' *)",
+      "Bash(echo \"Backend PID: $!\")",
+      "Bash(echo \"Frontend PID: $!\")",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill *)",
+      "Bash(pip show *)",
+      "Bash(python -c \"import jwt; print\\(jwt.__file__\\); print\\(dir\\(jwt\\)\\)\")",
+      "Bash(D:/app/anaconda3/envs/agent/python *)"
+    ]
+  }
+}
