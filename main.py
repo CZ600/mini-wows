@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Header, Query
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -25,9 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SECRET_KEY = "sea-battle-secret-key-2024"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 120
+from settings import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 
 def create_access_token(data: dict) -> str:
@@ -106,6 +104,14 @@ class AdminUpdateRequest(BaseModel):
 @app.on_event("startup")
 async def startup():
     await init_db()
+    from game.room_manager import room_manager
+    await room_manager.start_cleanup_loop()
+
+
+@app.websocket("/ws")
+async def ws_route(ws: WebSocket, token: str = Query(...)):
+    from ws import websocket_endpoint
+    await websocket_endpoint(ws, token)
 
 
 @app.post("/api/auth/register")

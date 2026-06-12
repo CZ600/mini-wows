@@ -19,7 +19,8 @@
       "Bash(D:/app/anaconda3/envs/agent/python *)",
       "Bash(conda run *)",
       "Bash(npx vitest *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(sqlite3 *)"
     ]
   }
 }

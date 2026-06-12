@@ -22,6 +22,8 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 user_id INTEGER,
+                level INTEGER DEFAULT 1,
+                ship_class TEXT DEFAULT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
@@ -39,6 +41,31 @@ async def init_db():
                 FOREIGN KEY (player_id) REFERENCES players(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS multiplayer_games (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mode TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                end_time DATETIME,
+                duration_seconds INTEGER,
+                result TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS multiplayer_game_players (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL,
+                player_id INTEGER NOT NULL,
+                team TEXT,
+                is_winner INTEGER DEFAULT 0,
+                kills INTEGER DEFAULT 0,
+                deaths INTEGER DEFAULT 0,
+                damage_dealt INTEGER DEFAULT 0,
+                FOREIGN KEY (game_id) REFERENCES multiplayer_games(id),
+                FOREIGN KEY (player_id) REFERENCES players(id)
+            )
+        """)
         await db.commit()
 
         cursor = await db.execute("SELECT id FROM users WHERE username = 'admin'")
@@ -49,6 +76,17 @@ async def init_db():
                 ('admin', password_hash, 'admin')
             )
             await db.commit()
+
+        # Migration: add level/ship_class columns if missing
+        try:
+            await db.execute("ALTER TABLE players ADD COLUMN level INTEGER DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE players ADD COLUMN ship_class TEXT DEFAULT NULL")
+        except Exception:
+            pass
+        await db.commit()
 
 
 # ── User functions ──
@@ -198,3 +236,70 @@ async def get_leaderboard(limit: int = 10) -> list:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+# ── Player progress / class functions ──
+
+async def get_player_level(player_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT level FROM players WHERE id = ?", (player_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else 1
+
+
+async def update_player_level(player_id: int, level: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE players SET level = ? WHERE id = ?", (level, player_id))
+        await db.commit()
+
+
+async def reset_player_level(player_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE players SET level = 1, ship_class = NULL WHERE id = ?", (player_id,))
+        await db.commit()
+
+
+async def get_player_ship_class(player_id: int) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT ship_class FROM players WHERE id = ?", (player_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def update_player_ship_class(player_id: int, ship_class: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE players SET ship_class = ? WHERE id = ?", (ship_class, player_id))
+        await db.commit()
+
+
+# ── Multiplayer game functions ──
+
+async def create_multiplayer_game(mode: str, room_id: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO multiplayer_games (mode, room_id) VALUES (?, ?)",
+            (mode, room_id),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def finish_multiplayer_game(game_id: int, duration: int, result: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE multiplayer_games SET end_time = CURRENT_TIMESTAMP,
+               duration_seconds = ?, result = ? WHERE id = ?""",
+            (duration, result, game_id),
+        )
+        await db.commit()
+
+
+async def add_multiplayer_game_player(game_id: int, player_id: int,
+                                       team: str = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO multiplayer_game_players
+               (game_id, player_id, team) VALUES (?, ?, ?)""",
+            (game_id, player_id, team),
+        )
+        await db.commit()

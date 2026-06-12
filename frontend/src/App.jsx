@@ -2,14 +2,18 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import LoginScreen from './components/LoginScreen.jsx';
 import RegisterScreen from './components/RegisterScreen.jsx';
 import MenuScreen from './components/MenuScreen.jsx';
+import LobbyScreen from './components/LobbyScreen.jsx';
+import RoomScreen from './components/RoomScreen.jsx';
 import GameCanvas from './components/GameCanvas.jsx';
 import HUD from './components/HUD.jsx';
+import MultiplayerHUD from './components/MultiplayerHUD.jsx';
 import Minimap from './components/Minimap.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
 import { GameEngine } from './game/engine.js';
+import { MultiplayerEngine } from './game/multiplayer_engine.js';
 import { createPlayer, createGame, finishGame, getMe, clearToken, getPlayerProgress, savePlayerProgress, resetPlayerProgress, getPlayerClass, setPlayerClass } from './api.js';
 import './App.css';
 
@@ -86,15 +90,27 @@ export default function App() {
   const [levelUpInfo, setLevelUpInfo] = useState(null);
   const [showClassSelect, setShowClassSelect] = useState(false);
 
+  // Multiplayer state
+  const [roomInfo, setRoomInfo] = useState(null);
+  const [mpHudData, setMpHudData] = useState(null);
+  const [mpCountdown, setMpCountdown] = useState(null);
+
   const engineRef = useRef(null);
+  const mpEngineRef = useRef(null);
   const playerIdRef = useRef(null);
   const gameIdRef = useRef(null);
   const levelUpTimerRef = useRef(null);
+  const mpCanvasRef = useRef(null);
+  const mpInitializedRef = useRef(false);
 
   if (!engineRef.current) {
     engineRef.current = new GameEngine();
   }
+  if (!mpEngineRef.current) {
+    mpEngineRef.current = new MultiplayerEngine();
+  }
   const engine = engineRef.current;
+  const mpEngine = mpEngineRef.current;
 
   engine.onHudUpdate = setHudData;
   engine.onMinimapUpdate = setMinimapData;
@@ -135,6 +151,15 @@ export default function App() {
       }
     })();
   }, []);
+
+  // Init mpEngine when canvas is available in multiplayer states
+  useEffect(() => {
+    const isMpState = gameState === 'LOBBY' || gameState === 'ROOM' || gameState === 'MULTIPLAYER';
+    if (isMpState && mpCanvasRef.current && !mpInitializedRef.current) {
+      mpEngine.init(mpCanvasRef.current);
+      mpInitializedRef.current = true;
+    }
+  }, [gameState, mpEngine]);
 
   const handleLogin = (userData) => {
     setUser(userData);
@@ -216,6 +241,70 @@ export default function App() {
     }
   };
 
+  // Multiplayer handlers
+  mpEngine.onHudUpdate = setMpHudData;
+  mpEngine.onRoomUpdate = (info) => {
+    setRoomInfo(info);
+  };
+  mpEngine.onCountdown = (seconds) => {
+    setMpCountdown(seconds);
+  };
+  mpEngine.onGameStart = () => {
+    setGameState('MULTIPLAYER');
+  };
+  mpEngine.onGameOver = (results) => {
+    setGameState('GAME_OVER');
+    setGameResult({ score: 0, enemies: 0, level: 1, multiplayerResults: results });
+  };
+  mpEngine.onError = (msg) => {
+    console.error('MP Error:', msg);
+    alert(msg);
+  };
+
+  const handleMultiplayer = () => {
+    const token = localStorage.getItem('token');
+    // Init will happen in useEffect when canvas mounts
+    mpEngine.connect(token, user.id);
+    setGameState('LOBBY');
+  };
+
+  const handleQuickMatch = (mode, level, shipClass) => {
+    mpEngine.quickMatch(mode, level, shipClass);
+    setGameState('ROOM');
+  };
+
+  const handleCreateRoom = (mode, level, shipClass) => {
+    mpEngine.createRoom(mode, level, shipClass);
+    setGameState('ROOM');
+  };
+
+  const handleJoinRoom = (roomId, level, shipClass) => {
+    mpEngine.joinRoom(roomId, level, shipClass);
+    setGameState('ROOM');
+  };
+
+  const handleReady = () => {
+    mpEngine.ready();
+  };
+
+  const handleLeaveRoom = () => {
+    mpEngine.leaveRoom();
+    setRoomInfo(null);
+    setMpCountdown(null);
+    setGameState('LOBBY');
+  };
+
+  const handleBackToMenu = () => {
+    mpEngine.disconnect();
+    if (mpInitializedRef.current) {
+      mpEngine.destroy();
+      mpInitializedRef.current = false;
+    }
+    setRoomInfo(null);
+    setMpCountdown(null);
+    setGameState('MENU');
+  };
+
   if (authState === 'CHECKING') {
     return (
       <div id="menu-screen">
@@ -241,9 +330,29 @@ export default function App() {
         <MenuScreen
           user={user}
           onStart={handleStart}
+          onMultiplayer={handleMultiplayer}
           onShowLeaderboard={() => setShowLeaderboard(v => !v)}
           onShowAdmin={() => setShowAdmin(v => !v)}
           onLogout={handleLogout}
+        />
+      )}
+
+      {gameState === 'LOBBY' && (
+        <LobbyScreen
+          user={user}
+          onQuickMatch={handleQuickMatch}
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          onBack={handleBackToMenu}
+        />
+      )}
+
+      {gameState === 'ROOM' && (
+        <RoomScreen
+          roomInfo={roomInfo ? { ...roomInfo, countdown: mpCountdown } : null}
+          userId={user.id}
+          onReady={handleReady}
+          onLeave={handleLeaveRoom}
         />
       )}
       <LeaderboardPanel visible={gameState === 'MENU' && showLeaderboard} onClose={() => setShowLeaderboard(false)} />
@@ -251,9 +360,16 @@ export default function App() {
         <AdminPanel onClose={() => setShowAdmin(false)} />
       )}
 
-      <GameCanvas engine={engine} />
+      {/* Single-player canvas */}
+      {gameState === 'PLAYING' && <GameCanvas engine={engine} />}
+
+      {/* Multiplayer canvas */}
+      {(gameState === 'LOBBY' || gameState === 'ROOM' || gameState === 'MULTIPLAYER') && (
+        <canvas ref={mpCanvasRef} id="game-canvas" />
+      )}
 
       {gameState === 'PLAYING' && hudData && <HUD data={hudData} />}
+      {gameState === 'MULTIPLAYER' && mpHudData && <MultiplayerHUD data={mpHudData} />}
       {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
       {gameState === 'PLAYING' && minimapData && !scoped && <Minimap data={minimapData} />}
       {gameState === 'PLAYING' && scoped && <ScopeOverlay />}

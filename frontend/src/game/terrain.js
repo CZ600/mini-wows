@@ -4,8 +4,16 @@ import { PerlinNoise } from './noise.js';
 const MAP_SIZE = 10000;
 const SEGMENTS = 256;
 
+function seededRandom(seed) {
+  let s = seed;
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
 export class Terrain {
-  constructor(scene) {
+  constructor(scene, terrainSeed, islands) {
     this.noise = new PerlinNoise(123);
     this.heights = new Float32Array((SEGMENTS + 1) * (SEGMENTS + 1));
 
@@ -14,14 +22,21 @@ export class Terrain {
 
     const positions = geo.attributes.position.array;
 
-    this.islandCenters = [];
-    for (let i = 0; i < 5; i++) {
-      this.islandCenters.push({
-        x: (Math.random() - 0.5) * MAP_SIZE * 0.7,
-        z: (Math.random() - 0.5) * MAP_SIZE * 0.7,
-        radius: 150 + Math.random() * 350,
-        height: 20 + Math.random() * 60,
-      });
+    if (islands && islands.length > 0) {
+      this.islandCenters = islands.map(i => ({
+        x: i.x, z: i.z, radius: i.radius, height: i.height,
+      }));
+    } else {
+      const rng = terrainSeed ? seededRandom(terrainSeed) : Math.random;
+      this.islandCenters = [];
+      for (let i = 0; i < 5; i++) {
+        this.islandCenters.push({
+          x: (rng() - 0.5) * MAP_SIZE * 0.7,
+          z: (rng() - 0.5) * MAP_SIZE * 0.7,
+          radius: 150 + rng() * 350,
+          height: 20 + rng() * 60,
+        });
+      }
     }
 
     for (let i = 0; i < positions.length; i += 3) {

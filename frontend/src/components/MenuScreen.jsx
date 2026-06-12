@@ -6,7 +6,7 @@ const CLASSES = [
   { id: 'battleship', name: '战列舰', icon: '🏰', traits: ['高血量 / 低航速', '重甲厚血', '无鱼雷', '火炮伤害最高'], color: '#ff9800' },
 ];
 
-export default function MenuScreen({ user, onStart, onShowLeaderboard, onShowAdmin, onLogout }) {
+export default function MenuScreen({ user, onStart, onMultiplayer, onShowLeaderboard, onShowAdmin, onLogout }) {
   const [initialLevel, setInitialLevel] = useState(1);
   const [shipClass, setShipClass] = useState(null);
 
@@ -59,6 +59,9 @@ export default function MenuScreen({ user, onStart, onShowLeaderboard, onShowAdm
 
         <button className="menu-btn" onClick={handleStart} disabled={!ready}>
           开始游戏 (等级 {initialLevel}{shipClass ? ` - ${CLASSES.find(c => c.id === shipClass).name}` : ''})
+        </button>
+        <button className="menu-btn" onClick={onMultiplayer}>
+          多人对战
         </button>
         <button className="menu-btn secondary" onClick={onShowLeaderboard}>排行榜</button>
         {user.role === 'admin' && (

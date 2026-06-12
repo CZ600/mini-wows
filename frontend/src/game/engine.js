@@ -55,7 +55,7 @@ export class GameEngine {
     this._cCleanup = cCleanup;
 
     this.water = createWater(this.scene);
-    this.terrain = new Terrain(this.scene);
+    this.terrain = new Terrain(this.scene, null, null);
     this._minimapTerrain = this.terrain.generateMinimapImage();
     this.audio = new AudioManager();
     this.controls = new Controls(canvas);
