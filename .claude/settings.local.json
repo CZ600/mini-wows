@@ -20,7 +20,8 @@
       "Bash(conda run *)",
       "Bash(npx vitest *)",
       "Bash(python *)",
-      "Bash(sqlite3 *)"
+      "Bash(sqlite3 *)",
+      "Bash(git remote *)"
     ]
   }
 }
