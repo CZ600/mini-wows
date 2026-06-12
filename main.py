@@ -14,6 +14,8 @@ from database import (
     get_player_history, get_leaderboard,
     get_player_level, update_player_level, reset_player_level,
     get_player_ship_class, update_player_ship_class,
+    create_announcement, get_announcements,
+    get_total_users, get_today_games_count,
 )
 
 app = FastAPI()
@@ -167,6 +169,81 @@ async def api_admin_update(user_id: int, req: AdminUpdateRequest, admin: dict = 
 async def api_admin_delete(user_id: int, admin: dict = Depends(require_admin)):
     await delete_user(user_id)
     return {"status": "ok"}
+
+
+# ── Room list (any authenticated user) ──
+
+@app.get("/api/rooms")
+async def api_list_rooms(user: dict = Depends(get_current_user)):
+    from game.room_manager import room_manager
+    return room_manager.list_rooms()
+
+
+# ── Admin dashboard routes ──
+
+class BroadcastRequest(BaseModel):
+    content: str
+
+
+@app.get("/api/admin/stats")
+async def api_admin_stats(admin: dict = Depends(require_admin)):
+    from game.room_manager import room_manager
+    total_users = await get_total_users()
+    active_rooms = len(room_manager.rooms)
+    today_games = await get_today_games_count()
+    return {
+        "totalUsers": total_users,
+        "onlineCount": 0,  # Will be updated with WebSocket tracking
+        "activeRooms": active_rooms,
+        "todayGames": today_games,
+    }
+
+
+@app.get("/api/admin/rooms")
+async def api_admin_rooms(admin: dict = Depends(require_admin)):
+    from game.room_manager import room_manager
+    return room_manager.list_all_rooms()
+
+
+@app.post("/api/admin/rooms/{room_id}/close")
+async def api_admin_close_room(room_id: str, admin: dict = Depends(require_admin)):
+    from game.room_manager import room_manager
+    success = room_manager.force_close_room(room_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="房间不存在")
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/rooms/{room_id}/kick/{player_id}")
+async def api_admin_kick_player(room_id: str, player_id: int, admin: dict = Depends(require_admin)):
+    from game.room_manager import room_manager
+    success = room_manager.kick_player(room_id, player_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="玩家不在房间中")
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/broadcast")
+async def api_admin_broadcast(req: BroadcastRequest, admin: dict = Depends(require_admin)):
+    await create_announcement(req.content)
+    # TODO: Send to all connected WebSocket clients
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/announcements")
+async def api_admin_announcements(admin: dict = Depends(require_admin)):
+    return await get_announcements()
+
+
+@app.get("/api/admin/server-status")
+async def api_admin_server_status(admin: dict = Depends(require_admin)):
+    from game.room_manager import room_manager
+    import time
+    return {
+        "activeConnections": 0,  # Will be updated with WebSocket tracking
+        "activeRooms": len(room_manager.rooms),
+        "uptime": int(time.time()),  # Simplified uptime
+    }
 
 
 # ── Game routes (require auth) ──

@@ -95,6 +95,68 @@ export async function adminDeleteUser(userId) {
   return res.json();
 }
 
+// Alias for compatibility
+export const updateAdminUser = adminUpdateUser;
+export const deleteAdminUser = adminDeleteUser;
+
+export async function getRooms() {
+  const res = await fetch(`${BASE}/api/rooms`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('获取房间列表失败');
+  return res.json();
+}
+
+export async function getAdminStats() {
+  const res = await fetch(`${BASE}/api/admin/stats`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('无权限');
+  return res.json();
+}
+
+export async function getAdminRooms() {
+  const res = await fetch(`${BASE}/api/admin/rooms`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('无权限');
+  return res.json();
+}
+
+export async function closeAdminRoom(roomId) {
+  const res = await fetch(`${BASE}/api/admin/rooms/${roomId}/close`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('关闭房间失败');
+  return res.json();
+}
+
+export async function kickAdminPlayer(roomId, playerId) {
+  const res = await fetch(`${BASE}/api/admin/rooms/${roomId}/kick/${playerId}`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('踢出玩家失败');
+  return res.json();
+}
+
+export async function adminBroadcast(content) {
+  const res = await fetch(`${BASE}/api/admin/broadcast`, {
+    method: 'POST',
+    headers: authJsonHeaders(),
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) throw new Error('发送公告失败');
+  return res.json();
+}
+
+export async function getAdminAnnouncements() {
+  const res = await fetch(`${BASE}/api/admin/announcements`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('无权限');
+  return res.json();
+}
+
+export async function getAdminServerStatus() {
+  const res = await fetch(`${BASE}/api/admin/server-status`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('无权限');
+  return res.json();
+}
+
 // ── Game ──
 
 export async function createPlayer(name) {

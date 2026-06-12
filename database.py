@@ -66,6 +66,13 @@ async def init_db():
                 FOREIGN KEY (player_id) REFERENCES players(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS announcements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
         cursor = await db.execute("SELECT id FROM users WHERE username = 'admin'")
@@ -303,3 +310,44 @@ async def add_multiplayer_game_player(game_id: int, player_id: int,
             (game_id, player_id, team),
         )
         await db.commit()
+
+
+# ── Announcement functions ──
+
+async def create_announcement(content: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO announcements (content) VALUES (?)",
+            (content,)
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_announcements(limit: int = 50) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT id, content, created_at FROM announcements ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+# ── Admin stats functions ──
+
+async def get_total_users() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM users")
+        row = await cursor.fetchone()
+        return row[0]
+
+
+async def get_today_games_count() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM games WHERE DATE(start_time) = DATE('now')"
+        )
+        row = await cursor.fetchone()
+        return row[0]

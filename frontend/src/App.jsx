@@ -2,6 +2,9 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import LoginScreen from './components/LoginScreen.jsx';
 import RegisterScreen from './components/RegisterScreen.jsx';
 import MenuScreen from './components/MenuScreen.jsx';
+import SingleSetupScreen from './components/SingleSetupScreen.jsx';
+import MultiSetupScreen from './components/MultiSetupScreen.jsx';
+import AdminDashboard from './components/AdminDashboard.jsx';
 import LobbyScreen from './components/LobbyScreen.jsx';
 import RoomScreen from './components/RoomScreen.jsx';
 import GameCanvas from './components/GameCanvas.jsx';
@@ -10,7 +13,6 @@ import MultiplayerHUD from './components/MultiplayerHUD.jsx';
 import Minimap from './components/Minimap.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
-import AdminPanel from './components/AdminPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
 import { GameEngine } from './game/engine.js';
 import { MultiplayerEngine } from './game/multiplayer_engine.js';
@@ -84,7 +86,6 @@ export default function App() {
   const [hudData, setHudData] = useState(null);
   const [minimapData, setMinimapData] = useState(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
-  const [showAdmin, setShowAdmin] = useState(false);
   const [gameResult, setGameResult] = useState({ score: 0, enemies: 0, level: 1 });
   const [scoped, setScoped] = useState(false);
   const [levelUpInfo, setLevelUpInfo] = useState(null);
@@ -102,6 +103,8 @@ export default function App() {
   const levelUpTimerRef = useRef(null);
   const mpCanvasRef = useRef(null);
   const mpInitializedRef = useRef(false);
+  const spInitializedRef = useRef(false);
+  const pendingStartRef = useRef(null);
 
   if (!engineRef.current) {
     engineRef.current = new GameEngine();
@@ -161,6 +164,15 @@ export default function App() {
     }
   }, [gameState, mpEngine]);
 
+  // Start single-player engine after GameCanvas mounts and init() completes
+  useEffect(() => {
+    if (gameState === 'PLAYING' && spInitializedRef.current && pendingStartRef.current) {
+      const { level, shipClass } = pendingStartRef.current;
+      pendingStartRef.current = null;
+      engine.start(level, shipClass);
+    }
+  }, [gameState, engine]);
+
   const handleLogin = (userData) => {
     setUser(userData);
     setAuthState('AUTHENTICATED');
@@ -172,7 +184,6 @@ export default function App() {
     setAuthState('LOGIN');
     setGameState('MENU');
     setShowLeaderboard(false);
-    setShowAdmin(false);
   };
 
   const handleStart = async (name, initialLevel = 1, initialClass = null) => {
@@ -190,10 +201,10 @@ export default function App() {
     if (playerIdRef.current && initialClass) {
       setPlayerClass(playerIdRef.current, initialClass).catch(() => {});
     }
-    engine.start(initialLevel, initialClass);
+    pendingStartRef.current = { level: initialLevel, shipClass: initialClass };
+    spInitializedRef.current = false;
     setGameState('PLAYING');
     setShowLeaderboard(false);
-    setShowAdmin(false);
   };
 
   const handleContinue = async () => {
@@ -206,7 +217,8 @@ export default function App() {
         shipClass = progress.shipClass || null;
       } catch { /* offline */ }
     }
-    engine.start(startLevel, shipClass);
+    pendingStartRef.current = { level: startLevel, shipClass };
+    spInitializedRef.current = false;
     setGameState('PLAYING');
     if (playerIdRef.current) {
       try {
@@ -221,7 +233,8 @@ export default function App() {
     if (playerIdRef.current) {
       resetPlayerProgress(playerIdRef.current).catch(() => {});
     }
-    engine.start(1, null);
+    pendingStartRef.current = { level: 1, shipClass: null };
+    spInitializedRef.current = false;
     setGameState('PLAYING');
     if (playerIdRef.current) {
       try {
@@ -329,12 +342,34 @@ export default function App() {
       {gameState === 'MENU' && (
         <MenuScreen
           user={user}
-          onStart={handleStart}
-          onMultiplayer={handleMultiplayer}
+          onSinglePlayer={() => setGameState('SINGLE_SETUP')}
+          onMultiplayer={() => setGameState('MULTI_SETUP')}
           onShowLeaderboard={() => setShowLeaderboard(v => !v)}
-          onShowAdmin={() => setShowAdmin(v => !v)}
+          onShowAdmin={() => setGameState('ADMIN')}
           onLogout={handleLogout}
         />
+      )}
+
+      {gameState === 'SINGLE_SETUP' && (
+        <SingleSetupScreen
+          user={user}
+          onStart={handleStart}
+          onBack={() => setGameState('MENU')}
+        />
+      )}
+
+      {gameState === 'MULTI_SETUP' && (
+        <MultiSetupScreen
+          user={user}
+          onQuickMatch={handleQuickMatch}
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          onBack={() => setGameState('MENU')}
+        />
+      )}
+
+      {gameState === 'ADMIN' && user?.role === 'admin' && (
+        <AdminDashboard onClose={() => setGameState('MENU')} />
       )}
 
       {gameState === 'LOBBY' && (
@@ -356,12 +391,9 @@ export default function App() {
         />
       )}
       <LeaderboardPanel visible={gameState === 'MENU' && showLeaderboard} onClose={() => setShowLeaderboard(false)} />
-      {gameState === 'MENU' && showAdmin && user?.role === 'admin' && (
-        <AdminPanel onClose={() => setShowAdmin(false)} />
-      )}
 
       {/* Single-player canvas */}
-      {gameState === 'PLAYING' && <GameCanvas engine={engine} />}
+      {gameState === 'PLAYING' && <GameCanvas engine={engine} onInit={() => { spInitializedRef.current = true; }} />}
 
       {/* Multiplayer canvas */}
       {(gameState === 'LOBBY' || gameState === 'ROOM' || gameState === 'MULTIPLAYER') && (

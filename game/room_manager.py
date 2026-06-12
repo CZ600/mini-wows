@@ -103,5 +103,61 @@ class RoomManager:
                         return result
         return None, "No available room"
 
+    def list_rooms(self) -> list:
+        """List available rooms for users (limited info)."""
+        result = []
+        mc = MODE_CONFIG
+        for room in self.rooms.values():
+            if room.state.value in ("waiting", "countdown"):
+                max_players = mc.get(room.mode, mc["ffa"])["max"]
+                result.append({
+                    "roomId": room.room_id,
+                    "mode": room.mode,
+                    "playerCount": room._connected_count(),
+                    "maxPlayers": max_players,
+                    "status": room.state.value,
+                })
+        return result
+
+    def list_all_rooms(self) -> list:
+        """List all active rooms with full details (admin only)."""
+        result = []
+        for room in self.rooms.values():
+            players = []
+            for pid, p in room.players.items():
+                players.append({
+                    "id": pid,
+                    "username": p.get("username", "unknown"),
+                    "connected": p.get("ws") is not None,
+                })
+            result.append({
+                "roomId": room.room_id,
+                "mode": room.mode,
+                "level": getattr(room, 'level', 1),
+                "state": room.state.value,
+                "playerCount": room._connected_count(),
+                "players": players,
+                "createdAt": getattr(room, '_created_at', None),
+            })
+        return result
+
+    def force_close_room(self, room_id: str) -> bool:
+        """Force close a room."""
+        room = self.rooms.get(room_id)
+        if not room:
+            return False
+        room.state.value = "ended"
+        return True
+
+    def kick_player(self, room_id: str, player_id: int) -> bool:
+        """Kick a player from a room."""
+        room = self.rooms.get(room_id)
+        if not room:
+            return False
+        if player_id not in room.players:
+            return False
+        room.remove_player(player_id)
+        return True
+
 
 room_manager = RoomManager()

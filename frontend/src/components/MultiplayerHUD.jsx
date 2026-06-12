@@ -2,59 +2,69 @@ export default function MultiplayerHUD({ data, events }) {
   if (!data) return null;
 
   const hpPercent = Math.max(0, (data.hp / data.maxHp) * 100);
-  const hpColor = hpPercent > 60 ? '#44cc44' : hpPercent > 30 ? '#ccaa22' : '#ff3333';
+  const hpColor = hpPercent > 60 ? '#4dff88' : hpPercent > 30 ? '#ff9800' : '#ff4d4d';
   const speed = data.speed || 0;
   const ping = data.ping || 0;
 
   return (
-    <div id="hud" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, pointerEvents: 'none' }}>
-      {/* HP Bar */}
-      <div style={{
-        position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
-        width: '300px', height: '20px', background: '#333', borderRadius: '4px', overflow: 'hidden',
-      }}>
-        <div style={{
-          width: `${hpPercent}%`, height: '100%', background: hpColor,
-          transition: 'width 0.2s ease',
-        }} />
-        <span style={{
-          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-          color: '#fff', fontSize: '12px', fontWeight: 'bold', textShadow: '1px 1px 2px #000',
-        }}>
-          {Math.round(data.hp)} / {data.maxHp}
-        </span>
+    <>
+      {/* Compass */}
+      <div id="compass">
+        <span className="compass-dir">N</span>
+        <span className="compass-dir">E</span>
+        <span className="compass-dir">S</span>
+        <span className="compass-dir">W</span>
       </div>
 
-      {/* Speed & Ping */}
-      <div style={{
-        position: 'absolute', bottom: '50px', left: '20px',
-        color: '#ddd', fontSize: '13px', fontFamily: 'monospace',
-      }}>
-        <div>航速: {speed.toFixed(1)} km/h</div>
-        <div style={{ color: ping < 50 ? '#4caf50' : ping < 100 ? '#ff9800' : '#f44336' }}>
-          延迟: {ping}ms
+      {/* HP Bar - Top Center */}
+      <div id="hud" style={{ pointerEvents: 'none' }}>
+        <div id="hud-left">
+          <div className="hud-row">
+            <span className="hud-label">血量</span>
+            <div className="health-bar-outer">
+              <div className="health-bar-inner" style={{ width: hpPercent + '%', backgroundColor: hpColor }} />
+            </div>
+            <span>{Math.ceil(data.hp)}</span>
+          </div>
+        </div>
+
+        <div id="hud-right">
+          <div className="hud-row">
+            <span className="hud-label">延迟</span>
+            <span style={{ color: ping < 50 ? '#4dff88' : ping < 100 ? '#ff9800' : '#ff4d4d' }}>
+              {ping}ms
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Kill feed */}
+      {/* Kill Feed */}
       {events && events.length > 0 && (
-        <div style={{
-          position: 'absolute', top: '80px', right: '20px',
-          color: '#fff', fontSize: '12px', fontFamily: 'monospace',
-          textAlign: 'right',
-        }}>
+        <div id="kill-feed">
           {events.slice(-5).map((evt, i) => (
-            <div key={i} style={{
-              padding: '2px 6px', marginBottom: '2px',
-              background: evt.type === 'entity_destroyed' ? 'rgba(255,0,0,0.3)' : 'rgba(0,0,0,0.3)',
-              borderRadius: '3px',
-            }}>
-              {evt.type === 'hit' && `${evt.attacker} → ${evt.target} (-${evt.damage})`}
-              {evt.type === 'entity_destroyed' && `${evt.destroyed_by} 击沉 ${evt.target}`}
+            <div key={i} className="kill-feed-item">
+              {evt.type === 'hit' && (
+                <><span className="killer">{evt.attacker}</span> → <span className="victim">{evt.target}</span> (-{evt.damage})</>
+              )}
+              {evt.type === 'entity_destroyed' && (
+                <><span className="killer">{evt.destroyed_by}</span> 击沉 <span className="victim">{evt.target}</span></>
+              )}
             </div>
           ))}
         </div>
       )}
-    </div>
+
+      {/* Bottom Bar */}
+      <div id="hud-bottom-bar">
+        <div className="hud-bottom-left">
+          <div className="hud-row">
+            <span className="hud-label">速度</span>
+            <span>{speed.toFixed(1)} km/h</span>
+          </div>
+        </div>
+        <div className="hud-bottom-middle" />
+        <div className="hud-bottom-right" />
+      </div>
+    </>
   );
 }
