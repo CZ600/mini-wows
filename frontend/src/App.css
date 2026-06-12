@@ -131,7 +131,7 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
   background: rgba(0,0,0,0.5); border: 1px solid #4a6a8a;
   border-radius: 3px; overflow: hidden;
 }
-.turret-bar-inner { height: 100%; border-radius: 2px; transition: width 0.1s; }
+.turret-bar-inner { height: 100%; border-radius: 2px; }
 .turret-time { color: #8aa0b8; font-size: 10px; }
 
 /* 等级进度 */
@@ -180,3 +180,79 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 .gameover-container { text-align: center; color: #e0e8f0; }
 .gameover-container h1 { font-size: 48px; margin-bottom: 20px; color: #ff6a4a; }
 .gameover-container p { font-size: 22px; margin: 8px 0; }
+
+/* 职业选择界面 */
+#class-select-screen {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.85);
+}
+.class-select-overlay { text-align: center; }
+.class-select-title { font-size: 48px; color: #ffd700; margin-bottom: 12px; text-shadow: 0 0 20px rgba(255,215,0,0.4); }
+.class-select-subtitle { color: #8ec8ff; font-size: 16px; margin-bottom: 32px; }
+.class-cards { display: flex; gap: 24px; justify-content: center; margin-bottom: 28px; }
+.class-card {
+  width: 240px; padding: 24px 20px;
+  background: rgba(20,40,60,0.9); border: 3px solid #555; border-radius: 12px;
+  cursor: pointer; transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+.class-card:hover { transform: translateY(-6px); box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+.class-card.selected { box-shadow: 0 0 25px rgba(255,215,0,0.3); }
+.class-icon { font-size: 48px; margin-bottom: 12px; }
+.class-name { font-size: 24px; color: #e0e8f0; margin-bottom: 12px; }
+.class-traits { list-style: none; text-align: left; padding: 0; }
+.class-traits li { color: #a0b8d0; font-size: 13px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.class-confirm-btn {
+  padding: 14px 48px; font-size: 20px; font-weight: bold;
+  border: 2px solid #ffd700; border-radius: 8px;
+  background: rgba(255,215,0,0.15); color: #ffd700;
+  cursor: pointer; transition: background 0.2s;
+  letter-spacing: 2px;
+}
+.class-confirm-btn:hover { background: rgba(255,215,0,0.3); }
+
+/* 武器模式指示器 */
+.weapon-mode-indicator { margin-top: 12px; }
+.weapon-mode-badge {
+  display: inline-block; padding: 6px 14px; border-radius: 6px;
+  font-size: 14px; font-weight: bold; letter-spacing: 1px;
+  background: rgba(42,127,255,0.2); border: 1px solid #2a7fff; color: #7ac0ff;
+}
+.weapon-mode-badge.torpedo {
+  background: rgba(255,152,0,0.2); border-color: #ff9800; color: #ffb84d;
+}
+.torpedo-spread-info { color: #a0b8d0; font-size: 12px; margin-top: 4px; }
+
+/* 鱼雷管冷却 */
+#torpedo-bar-container {
+  position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 400px;
+}
+.torpedo-group-label { color: #ffb84d; font-size: 11px; width: 100%; text-align: center; margin-bottom: 2px; }
+
+/* 等级选择 */
+.level-select-section { margin-bottom: 20px; }
+.level-select-label { color: #8ec8ff; font-size: 16px; margin-bottom: 10px; }
+.level-buttons { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; max-width: 340px; margin: 0 auto; }
+.level-btn {
+  width: 40px; height: 40px; border: 2px solid #4a6a8a; border-radius: 6px;
+  background: rgba(255,255,255,0.06); color: #c0d0e0; font-size: 16px; font-weight: bold;
+  cursor: pointer; transition: all 0.15s;
+}
+.level-btn:hover { background: rgba(42,127,255,0.2); border-color: #7ac0ff; }
+.level-btn.active {
+  background: linear-gradient(135deg, #2a7fff, #1a5fcc); border-color: #2a7fff;
+  color: #fff; box-shadow: 0 0 12px rgba(42,127,255,0.4);
+}
+
+/* 菜单内职业选择 */
+.class-select-section { margin-bottom: 20px; }
+.class-cards-inline { display: flex; gap: 12px; justify-content: center; }
+.class-card-mini {
+  width: 90px; padding: 14px 8px; text-align: center;
+  background: rgba(20,40,60,0.9); border: 2px solid #555; border-radius: 8px;
+  cursor: pointer; transition: all 0.15s;
+}
+.class-card-mini:hover { transform: translateY(-3px); box-shadow: 0 4px 15px rgba(0,0,0,0.4); }
+.class-card-mini.selected { box-shadow: 0 0 15px rgba(255,215,0,0.3); }
+.class-name-mini { color: #e0e8f0; font-size: 14px; margin-top: 6px; }

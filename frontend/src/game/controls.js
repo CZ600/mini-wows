@@ -11,9 +11,51 @@ export class Controls {
     this.scoped = false;
     this._scopePressed = false;
 
+    this.weaponMode = 'gun';
+    this.torpedoTier = 1;
+    this.torpedoSpread = 'narrow';
+    this._availableTiers = [1, 2, 3];
+
     this._onKeyDown = (e) => {
       const k = e.key.toLowerCase();
       if (k in this.keys) this.keys[k] = true;
+
+      if (this.locked) {
+        if (k === '1') {
+          this.weaponMode = 'gun';
+          e.preventDefault();
+        } else if (k === '2') {
+          if (this._availableTiers.includes(1)) {
+            if (this.weaponMode === 'torpedo' && this.torpedoTier === 1) {
+              this.torpedoSpread = this.torpedoSpread === 'narrow' ? 'wide' : 'narrow';
+            } else {
+              this.weaponMode = 'torpedo';
+              this.torpedoTier = 1;
+            }
+          }
+          e.preventDefault();
+        } else if (k === '3') {
+          if (this._availableTiers.includes(2)) {
+            if (this.weaponMode === 'torpedo' && this.torpedoTier === 2) {
+              this.torpedoSpread = this.torpedoSpread === 'narrow' ? 'wide' : 'narrow';
+            } else {
+              this.weaponMode = 'torpedo';
+              this.torpedoTier = 2;
+            }
+          }
+          e.preventDefault();
+        } else if (k === '4') {
+          if (this._availableTiers.includes(3)) {
+            if (this.weaponMode === 'torpedo' && this.torpedoTier === 3) {
+              this.torpedoSpread = this.torpedoSpread === 'narrow' ? 'wide' : 'narrow';
+            } else {
+              this.weaponMode = 'torpedo';
+              this.torpedoTier = 3;
+            }
+          }
+          e.preventDefault();
+        }
+      }
     };
     this._onKeyUp = (e) => {
       const k = e.key.toLowerCase();
@@ -54,6 +96,10 @@ export class Controls {
     document.addEventListener('mousedown', this._onMouseDown);
     document.addEventListener('mouseup', this._onMouseUp);
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
+  }
+
+  setTorpedoCapabilities({ availableTiers }) {
+    this._availableTiers = availableTiers;
   }
 
   consumeFire() {

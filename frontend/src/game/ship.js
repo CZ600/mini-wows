@@ -13,8 +13,79 @@ export const LEVEL_CONFIG = {
   10: { length: 53, width: 11, height: 6.0, hp: 1100, turnRadius: 70, fireCooldown: 1.8, damage: 80, frontTurrets: 3, backTurrets: 3, hasBridge: true },
 };
 
-const MAX_SPEED = 16.67;
-const ACCEL = MAX_SPEED / 20;
+export const CLASS_CONFIG = {
+  destroyer: {
+    4:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+    5:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+    6:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+    7:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+    8:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+    9:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+    10: { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 8, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
+  },
+  cruiser: {
+    4:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    5:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    6:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    7:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    8:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    9:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    10: { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+  },
+  battleship: {
+    4:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    5:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    6:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    7:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    8:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    9:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    10: { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+  },
+};
+
+const BASE_MAX_SPEED = 16.67;
+
+export function getClassConfig(shipClass, level) {
+  if (!shipClass || level < 4 || level > 10) return null;
+  const cc = CLASS_CONFIG[shipClass]?.[level];
+  if (!cc) return null;
+  const base = LEVEL_CONFIG[level];
+  const sm = cc.sizeMul || 1.0;
+  return {
+    hp: Math.round(base.hp * cc.hpMul),
+    maxSpeed: BASE_MAX_SPEED * cc.speedMul,
+    turnRadius: Math.round(base.turnRadius * cc.turnMul),
+    damage: Math.round(base.damage * cc.damageMul),
+    fireCooldown: +(base.fireCooldown * cc.cooldownMul).toFixed(2),
+    frontTurrets: base.frontTurrets,
+    backTurrets: base.backTurrets,
+    hasBridge: base.hasBridge,
+    length: Math.round(base.length * sm),
+    width: +(base.width * sm).toFixed(1),
+    height: +(base.height * sm).toFixed(1),
+    torpedoTiers: cc.torpedoTiers,
+    torpedoTubeCount: cc.torpedoTubeCount,
+    turretMul: cc.turretMul || 1.0,
+  };
+}
+
+export function getTorpedoTubes(shipClass, level) {
+  const cc = CLASS_CONFIG[shipClass]?.[level];
+  if (!cc || cc.torpedoTubeCount === 0) return [];
+  const count = cc.torpedoTubeCount;
+  const tubes = [];
+  for (let i = 0; i < count; i++) {
+    const side = i % 2 === 0 ? 'port' : 'starboard';
+    tubes.push({
+      side,
+      angle: side === 'port' ? Math.PI / 2 : -Math.PI / 2,
+      index: i,
+    });
+  }
+  return tubes;
+}
+
+const ACCEL = BASE_MAX_SPEED / 20;
 const DECEL_FRICTION = 0.98;
 const YAW_RANGE_FULL = Math.PI;
 const YAW_RANGE_BRIDGE = 2.2;
@@ -22,13 +93,13 @@ const YAW_RANGE_BRIDGE = 2.2;
 function buildTurretDefs(cfg) {
   const defs = [];
   const yawRange = cfg.hasBridge ? YAW_RANGE_BRIDGE : YAW_RANGE_FULL;
-  const spacing = Math.max(2.5, cfg.width * 0.5);
+  const spacing = Math.max(1.5, cfg.width * 0.85 * (cfg.spacingMul || 1.0));
 
   let frontCenter = cfg.length * 0.2;
   let backCenter = -cfg.length * 0.2;
 
   if (cfg.hasBridge) {
-    const turretSize = 1.2 + cfg.width * 0.15;
+    const turretSize = (1.2 + cfg.width * 0.15) * (cfg.turretMul || 1.0);
     const bridgeHalf = cfg.length * 0.06;
     const minDist = bridgeHalf + turretSize * 0.7 + 0.2;
 
@@ -112,16 +183,19 @@ function createSternGeometry(frontWidth, backWidth, height, length) {
 }
 
 export class Ship {
-  constructor(scene, level = 1) {
+  constructor(scene, level = 1, shipClass = null) {
     this.scene = scene;
     this.level = level;
-    const cfg = LEVEL_CONFIG[level];
+    this.shipClass = shipClass;
+    const cfg = this._getConfig(level);
     this.shipLength = cfg.length;
     this.shipWidth = cfg.width;
     this.turnRadius = cfg.turnRadius;
     this.maxHp = cfg.hp;
+    this.maxSpeed = cfg.maxSpeed || BASE_MAX_SPEED;
     this.fireCooldown = cfg.fireCooldown;
     this.damage = cfg.damage;
+    this.torpedoTubes = getTorpedoTubes(shipClass, level);
 
     this.heading = 0;
     this.speed = 0;
@@ -135,6 +209,11 @@ export class Ship {
     this._buildMesh(cfg);
     this.scene.add(this.mesh);
     this._initWake();
+  }
+
+  _getConfig(level) {
+    const classCfg = getClassConfig(this.shipClass, level);
+    return classCfg || LEVEL_CONFIG[level];
   }
 
   _buildMesh(cfg) {
@@ -198,7 +277,7 @@ export class Ship {
     }
     this.hasBridge = cfg.hasBridge;
 
-    const turretSize = 1.2 + cfg.width * 0.15;
+    const turretSize = (1.2 + cfg.width * 0.15) * (cfg.turretMul || 1.0);
     const barrelLen = turretSize * 1.5;
     const turretDefs = buildTurretDefs(cfg);
     this.turrets = [];
@@ -384,14 +463,16 @@ export class Ship {
     this._destroyWake();
 
     this.level = newLevel;
-    const cfg = LEVEL_CONFIG[newLevel];
+    const cfg = this._getConfig(newLevel);
     this.shipLength = cfg.length;
     this.shipWidth = cfg.width;
     this.turnRadius = cfg.turnRadius;
     this.maxHp = cfg.hp;
     this.hp = cfg.hp;
+    this.maxSpeed = cfg.maxSpeed || BASE_MAX_SPEED;
     this.fireCooldown = cfg.fireCooldown;
     this.damage = cfg.damage;
+    this.torpedoTubes = getTorpedoTubes(this.shipClass, newLevel);
     this.turrets = [];
 
     this._buildMesh(cfg);
@@ -425,7 +506,7 @@ export class Ship {
       this.speed *= DECEL_FRICTION;
       if (Math.abs(this.speed) < 0.1) this.speed = 0;
     }
-    this.speed = Math.max(-MAX_SPEED * 0.3, Math.min(MAX_SPEED, this.speed));
+    this.speed = Math.max(-this.maxSpeed * 0.3, Math.min(this.maxSpeed, this.speed));
 
     if (Math.abs(this.speed) > 0.5) {
       const turnRate = this.speed / this.turnRadius;

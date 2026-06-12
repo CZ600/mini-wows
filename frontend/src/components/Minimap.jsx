@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 
 const SIZE = 200;
-const VIEW_RANGE = 800;
+const VIEW_RANGE = 2000;
 const MAP_SIZE = 10000;
 
 export default function Minimap({ data }) {
@@ -32,22 +32,37 @@ export default function Minimap({ data }) {
 
     const scale = SIZE / VIEW_RANGE;
 
-    ctx.fillStyle = '#ff3333';
     if (d.enemies) {
       for (const enemy of d.enemies) {
         if (!enemy.alive) continue;
         const ex = (enemy.mesh.position.x - d.playerPos.x) * scale + SIZE / 2;
         const ez = (enemy.mesh.position.z - d.playerPos.z) * scale + SIZE / 2;
         if (ex < 0 || ex > SIZE || ez < 0 || ez > SIZE) continue;
-        ctx.beginPath();
-        ctx.arc(ex, ez, 3, 0, Math.PI * 2);
-        ctx.fill();
+        if (enemy.type === 'ship') {
+          ctx.save();
+          ctx.translate(ex, ez);
+          const shipHeading = enemy.heading || 0;
+          ctx.rotate(Math.PI - shipHeading);
+          ctx.fillStyle = '#ff3333';
+          ctx.beginPath();
+          ctx.moveTo(0, -5);
+          ctx.lineTo(-3, 4);
+          ctx.lineTo(3, 4);
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        } else {
+          ctx.fillStyle = '#ff3333';
+          ctx.beginPath();
+          ctx.arc(ex, ez, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 
     ctx.save();
     ctx.translate(SIZE / 2, SIZE / 2);
-    ctx.rotate(-d.playerHeading);
+    ctx.rotate(Math.PI - d.playerHeading);
     ctx.fillStyle = '#44ff44';
     ctx.beginPath();
     ctx.moveTo(0, -6);

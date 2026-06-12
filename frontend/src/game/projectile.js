@@ -3,6 +3,7 @@ import * as THREE from 'three';
 const GRAVITY = 9.8;
 const INITIAL_SPEED = 200;
 const MAX_LIFETIME = 10;
+const TRAIL_LENGTH = 30;
 
 export class ProjectileManager {
   constructor(scene, terrain, audio) {
@@ -21,8 +22,22 @@ export class ProjectileManager {
     mesh.position.copy(origin);
     this.scene.add(mesh);
 
+    const trailGeo = new THREE.BufferGeometry();
+    const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
+    trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+    const trailMat = new THREE.PointsMaterial({
+      color: owner === 'player' ? 0xffaa44 : 0xff6644,
+      size: 0.8,
+      transparent: true,
+      opacity: 0.7,
+    });
+    const trail = new THREE.Points(trailGeo, trailMat);
+    this.scene.add(trail);
+
     this.projectiles.push({
       mesh,
+      trail,
+      trailData: [],
       velocity: new THREE.Vector3(
         direction.x * INITIAL_SPEED,
         direction.y * INITIAL_SPEED,
@@ -40,6 +55,8 @@ export class ProjectileManager {
       p.lifetime += dt;
       p.velocity.y -= GRAVITY * dt;
       p.mesh.position.addScaledVector(p.velocity, dt);
+
+      this._updateTrail(p);
 
       let hit = false;
 
@@ -97,6 +114,9 @@ export class ProjectileManager {
         this.scene.remove(p.mesh);
         p.mesh.geometry.dispose();
         p.mesh.material.dispose();
+        this.scene.remove(p.trail);
+        p.trail.geometry.dispose();
+        p.trail.material.dispose();
         this.projectiles.splice(i, 1);
       }
     }
@@ -143,9 +163,35 @@ export class ProjectileManager {
   }
 
   destroy() {
-    for (const p of this.projectiles) { this.scene.remove(p.mesh); p.mesh.geometry.dispose(); p.mesh.material.dispose(); }
+    for (const p of this.projectiles) {
+      this.scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      this.scene.remove(p.trail);
+      p.trail.geometry.dispose();
+      p.trail.material.dispose();
+    }
     for (const e of this.explosions) { this.scene.remove(e.mesh); e.mesh.geometry.dispose(); e.mesh.material.dispose(); }
     this.projectiles = [];
     this.explosions = [];
+  }
+
+  _updateTrail(p) {
+    const pos = p.mesh.position;
+    p.trailData.push({ x: pos.x, y: pos.y, z: pos.z });
+    if (p.trailData.length > TRAIL_LENGTH) p.trailData.shift();
+
+    const positions = p.trail.geometry.attributes.position.array;
+    for (let j = 0; j < TRAIL_LENGTH; j++) {
+      if (j < p.trailData.length) {
+        const t = p.trailData[j];
+        positions[j * 3] = t.x;
+        positions[j * 3 + 1] = t.y;
+        positions[j * 3 + 2] = t.z;
+      } else {
+        positions[j * 3 + 1] = -100;
+      }
+    }
+    p.trail.geometry.attributes.position.needsUpdate = true;
   }
 }

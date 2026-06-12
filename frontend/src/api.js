@@ -147,3 +147,22 @@ export async function resetPlayerProgress(playerId) {
     headers: authHeaders(),
   });
 }
+
+export async function getPlayerClass(playerId) {
+  const res = await fetch(`${BASE}/api/players/${playerId}/class`, { headers: authHeaders() });
+  if (!res.ok) return { shipClass: null };
+  return res.json();
+}
+
+export async function setPlayerClass(playerId, shipClass) {
+  const res = await fetch(`${BASE}/api/players/${playerId}/class`, {
+    method: 'PUT',
+    headers: authJsonHeaders(),
+    body: JSON.stringify({ shipClass }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || '设置职业失败');
+  }
+  return res.json();
+}

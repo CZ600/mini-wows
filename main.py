@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, timedelta, timezone
 import jwt
 import os
@@ -13,6 +13,7 @@ from database import (
     get_or_create_player, create_game, finish_game,
     get_player_history, get_leaderboard,
     get_player_level, update_player_level, reset_player_level,
+    get_player_ship_class, update_player_ship_class,
 )
 
 app = FastAPI()
@@ -88,7 +89,11 @@ class GameEndRequest(BaseModel):
 
 
 class ProgressRequest(BaseModel):
-    level: int
+    level: int = Field(ge=1, le=10)
+
+
+class ShipClassRequest(BaseModel):
+    shipClass: str
 
 
 class AdminUpdateRequest(BaseModel):
@@ -191,7 +196,8 @@ async def api_leaderboard():
 @app.get("/api/players/{player_id}/progress")
 async def api_get_progress(player_id: int, user: dict = Depends(get_current_user)):
     level = await get_player_level(player_id)
-    return {"level": level}
+    ship_class = await get_player_ship_class(player_id)
+    return {"level": level, "shipClass": ship_class}
 
 
 @app.put("/api/players/{player_id}/progress")
@@ -204,6 +210,23 @@ async def api_save_progress(player_id: int, req: ProgressRequest, user: dict = D
 async def api_reset_progress(player_id: int, user: dict = Depends(get_current_user)):
     await reset_player_level(player_id)
     return {"status": "ok"}
+
+
+VALID_CLASSES = {"destroyer", "cruiser", "battleship"}
+
+
+@app.get("/api/players/{player_id}/class")
+async def api_get_ship_class(player_id: int, user: dict = Depends(get_current_user)):
+    ship_class = await get_player_ship_class(player_id)
+    return {"shipClass": ship_class}
+
+
+@app.put("/api/players/{player_id}/class")
+async def api_set_ship_class(player_id: int, req: ShipClassRequest, user: dict = Depends(get_current_user)):
+    if req.shipClass not in VALID_CLASSES:
+        raise HTTPException(status_code=400, detail="无效的职业类型")
+    await update_player_ship_class(player_id, req.shipClass)
+    return {"shipClass": req.shipClass}
 
 
 # ── Serve frontend ──

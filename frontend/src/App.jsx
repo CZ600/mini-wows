@@ -8,8 +8,9 @@ import Minimap from './components/Minimap.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import AdminPanel from './components/AdminPanel.jsx';
+import ClassSelectScreen from './components/ClassSelectScreen.jsx';
 import { GameEngine } from './game/engine.js';
-import { createPlayer, createGame, finishGame, getMe, clearToken, getPlayerProgress, savePlayerProgress, resetPlayerProgress } from './api.js';
+import { createPlayer, createGame, finishGame, getMe, clearToken, getPlayerProgress, savePlayerProgress, resetPlayerProgress, getPlayerClass, setPlayerClass } from './api.js';
 import './App.css';
 
 function ScopeOverlay() {
@@ -73,7 +74,7 @@ function LevelUpNotification({ info }) {
 }
 
 export default function App() {
-  const [authState, setAuthState] = useState('CHECKING'); // CHECKING, LOGIN, REGISTER, AUTHENTICATED
+  const [authState, setAuthState] = useState('CHECKING');
   const [user, setUser] = useState(null);
   const [gameState, setGameState] = useState('MENU');
   const [hudData, setHudData] = useState(null);
@@ -83,6 +84,7 @@ export default function App() {
   const [gameResult, setGameResult] = useState({ score: 0, enemies: 0, level: 1 });
   const [scoped, setScoped] = useState(false);
   const [levelUpInfo, setLevelUpInfo] = useState(null);
+  const [showClassSelect, setShowClassSelect] = useState(false);
 
   const engineRef = useRef(null);
   const playerIdRef = useRef(null);
@@ -113,8 +115,11 @@ export default function App() {
       finishGame(gameIdRef.current, score, level, enemies, 'sunk').catch(() => {});
     }
   }, []);
+  engine.onClassSelect = useCallback(() => {
+    setShowClassSelect(true);
+    setGameState('CLASS_SELECT');
+  }, []);
 
-  // Check existing token on mount
   useEffect(() => {
     (async () => {
       try {
@@ -145,7 +150,7 @@ export default function App() {
     setShowAdmin(false);
   };
 
-  const handleStart = async (name) => {
+  const handleStart = async (name, initialLevel = 1, initialClass = null) => {
     try {
       const p = await createPlayer(name);
       playerIdRef.current = p.id;
@@ -154,14 +159,13 @@ export default function App() {
     } catch {
       console.warn('API unavailable, playing offline');
     }
-    let startLevel = 1;
-    if (playerIdRef.current) {
-      try {
-        const progress = await getPlayerProgress(playerIdRef.current);
-        startLevel = progress.level || 1;
-      } catch { /* offline */ }
+    if (playerIdRef.current && initialLevel > 1) {
+      savePlayerProgress(playerIdRef.current, initialLevel).catch(() => {});
     }
-    engine.start(startLevel);
+    if (playerIdRef.current && initialClass) {
+      setPlayerClass(playerIdRef.current, initialClass).catch(() => {});
+    }
+    engine.start(initialLevel, initialClass);
     setGameState('PLAYING');
     setShowLeaderboard(false);
     setShowAdmin(false);
@@ -169,19 +173,22 @@ export default function App() {
 
   const handleContinue = async () => {
     let startLevel = 1;
+    let shipClass = null;
     if (playerIdRef.current) {
       try {
         const progress = await getPlayerProgress(playerIdRef.current);
         startLevel = progress.level || 1;
+        shipClass = progress.shipClass || null;
       } catch { /* offline */ }
     }
-    engine.start(startLevel);
+    engine.start(startLevel, shipClass);
     setGameState('PLAYING');
     if (playerIdRef.current) {
       try {
         const g = await createGame(playerIdRef.current);
         gameIdRef.current = g.id;
       } catch { /* offline */ }
+      savePlayerProgress(playerIdRef.current, startLevel).catch(() => {});
     }
   };
 
@@ -189,7 +196,7 @@ export default function App() {
     if (playerIdRef.current) {
       resetPlayerProgress(playerIdRef.current).catch(() => {});
     }
-    engine.start(1);
+    engine.start(1, null);
     setGameState('PLAYING');
     if (playerIdRef.current) {
       try {
@@ -199,7 +206,16 @@ export default function App() {
     }
   };
 
-  // Auth screens
+  const handleClassSelect = async (shipClass) => {
+    engine.selectClass(shipClass);
+    setShowClassSelect(false);
+    setGameState('PLAYING');
+    if (playerIdRef.current) {
+      setPlayerClass(playerIdRef.current, shipClass).catch(() => {});
+      savePlayerProgress(playerIdRef.current, 4).catch(() => {});
+    }
+  };
+
   if (authState === 'CHECKING') {
     return (
       <div id="menu-screen">
@@ -219,7 +235,6 @@ export default function App() {
     return <RegisterScreen onRegister={handleLogin} onSwitchToLogin={() => setAuthState('LOGIN')} />;
   }
 
-  // Authenticated - show game UI
   return (
     <>
       {gameState === 'MENU' && (
@@ -242,6 +257,10 @@ export default function App() {
       {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
       {gameState === 'PLAYING' && minimapData && !scoped && <Minimap data={minimapData} />}
       {gameState === 'PLAYING' && scoped && <ScopeOverlay />}
+
+      {showClassSelect && (
+        <ClassSelectScreen onSelect={handleClassSelect} />
+      )}
 
       {gameState === 'GAME_OVER' && (
         <GameOverScreen

@@ -16,7 +16,10 @@
       "Bash(taskkill *)",
       "Bash(pip show *)",
       "Bash(python -c \"import jwt; print\\(jwt.__file__\\); print\\(dir\\(jwt\\)\\)\")",
-      "Bash(D:/app/anaconda3/envs/agent/python *)"
+      "Bash(D:/app/anaconda3/envs/agent/python *)",
+      "Bash(conda run *)",
+      "Bash(npx vitest *)",
+      "Bash(python *)"
     ]
   }
 }

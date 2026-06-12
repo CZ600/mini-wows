@@ -22,7 +22,6 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 user_id INTEGER,
-                level INTEGER NOT NULL DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
@@ -41,12 +40,6 @@ async def init_db():
             )
         """)
         await db.commit()
-
-        try:
-            await db.execute("ALTER TABLE players ADD COLUMN level INTEGER NOT NULL DEFAULT 1")
-            await db.commit()
-        except Exception:
-            pass
 
         cursor = await db.execute("SELECT id FROM users WHERE username = 'admin'")
         if not await cursor.fetchone():
@@ -205,22 +198,3 @@ async def get_leaderboard(limit: int = 10) -> list:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
-
-
-async def get_player_level(player_id: int) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT level FROM players WHERE id = ?", (player_id,))
-        row = await cursor.fetchone()
-        return row[0] if row else 1
-
-
-async def update_player_level(player_id: int, level: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE players SET level = ? WHERE id = ?", (level, player_id))
-        await db.commit()
-
-
-async def reset_player_level(player_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE players SET level = 1 WHERE id = ?", (player_id,))
-        await db.commit()

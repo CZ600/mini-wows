@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { createScene, createRenderer, createCamera } from './scene.js';
 import { createWater } from './water.js';
 import { Terrain } from './terrain.js';
-import { Ship, LEVEL_CONFIG } from './ship.js';
+import { Ship, LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
 import { updateTurrets, getTurretFireData, calcBallisticAngles, turretCanAim } from './turret.js';
 import { ProjectileManager } from './projectile.js';
+import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { EnemyManager, ENEMY_SCALE } from './enemy.js';
 import { Controls } from './controls.js';
 import { AudioManager } from './audio.js';
@@ -37,6 +38,10 @@ export class GameEngine {
     this._gameOverFired = false;
     this._aimTarget = new THREE.Vector3();
     this._currentFov = FOV_NORMAL;
+    this.shipClass = null;
+    this._torpedoCooldowns = [];
+    this._waitingForClassSelect = false;
+    this.onClassSelect = null;
   }
 
   init(canvas) {
@@ -58,6 +63,7 @@ export class GameEngine {
     this.ship = null;
     this.projectileManager = null;
     this.enemyManager = null;
+    this.torpedoManager = null;
 
     this.running = true;
     this.lastTime = performance.now();
@@ -65,24 +71,31 @@ export class GameEngine {
     this.animFrameId = requestAnimationFrame(this._loop);
   }
 
-  start(initialLevel = 1) {
+  start(initialLevel = 1, shipClass = null) {
     this.score = LEVEL_THRESHOLDS[initialLevel - 1] || 0;
     this.level = initialLevel;
     this.wave = 1;
     this.enemiesDestroyed = 0;
+    this.shipClass = shipClass;
+    this._waitingForClassSelect = false;
 
     if (this.ship) this.ship.destroy();
     if (this.projectileManager) this.projectileManager.destroy();
+    if (this.torpedoManager) this.torpedoManager.destroy();
     if (this.enemyManager) this.enemyManager.clear();
 
     this.audio.init();
 
-    this.ship = new Ship(this.scene, initialLevel);
+    this.ship = new Ship(this.scene, initialLevel, shipClass);
     const spawn = this._findSafeSpawn();
     this.ship.position.copy(spawn);
     this.projectileManager = new ProjectileManager(this.scene, this.terrain, this.audio);
+    this.torpedoManager = new TorpedoManager(this.scene, this.terrain);
     this.enemyManager = new EnemyManager(this.scene, this.terrain);
     this.enemyManager.spawn(this.ship.position, initialLevel);
+
+    this._updateControlsCapabilities();
+    this._torpedoCooldowns = this.ship.torpedoTubes.map(() => 0);
 
     this.controls.orbitYaw = 0;
     this.controls.orbitPitch = -0.18;
@@ -92,6 +105,17 @@ export class GameEngine {
     this.camera.position.set(spawn.x, CAM_HEIGHT, spawn.z - CAM_DIST);
 
     if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  _updateControlsCapabilities() {
+    if (!this.shipClass || this.level < 4) {
+      this.controls.setTorpedoCapabilities({ availableTiers: [] });
+      return;
+    }
+    const cc = CLASS_CONFIG[this.shipClass]?.[this.level];
+    if (cc) {
+      this.controls.setTorpedoCapabilities({ availableTiers: cc.torpedoTiers });
+    }
   }
 
   _findSafeSpawn() {
@@ -156,7 +180,7 @@ export class GameEngine {
 
     if (!this.ship.alive) {
       this.projectileManager.update(dt, this.ship, this.enemyManager.enemies);
-      this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera);
+      this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera, this.torpedoManager);
       this.renderer.render(this.scene, this.camera);
       if (!this._gameOverFired && this.onGameOver) {
         this._gameOverFired = true;
@@ -218,22 +242,43 @@ export class GameEngine {
     }
 
     if (this.controls.consumeFire()) {
-      let anyFired = false;
-      for (const turret of this.ship.turrets) {
-        if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
-          const { origin, direction } = getTurretFireData(turret, this.ship.heading);
-          this.projectileManager.fire(origin, direction, this.ship.damage, 'player');
-          turret.cooldown = this.ship.fireCooldown;
-          anyFired = true;
+      if (this.controls.weaponMode === 'torpedo' && this.ship.torpedoTubes.length > 0) {
+        this._fireTorpedoes();
+      } else {
+        let anyFired = false;
+        for (const turret of this.ship.turrets) {
+          if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
+            const { origin, direction } = getTurretFireData(turret, this.ship.heading);
+            this.projectileManager.fire(origin, direction, this.ship.damage, 'player');
+            turret.cooldown = this.ship.fireCooldown;
+            anyFired = true;
+          }
         }
-      }
-      if (anyFired) {
-        this.audio.playFire();
+        if (anyFired) {
+          this.audio.playFire();
+        }
       }
     }
 
     this.projectileManager.update(dt, this.ship, this.enemyManager.enemies);
-    this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera);
+    if (this.torpedoManager) {
+      this.torpedoManager.update(dt, this.ship, this.enemyManager.enemies);
+
+      const isTorpedoMode = this.controls.weaponMode === 'torpedo';
+      const aimYaw = this.ship.heading + this.controls.orbitYaw;
+      const tier = this.controls.torpedoTier;
+      const stats = TORPEDO_TIERS[tier];
+      this.torpedoManager.updateAimFan(
+        isTorpedoMode && this.ship.alive,
+        this.ship.position,
+        aimYaw,
+        this.ship.torpedoTubes.length,
+        this.controls.torpedoSpread,
+        stats ? stats.range : 400
+      );
+    }
+    this._updateTorpedoCooldowns(dt);
+    this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera, this.torpedoManager);
 
     for (const enemy of this.enemyManager.enemies) {
       if (enemy.alive && enemy.hp <= 0) {
@@ -242,6 +287,20 @@ export class GameEngine {
         this.score += enemy.scoreValue;
         this.enemiesDestroyed++;
         this._checkLevelUp();
+      }
+    }
+
+    if (this.ship.alive) {
+      for (const enemy of this.enemyManager.enemies) {
+        if (!enemy.alive) continue;
+        const edx = enemy.mesh.position.x - this.ship.position.x;
+        const edz = enemy.mesh.position.z - this.ship.position.z;
+        const eDist = Math.sqrt(edx * edx + edz * edz);
+        const collisionDist = (this.ship.shipLength + enemy.size) / 2;
+        if (eDist < collisionDist) {
+          this.ship.sink();
+          break;
+        }
       }
     }
 
@@ -266,6 +325,17 @@ export class GameEngine {
         })),
         currentThreshold: LEVEL_THRESHOLDS[this.level - 1] || 0,
         nextThreshold: this.level < LEVEL_THRESHOLDS.length ? LEVEL_THRESHOLDS[this.level] : null,
+        weaponMode: this.controls.weaponMode,
+        torpedoTier: this.controls.torpedoTier,
+        torpedoSpread: this.controls.torpedoSpread,
+        torpedoTubes: this._torpedoCooldowns.map((cd, i) => ({
+          index: i,
+          cooldown: cd,
+          side: this.ship.torpedoTubes[i]?.side || 'port',
+          ready: cd <= 0,
+        })),
+        torpedoMaxCooldown: this._getTorpedoCooldown(),
+        shipClass: this.shipClass,
       });
     }
 
@@ -287,20 +357,93 @@ export class GameEngine {
         const oldLevel = this.level;
         const newLevel = i + 1;
         this.level = newLevel;
-        this.ship.upgradeToLevel(newLevel);
-        if (this.onLevelUp) {
-          this.onLevelUp({
-            oldLevel,
-            newLevel,
-            oldShip: LEVEL_CONFIG[oldLevel],
-            newShip: LEVEL_CONFIG[newLevel],
-            oldEnemy: ENEMY_SCALE[oldLevel],
-            newEnemy: ENEMY_SCALE[newLevel],
-          });
+
+        if (oldLevel === 3 && newLevel === 4 && !this.shipClass) {
+          this._waitingForClassSelect = true;
+          this.running = false;
+          if (this.onClassSelect) {
+            this.onClassSelect();
+          }
+          return;
         }
+
+        this._applyLevelUp(oldLevel, newLevel);
         return;
       }
     }
+  }
+
+  _applyLevelUp(oldLevel, newLevel) {
+    this.ship.upgradeToLevel(newLevel);
+    this._torpedoCooldowns = this.ship.torpedoTubes.map(() => 0);
+    this._updateControlsCapabilities();
+    if (this.onLevelUp) {
+      const oldCfg = getClassConfig(this.shipClass, oldLevel) || LEVEL_CONFIG[oldLevel];
+      const newCfg = getClassConfig(this.shipClass, newLevel) || LEVEL_CONFIG[newLevel];
+      this.onLevelUp({
+        oldLevel,
+        newLevel,
+        oldShip: oldCfg,
+        newShip: newCfg,
+        oldEnemy: ENEMY_SCALE[oldLevel],
+        newEnemy: ENEMY_SCALE[newLevel],
+      });
+    }
+  }
+
+  selectClass(shipClass) {
+    this.shipClass = shipClass;
+    this._waitingForClassSelect = false;
+    this.running = true;
+    this.lastTime = performance.now();
+    this._applyLevelUp(3, 4);
+    this._loop = this._loop.bind(this);
+    this.animFrameId = requestAnimationFrame(this._loop);
+  }
+
+  _fireTorpedoes() {
+    const tier = this.controls.torpedoTier;
+    const spread = this.controls.torpedoSpread;
+    const readyTubes = [];
+    for (let i = 0; i < this.ship.torpedoTubes.length; i++) {
+      if (this._torpedoCooldowns[i] <= 0) readyTubes.push(i);
+    }
+    if (readyTubes.length === 0) return;
+
+    const stats = TORPEDO_TIERS[tier];
+    if (!stats) return;
+
+    this.torpedoManager.fire(
+      this.ship.position,
+      this.ship.heading + this.controls.orbitYaw,
+      tier,
+      this.level,
+      readyTubes.length,
+      spread,
+      'player'
+    );
+
+    const cd = this._getTorpedoCooldown();
+    for (const idx of readyTubes) {
+      this._torpedoCooldowns[idx] = cd;
+    }
+    this.audio.playFire();
+  }
+
+  _updateTorpedoCooldowns(dt) {
+    for (let i = 0; i < this._torpedoCooldowns.length; i++) {
+      if (this._torpedoCooldowns[i] > 0) {
+        this._torpedoCooldowns[i] -= dt;
+      }
+    }
+  }
+
+  _getTorpedoCooldown() {
+    const tier = this.controls.torpedoTier;
+    const base = TORPEDO_TIERS[tier];
+    if (!base) return 8;
+    const levelsAbove4 = Math.max(0, this.level - 4);
+    return base.baseCooldown * Math.pow(0.95, levelsAbove4);
   }
 
   destroy() {
@@ -311,6 +454,7 @@ export class GameEngine {
     if (this._cCleanup) this._cCleanup();
     if (this.ship) this.ship.destroy();
     if (this.projectileManager) this.projectileManager.destroy();
+    if (this.torpedoManager) this.torpedoManager.destroy();
     if (this.enemyManager) this.enemyManager.clear();
     if (this.renderer) this.renderer.dispose();
   }

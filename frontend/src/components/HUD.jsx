@@ -1,7 +1,8 @@
 export default function HUD({ data }) {
   if (!data) return null;
 
-  const { hp, maxHp, speed, level, score, enemyCount, wave, turrets, currentThreshold, nextThreshold } = data;
+  const { hp, maxHp, speed, level, score, enemyCount, wave, turrets, currentThreshold, nextThreshold,
+          weaponMode, torpedoTier, torpedoSpread, torpedoTubes, torpedoMaxCooldown, shipClass } = data;
   const hpPercent = (hp / maxHp) * 100;
   const hpColor = hpPercent > 60 ? '#4caf50' : hpPercent > 30 ? '#ff9800' : '#f44336';
 
@@ -13,16 +14,19 @@ export default function HUD({ data }) {
     : 100;
   const nextLevelDist = nextThreshold != null ? nextThreshold - score : 0;
 
+  const tierLabels = { 1: '短/快', 2: '中程', 3: '远/慢' };
+
   const renderTurret = (label, t, idx) => {
-    const progress = 1 - Math.max(0, t.cooldown) / t.maxCooldown;
+    const elapsed = Math.max(0, t.maxCooldown - t.cooldown);
+    const progress = Math.min(1, elapsed / t.maxCooldown);
     const ready = t.cooldown <= 0;
     return (
       <div key={idx} className="turret-indicator">
         <span className="turret-label">{label}{idx + 1}</span>
         <div className="turret-bar-outer">
           <div className="turret-bar-inner" style={{
-            width: (progress * 100) + '%',
-            backgroundColor: ready ? '#4caf50' : '#2a7fff',
+            width: '100%',
+            background: ready ? '#4caf50' : `linear-gradient(to right, #4caf50 ${(progress * 100).toFixed(1)}%, #2a7fff ${(progress * 100).toFixed(1)}%)`,
           }} />
         </div>
         <span className="turret-time">{ready ? '就绪' : Math.max(0, t.cooldown).toFixed(1) + 's'}</span>
@@ -49,10 +53,22 @@ export default function HUD({ data }) {
           <span className="hud-label">速度</span>
           <span>{Math.round(speed)} km/h</span>
         </div>
+
+        <div className="weapon-mode-indicator">
+          <div className={`weapon-mode-badge ${weaponMode}`}>
+            {weaponMode === 'gun' ? '🔫 火炮' : `🐟 鱼雷 ${tierLabels[torpedoTier] || ''}`}
+          </div>
+          {weaponMode === 'torpedo' && (
+            <div className="torpedo-spread-info">
+              扇形: {torpedoSpread === 'narrow' ? '窄 (±5°)' : '宽 (±15°)'}
+            </div>
+          )}
+        </div>
       </div>
 
       <div id="hud-right">
         <div className="hud-row"><span className="hud-label">等级</span><span>{level}</span></div>
+        {shipClass && <div className="hud-row"><span className="hud-label">职业</span><span>{{ destroyer:'驱逐舰', cruiser:'巡洋舰', battleship:'战列舰' }[shipClass]}</span></div>}
         <div className="hud-row">
           <span className="hud-label">经验</span>
           <div className="level-bar-outer">
@@ -78,6 +94,28 @@ export default function HUD({ data }) {
           {backTurrets.map((t, i) => renderTurret('后', t, i))}
         </div>
       </div>
+
+      {weaponMode === 'torpedo' && torpedoTubes && torpedoTubes.length > 0 && (
+        <div id="torpedo-bar-container">
+          <div className="torpedo-group-label">鱼雷管</div>
+          {torpedoTubes.map((tube, i) => {
+            const elapsed = tube.ready ? torpedoMaxCooldown : Math.max(0, torpedoMaxCooldown - tube.cooldown);
+            const progress = Math.min(1, elapsed / torpedoMaxCooldown);
+            return (
+              <div key={i} className="turret-indicator">
+                <span className="turret-label">{tube.side === 'port' ? '左' : '右'}{i + 1}</span>
+                <div className="turret-bar-outer">
+                  <div className="turret-bar-inner" style={{
+                    width: '100%',
+                    background: tube.ready ? '#4caf50' : `linear-gradient(to right, #4caf50 ${(progress * 100).toFixed(1)}%, #ff9800 ${(progress * 100).toFixed(1)}%)`,
+                  }} />
+                </div>
+                <span className="turret-time">{tube.ready ? '就绪' : Math.max(0, tube.cooldown).toFixed(1) + 's'}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
