@@ -1,4 +1,4 @@
-# Mini-WoW
+# Mini-WoWs
 
 一个基于 Web 的多人在线海战游戏，使用 React + Three.js 前端和 FastAPI 后端。
 
