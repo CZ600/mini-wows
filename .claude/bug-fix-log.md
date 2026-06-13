@@ -277,3 +277,37 @@ type: project
 - `test_segment_catching_ship_at_edge`: 线段未跨过盒时不命中（防误判）
 
 此前会话中失败的 `tests/test_multiplayer.py::TestHitDetectionRotation::test_hit_works_when_ship_rotated` 现在通过。全量 162 个测试全部通过。
+
+### Feature 4: 按船型尺寸比例放大碰撞盒
+
+**问题**: Bug 23 修复后，碰撞盒使用 `width/2 + 2.0` 这种"绝对 + 固定 margin"形式。+2.0m 对小船占 40% 宽度，对大船仅占 27%，导致小船相对"更容易打中"，大船相对"更难打中"——这与"战列舰作为大目标应更容易打"的直觉相反。
+
+**修复**:
+- `game/projectile.py` `ProjectileManager.update`: 宽度方向 margin 改为 `max(width/2 * 1.7, width/2 + 2.0)`
+  - 大船（battleship）按 1.7x 比例放大判定盒 → L10 half_w 从 7.5 提升到 9.35（+25%）
+  - 小船（destroyer、低等级）保底维持 +2.0 绝对值 → 防止小船判定盒大幅缩水
+- 长度方向（`+2.0`）和高度方向（`+3.0`）保持不变，因为当前比例差距已经较小
+
+**效果对比（半宽 half_w）**:
+
+| 船型 | 等级 | 当前 | 新 | 变化 |
+|------|------|------|-----|------|
+| destroyer | L10 | 5.0 | 5.1 | +2% |
+| cruiser | L10 | 6.7 | 8.0 | +19% |
+| battleship | L10 | 7.5 | **9.35** | **+25%** |
+| destroyer | L4 | 3.4 | 3.4 | 0% |
+| cruiser | L4 | 4.1 | 4.1 | 0% |
+| battleship | L4 | 4.5 | 4.5 | 0% |
+
+**约束**:
+- 任何船型的判定盒都不会小于原 `+2.0` 公式的值（保底）
+- 高等级大船（width > 5.7m）按 1.7x 比例放大
+- 大小船的"相对宽容度"在高等级下接近一致（都约 1.7x）
+- 鱼雷判定盒不变（鱼雷有独立的爆炸半径 TORPEDO_HIT_RADIUS=3）
+
+**测试**: `tests/test_respawn.py::TestShipCollisionDetection` 新增 3 个测试：
+- `test_battleship_has_proportional_hitbox`: battleship L10 在 x=8（旧 7.5 外，新 9.35 内）应命中
+- `test_destroyer_hitbox_not_shrunk_at_low_level`: 低等级 destroyer 保底维持 +2.0
+- `test_battleship_easier_to_hit_than_destroyer`: 同一偏移 x=8.5 应命中 battleship 但 miss destroyer
+
+全量 165 个测试全部通过。

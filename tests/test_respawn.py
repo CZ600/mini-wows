@@ -655,6 +655,98 @@ class TestShipCollisionDetection:
         hit_events = [e for e in events if e["type"] == "hit"]
         assert len(hit_events) == 0
 
+    def test_battleship_has_proportional_hitbox(self):
+        """Battleship at L10 should have proportionally larger hitbox.
+
+        With the new max(width/2 * 1.7, width/2 + 2.0) rule, battleship L10
+        (width=11, half=5.5) gets half_w = max(9.35, 7.5) = 9.35 instead
+        of the old 7.5. A projectile passing at x=8 should now hit; with
+        the old +2.0 margin (half_w=7.5) it would miss.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "BB", level=10, ship_class="battleship")
+        gs.add_ship(2, "Attacker", level=10)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # Projectile at x=8 (between old 7.5 and new 9.35), moving +z through ship
+        pm = ProjectileManager()
+        pm.fire(2, 50, (8.0, 5.0, -10.0), (0, 0, 1.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1, "Battleship L10 should hit at x=8 with proportional margin"
+        assert hit_events[0]["target"] == 1
+
+    def test_destroyer_hitbox_not_shrunk_at_low_level(self):
+        """Low-level small ships must keep their absolute +2.0 margin floor.
+
+        Without the floor, low-level destroyers would shrink dramatically
+        (L4 destroyer half_w 3.375 → 2.34) and become nearly unhittable.
+        The max() ensures small ships stay at +2.0 minimum.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "DD", level=4, ship_class="destroyer")  # width=2.75
+        gs.add_ship(2, "Attacker", level=4)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # Destroyer L4 half_w must be at least width/2 + 2.0 = 3.375.
+        # Projectile at x=3.2 (inside 3.375) should still hit.
+        pm = ProjectileManager()
+        pm.fire(2, 50, (3.2, 2.0, -10.0), (0, 0, 1.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1, "Low-level destroyer must keep +2.0 margin floor"
+
+    def test_battleship_easier_to_hit_than_destroyer(self):
+        """At the same level, a projectile at the same offset should hit
+        battleship but miss destroyer, confirming battleship's larger box."""
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(2, "Attacker", level=10)
+
+        # Test battleship first
+        gs.add_ship(1, "BB", level=10, ship_class="battleship")
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        pm1 = ProjectileManager()
+        pm1.fire(2, 50, (8.5, 5.0, -10.0), (0, 0, 1.0))
+        bb_events = pm1.update(0.05, terrain, gs.ships)
+        bb_hits = [e for e in bb_events if e["type"] == "hit"]
+
+        # Now replace with destroyer at same position
+        gs.ships[1].alive = False
+        del gs.ships[1]
+        gs.add_ship(3, "DD", level=10, ship_class="destroyer")
+        gs.ships[3].pos_x = 0
+        gs.ships[3].pos_z = 0
+        gs.ships[3].heading = 0
+
+        pm2 = ProjectileManager()
+        pm2.fire(2, 50, (8.5, 5.0, -10.0), (0, 0, 1.0))
+        dd_events = pm2.update(0.05, terrain, gs.ships)
+        dd_hits = [e for e in dd_events if e["type"] == "hit"]
+
+        # x=8.5 is between destroyer half_w (5.14) and battleship half_w (9.35)
+        assert len(bb_hits) == 1, "Battleship should be hit at x=8.5"
+        assert len(dd_hits) == 0, "Destroyer should NOT be hit at x=8.5"
+
 
 
 class TestGameStartRespawnLimit:

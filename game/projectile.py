@@ -83,7 +83,11 @@ class ProjectileManager:
             ship_ids = [pid for pid, _ in alive_ships]
             ship_positions = np.array([[s.pos_x, s.pos_z] for _, s in alive_ships])
             ship_headings = np.array([s.heading for _, s in alive_ships])
-            ship_half_w = np.array([s.ship_width / 2 + 2.0 for _, s in alive_ships])
+            # Width margin: proportional for large ships (1.7x), absolute floor
+            # for small ships (+2.0). Without the floor, low-level destroyers
+            # would shrink to ~2.3m half-width and become nearly unhittable.
+            ship_w_half = np.array([s.ship_width / 2 for _, s in alive_ships])
+            ship_half_w = np.maximum(ship_w_half * 1.7, ship_w_half + 2.0)
             ship_half_l = np.array([s.ship_length / 2 + 2.0 for _, s in alive_ships])
             # Upper bound covers hull + deck + small bridge base; without this,
             # projectiles at deck level (y≈2 on a level-1 ship) would miss.
