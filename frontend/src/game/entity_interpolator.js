@@ -92,6 +92,11 @@ export class EntityInterpolator {
     return this.entities[id];
   }
 
+  isInterpolating(id) {
+    const entity = this.entities[id];
+    return entity && entity.snapshots.length >= 2;
+  }
+
   removeEntity(id) {
     delete this.entities[id];
   }

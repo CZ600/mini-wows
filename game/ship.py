@@ -35,10 +35,14 @@ class ServerShip:
         if not self.alive:
             return
 
+        # Speed-dependent acceleration: faster at low speed, slower at high speed
+        speed_ratio = abs(self.speed) / self.max_speed if self.max_speed > 0 else 0
+        accel = ACCEL * (1.5 - speed_ratio)
+
         if keys.get("w"):
-            self.speed += ACCEL * dt
+            self.speed += accel * dt
         if keys.get("s"):
-            self.speed -= ACCEL * dt
+            self.speed -= accel * dt
         if not keys.get("w") and not keys.get("s"):
             self.speed *= DECEL_FRICTION
             if abs(self.speed) < 0.1:
@@ -68,10 +72,6 @@ class ServerShip:
 
         self.pos_x = new_x
         self.pos_z = new_z
-
-        for i in range(len(self.turret_cooldowns)):
-            if self.turret_cooldowns[i] > 0:
-                self.turret_cooldowns[i] -= dt
 
     def _get_corners_at(self, x, z):
         half_l = self.ship_length / 2
@@ -121,4 +121,5 @@ class ServerShip:
             "alive": self.alive,
             "team": self.team,
             "lvl": self.level,
+            "shipClass": self.ship_class,
         }

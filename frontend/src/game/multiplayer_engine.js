@@ -9,10 +9,18 @@ import { InputSender } from './input_sender.js';
 import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED } from './config.js';
+import { Ship, CLASS_CONFIG } from './ship.js';
+import { updateTurrets, calcBallisticAngles, turretCanAim, getTurretFireData } from './turret.js';
+import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
+const CAM_DIST_SCOPED = 8;
+const CAM_HEIGHT_SCOPED = 5;
 const FOV_NORMAL = 60;
+const FOV_SCOPED = 15;
+const RAYCASTER = new THREE.Raycaster();
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
 
 export class MultiplayerEngine {
   constructor() {
@@ -32,6 +40,7 @@ export class MultiplayerEngine {
     this.onError = null;
     this.onRoomUpdate = null;
     this.onCountdown = null;
+    this.onScopeChange = null;
 
     this.scene = null;
     this.renderer = null;
@@ -45,6 +54,14 @@ export class MultiplayerEngine {
     this._gameStarted = false;
     this._myId = null;
     this._ping = 0;
+    this._aimTarget = new THREE.Vector3();
+    this._currentFov = FOV_NORMAL;
+    this._torpedoCooldowns = [];
+    this._minimapTerrain = null;
+    this._projectileMeshes = [];
+    this._projectileGeometry = null;
+    this._projectileMaterial = null;
+    this.torpedoManager = null;
   }
 
   init(canvas) {
@@ -62,6 +79,9 @@ export class MultiplayerEngine {
     this._loop = this._loop.bind(this);
     this.animFrameId = requestAnimationFrame(this._loop);
 
+    this._projectileGeometry = new THREE.SphereGeometry(0.3, 6, 6);
+    this._projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+
     // Wire up WS handlers
     this.ws.onMessage = (msg) => this._handleMessage(msg);
     this.ws.onDisconnect = () => {
@@ -78,8 +98,8 @@ export class MultiplayerEngine {
     this.ws.send({ type: 'create_room', mode, level, shipClass });
   }
 
-  joinRoom(roomId, level = 1, shipClass = null) {
-    this.ws.send({ type: 'join_room', roomId, level, shipClass });
+  joinRoom(roomId) {
+    this.ws.send({ type: 'join_room', roomId });
   }
 
   quickMatch(mode, level = 1, shipClass = null) {
@@ -100,10 +120,12 @@ export class MultiplayerEngine {
     if (type === 'room_created' || type === 'room_joined') {
       this._currentRoomId = msg.roomId;
       this._roomMode = msg.mode;
+      this._roomLevel = msg.roomLevel || 1;
       if (this.onRoomUpdate) {
         this.onRoomUpdate({
           roomId: msg.roomId,
           mode: msg.mode,
+          roomLevel: msg.roomLevel || 1,
           players: msg.players,
           terrainSeed: msg.terrainSeed,
           islands: msg.islands,
@@ -116,6 +138,7 @@ export class MultiplayerEngine {
         this.onRoomUpdate({
           roomId: this._currentRoomId,
           mode: this._roomMode,
+          roomLevel: msg.roomLevel || this._roomLevel || 1,
           players: msg.players,
         });
       }
@@ -155,10 +178,15 @@ export class MultiplayerEngine {
     // Create terrain from server seed/islands
     this.terrain = new Terrain(this.scene, msg.terrainSeed, msg.islands);
     this.water = createWater(this.scene);
+    this._minimapTerrain = this.terrain.generateMinimapImage?.() || null;
+
+    // Create torpedo manager for rendering
+    this.torpedoManager = new TorpedoManager(this.scene, this.terrain);
 
     // Find my player data
     const myPlayer = msg.players.find(p => p.id === this._myId);
-    const spawn = myPlayer || { id: this._myId };
+    const myLevel = myPlayer?.level || this._roomLevel || 1;
+    const myClass = myPlayer?.shipClass || null;
 
     // Create local ship (for rendering)
     this.localShip = {
@@ -168,18 +196,18 @@ export class MultiplayerEngine {
       max_speed: BASE_MAX_SPEED,
       turn_radius: 20,
       alive: true,
+      level: myLevel,
+      shipClass: myClass,
+      ship: null,
       mesh: null,
     };
 
-    // Find safe spawn on terrain
-    if (this.terrain) {
-      const pos = this._findSafeSpawn();
-      this.localShip.pos_x = pos.x;
-      this.localShip.pos_z = pos.z;
-    }
-
-    // Create mesh for local ship
+    // Create detailed ship model
     this._createLocalShipMesh();
+
+    // Set torpedo capabilities
+    this._updateControlsCapabilities();
+    this._torpedoCooldowns = this.localShip.ship.torpedoTubes.map(() => 0);
 
     // Reset other ships
     this.otherShips = {};
@@ -195,37 +223,96 @@ export class MultiplayerEngine {
     if (this.onGameStart) this.onGameStart();
   }
 
-  _findSafeSpawn() {
-    if (this.terrain && !this.terrain.isLand(0, 0)) return { x: 0, z: 0 };
-    for (let r = 100; r <= 2000; r += 100) {
-      for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
-        const x = Math.cos(a) * r;
-        const z = Math.sin(a) * r;
-        if (this.terrain && !this.terrain.isLand(x, z)) return { x, z };
-      }
+  _updateControlsCapabilities() {
+    if (!this.localShip) return;
+    const shipClass = this.localShip.shipClass;
+    const level = this.localShip.level;
+    if (!shipClass || level < 4) {
+      this.controls.setTorpedoCapabilities({ availableTiers: [] });
+      return;
     }
-    return { x: 0, z: 0 };
+    const cc = CLASS_CONFIG[shipClass]?.[level];
+    if (cc) {
+      this.controls.setTorpedoCapabilities({ availableTiers: cc.torpedoTiers });
+    }
   }
 
   _createLocalShipMesh() {
-    const geo = new THREE.BoxGeometry(2, 1.5, 7);
-    const mat = new THREE.MeshPhongMaterial({ color: 0x3388cc });
-    this.localShip.mesh = new THREE.Mesh(geo, mat);
-    this.localShip.mesh.position.set(this.localShip.pos_x, 0.75, this.localShip.pos_z);
-    this.scene.add(this.localShip.mesh);
+    const ship = new Ship(this.scene, this.localShip.level, this.localShip.shipClass);
+    ship.mesh.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
+    this.localShip.ship = ship;
+    this.localShip.mesh = ship.mesh;
+    this.localShip.max_speed = ship.maxSpeed;
+    this.localShip.turn_radius = ship.turnRadius;
+    this.localShip.hp = ship.maxHp;
+    this.localShip.max_hp = ship.maxHp;
+  }
+
+  _findAimTarget() {
+    RAYCASTER.setFromCamera(SCREEN_CENTER, this.camera);
+
+    // Try to hit other player ships
+    const otherMeshes = [];
+    for (const id in this.otherShips) {
+      const entry = this.otherShips[id];
+      if (entry.lastAlive && entry.ship.mesh) {
+        otherMeshes.push(entry.ship.mesh);
+      }
+    }
+    if (otherMeshes.length > 0) {
+      const hits = RAYCASTER.intersectObjects(otherMeshes, true);
+      if (hits.length > 0) {
+        this._aimTarget.copy(hits[0].point);
+        return this._aimTarget;
+      }
+    }
+
+    // Fall back to water/terrain intersection
+    const ray = RAYCASTER.ray;
+    if (ray.direction.y < 0) {
+      const t = -ray.origin.y / ray.direction.y;
+      if (t > 0) {
+        this._aimTarget.copy(ray.origin).addScaledVector(ray.direction, t);
+        if (this.terrain) {
+          const th = this.terrain.getHeightAt?.(this._aimTarget.x, this._aimTarget.z);
+          if (th > 0) this._aimTarget.y = th;
+        }
+        return this._aimTarget;
+      }
+    }
+
+    this._aimTarget.copy(ray.origin).addScaledVector(ray.direction, 500);
+    return this._aimTarget;
   }
 
   _processSnapshot(msg) {
-    this._ping = msg.ping || 0;
+    // Compute ping from echoed client timestamp (RTT / 2)
+    if (msg.cts) {
+      this._ping = Math.round((Date.now() - msg.cts) / 2);
+    }
 
     // Reconcile local ship
     if (msg.you && this.localShip) {
       const serverState = msg.you;
       this.inputSender.confirmInput(msg.lpi || 0);
 
+      // Check for level upgrade
+      if (serverState.lvl && serverState.lvl !== this.localShip.level) {
+        this.localShip.level = serverState.lvl;
+        if (this.localShip.ship) {
+          this.localShip.ship.upgradeToLevel(serverState.lvl);
+          this.localShip.mesh = this.localShip.ship.mesh;
+          this.localShip.max_speed = this.localShip.ship.maxSpeed;
+          this.localShip.turn_radius = this.localShip.ship.turnRadius;
+          this._updateControlsCapabilities();
+          this._torpedoCooldowns = this.localShip.ship.torpedoTubes.map(() => 0);
+        }
+      }
+
       if (!serverState.alive && this.localShip.alive) {
         this.localShip.alive = false;
         this.localShip.hp = 0;
+        if (this.localShip.ship) this.localShip.ship.sink();
       } else if (serverState.alive) {
         reconcile(this.localShip, serverState, this.inputSender.getPendingInputs());
         this.localShip.hp = serverState.hp;
@@ -237,6 +324,16 @@ export class MultiplayerEngine {
     if (msg.others) {
       this.interpolator.update(msg.others, 0.05);
       this._syncOtherShipMeshes(msg.others);
+    }
+
+    // Update projectile visuals
+    if (msg.projs) {
+      this._updateProjectileVisuals(msg.projs);
+    }
+
+    // Update torpedo visuals from server data
+    if (msg.torps) {
+      this._updateTorpedoVisuals(msg.torps);
     }
 
     // Process events
@@ -252,6 +349,113 @@ export class MultiplayerEngine {
     }
   }
 
+  _updateProjectileVisuals(projs) {
+    // Remove excess meshes
+    while (this._projectileMeshes.length > projs.length) {
+      const m = this._projectileMeshes.pop();
+      this.scene.remove(m);
+    }
+    // Add missing meshes
+    while (this._projectileMeshes.length < projs.length) {
+      const m = new THREE.Mesh(this._projectileGeometry, this._projectileMaterial);
+      this.scene.add(m);
+      this._projectileMeshes.push(m);
+    }
+    // Update positions
+    for (let i = 0; i < projs.length; i++) {
+      this._projectileMeshes[i].position.set(projs[i].x, projs[i].y, projs[i].z);
+    }
+  }
+
+  _updateTorpedoVisuals(torps) {
+    if (!this._torpedoVisuals) this._torpedoVisuals = {};
+    const activeIds = new Set();
+
+    for (const torp of torps) {
+      activeIds.add(torp.id);
+
+      if (!this._torpedoVisuals[torp.id]) {
+        const mesh = new THREE.Group();
+
+        const body = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.2, 0.2, 2.5, 8),
+          new THREE.MeshPhongMaterial({ color: 0x444444 })
+        );
+        body.rotation.x = Math.PI / 2;
+        mesh.add(body);
+
+        const triShape = new THREE.Shape();
+        triShape.moveTo(0, -1.5);
+        triShape.lineTo(1.3, 1);
+        triShape.lineTo(-1.3, 1);
+        triShape.closePath();
+        const marker = new THREE.Mesh(
+          new THREE.ShapeGeometry(triShape),
+          new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
+        );
+        marker.position.y = 3.0;
+        mesh.add(marker);
+
+        const trailGeo = new THREE.BufferGeometry();
+        const trailPositions = new Float32Array(60 * 3);
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+        const trailMat = new THREE.PointsMaterial({ color: 0x88ddff, size: 1.2, transparent: true, opacity: 0.85 });
+        const trail = new THREE.Points(trailGeo, trailMat);
+        this.scene.add(trail);
+
+        this.scene.add(mesh);
+
+        this._torpedoVisuals[torp.id] = {
+          mesh, trail, trailData: [],
+          prevX: torp.x, prevZ: torp.z,
+        };
+      }
+
+      const entry = this._torpedoVisuals[torp.id];
+      entry.mesh.position.set(torp.x, -0.5, torp.z);
+
+      // Calculate heading from movement direction
+      const dx = torp.x - entry.prevX;
+      const dz = torp.z - entry.prevZ;
+      if (Math.abs(dx) > 0.01 || Math.abs(dz) > 0.01) {
+        entry.mesh.rotation.y = Math.atan2(dx, dz);
+      }
+      entry.prevX = torp.x;
+      entry.prevZ = torp.z;
+
+      // Update trail
+      entry.trailData.push({ x: torp.x, y: 0.1, z: torp.z });
+      if (entry.trailData.length > 60) entry.trailData.shift();
+      const positions = entry.trail.geometry.attributes.position.array;
+      for (let j = 0; j < 60; j++) {
+        if (j < entry.trailData.length) {
+          positions[j * 3] = entry.trailData[j].x;
+          positions[j * 3 + 1] = entry.trailData[j].y;
+          positions[j * 3 + 2] = entry.trailData[j].z;
+        } else {
+          positions[j * 3 + 1] = -100;
+        }
+      }
+      entry.trail.geometry.attributes.position.needsUpdate = true;
+    }
+
+    // Remove torpedoes no longer in snapshot
+    for (const id in this._torpedoVisuals) {
+      if (!activeIds.has(id)) {
+        const entry = this._torpedoVisuals[id];
+        this.scene.remove(entry.mesh);
+        entry.mesh.traverse(child => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.scene.remove(entry.trail);
+        entry.trail.geometry.dispose();
+        entry.trail.material.dispose();
+        delete this._torpedoVisuals[id];
+      }
+    }
+  }
+
   _syncOtherShipMeshes(othersSnap) {
     const activeIds = new Set();
 
@@ -259,13 +463,12 @@ export class MultiplayerEngine {
       activeIds.add(snap.id);
 
       if (!this.otherShips[snap.id]) {
-        // Create mesh for new player
-        const geo = new THREE.BoxGeometry(2, 1.5, 7);
-        const mat = new THREE.MeshPhongMaterial({ color: 0xcc3333 });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(snap.x, 0.75, snap.z);
-        mesh.rotation.y = snap.h;
-        this.scene.add(mesh);
+        // Create detailed ship model for new player
+        const level = snap.lvl || 1;
+        const shipClass = snap.shipClass || null;
+        const ship = new Ship(this.scene, level, shipClass);
+        ship.mesh.position.set(snap.x, 0, snap.z);
+        ship.mesh.rotation.y = snap.h;
 
         // Name label
         const canvas = document.createElement('canvas');
@@ -281,30 +484,39 @@ export class MultiplayerEngine {
         const sprite = new THREE.Sprite(spriteMat);
         sprite.position.y = 5;
         sprite.scale.set(8, 2, 1);
-        mesh.add(sprite);
+        ship.mesh.add(sprite);
 
-        this.otherShips[snap.id] = { mesh, lastAlive: true };
+        this.otherShips[snap.id] = { ship, lastAlive: true, level, shipClass };
       }
 
       const entry = this.otherShips[snap.id];
+
+      // Check for level upgrade
+      const newLevel = snap.lvl || 1;
+      const newClass = snap.shipClass || null;
+      if (newLevel !== entry.level || newClass !== entry.shipClass) {
+        entry.ship.upgradeToLevel(newLevel);
+        entry.level = newLevel;
+        entry.shipClass = newClass;
+      }
+
       if (!snap.alive && entry.lastAlive) {
-        this.scene.remove(entry.mesh);
-        entry.mesh.geometry.dispose();
-        entry.mesh.material.dispose();
+        entry.ship.sink();
         entry.lastAlive = false;
         continue;
       }
 
       if (!snap.alive) continue;
 
-      // Use interpolated position if available
-      const interp = this.interpolator.getEntity(snap.id);
-      if (interp) {
-        entry.mesh.position.set(interp.position.x, 0.75, interp.position.z);
-        entry.mesh.rotation.y = interp.heading;
+      // Use interpolated position only when enough snapshots exist for interpolation
+      if (this.interpolator.isInterpolating(snap.id)) {
+        const interp = this.interpolator.getEntity(snap.id);
+        entry.ship.mesh.position.set(interp.position.x, 0, interp.position.z);
+        entry.ship.mesh.rotation.y = interp.heading;
       } else {
-        entry.mesh.position.set(snap.x, 0.75, snap.z);
-        entry.mesh.rotation.y = snap.h;
+        // Not enough snapshots yet — use raw server position directly
+        entry.ship.mesh.position.set(snap.x, 0, snap.z);
+        entry.ship.mesh.rotation.y = snap.h;
       }
 
       entry.lastAlive = snap.alive;
@@ -314,9 +526,7 @@ export class MultiplayerEngine {
     for (const id in this.otherShips) {
       if (!activeIds.has(id)) {
         const entry = this.otherShips[id];
-        this.scene.remove(entry.mesh);
-        entry.mesh.geometry.dispose();
-        entry.mesh.material.dispose();
+        entry.ship.destroy();
         delete this.otherShips[id];
         this.interpolator.removeEntity(id);
       }
@@ -346,7 +556,9 @@ export class MultiplayerEngine {
       this.localShip.pos_z += Math.cos(this.localShip.heading) * this.localShip.speed * dt;
 
       // Apply controls locally for immediate feedback
-      const ACCEL = BASE_MAX_SPEED / 20;
+      // Speed-dependent acceleration: faster at low speed, slower at high speed
+      const speedRatio = Math.abs(this.localShip.speed) / this.localShip.max_speed;
+      const ACCEL = (this.localShip.max_speed / 15) * (1.5 - speedRatio);
       const DECEL_FRICTION = 0.98;
       if (keys.w) this.localShip.speed += ACCEL * dt;
       if (keys.s) this.localShip.speed -= ACCEL * dt;
@@ -354,7 +566,7 @@ export class MultiplayerEngine {
         this.localShip.speed *= DECEL_FRICTION;
         if (Math.abs(this.localShip.speed) < 0.1) this.localShip.speed = 0;
       }
-      this.localShip.speed = Math.max(-BASE_MAX_SPEED * 0.3, Math.min(BASE_MAX_SPEED, this.localShip.speed));
+      this.localShip.speed = Math.max(-this.localShip.max_speed * 0.3, Math.min(this.localShip.max_speed, this.localShip.speed));
 
       if (Math.abs(this.localShip.speed) > 0.5) {
         const turnRate = this.localShip.speed / this.localShip.turn_radius;
@@ -371,19 +583,108 @@ export class MultiplayerEngine {
     }
 
     // Update local ship mesh
-    if (this.localShip.mesh) {
-      this.localShip.mesh.position.set(this.localShip.pos_x, 0.75, this.localShip.pos_z);
-      this.localShip.mesh.rotation.y = this.localShip.heading;
+    if (this.localShip.ship) {
+      this.localShip.ship.mesh.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
+      this.localShip.ship.mesh.rotation.y = this.localShip.heading;
+      this.localShip.ship.heading = this.localShip.heading;
+      this.localShip.ship.speed = this.localShip.speed;
+      this.localShip.ship.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
+      if (Math.abs(this.localShip.speed) > 1) {
+        this.localShip.ship._wakeEmitAccum += Math.abs(this.localShip.speed) * 5 * dt;
+        while (this.localShip.ship._wakeEmitAccum >= 1) {
+          this.localShip.ship._emitWake();
+          this.localShip.ship._wakeEmitAccum -= 1;
+        }
+      }
+      this.localShip.ship._updateWake(dt);
+    }
+
+    // Turret aiming
+    let currentAimYaw = 0;
+    if (this.localShip.ship && this.localShip.ship.turrets.length > 0) {
+      const aimTarget = this._findAimTarget();
+      const turretPos = new THREE.Vector3();
+      this.localShip.ship.turrets[0].body.getWorldPosition(turretPos);
+      const { yaw, pitch: aimPitch } = calcBallisticAngles(turretPos, aimTarget, this.localShip.heading);
+      currentAimYaw = yaw;
+      updateTurrets(this.localShip.ship, yaw, aimPitch, dt);
+    }
+
+    // Fire handling — server-authoritative: only consume when turrets actually fire
+    if (this.localShip.alive && this.controls.wantsFire) {
+      const isTorpedo = this.controls.weaponMode === 'torpedo' && this.localShip.ship.torpedoTubes.length > 0;
+      if (isTorpedo) {
+        // Torpedoes: send fire to server, don't consume wantsFire (server-authoritative)
+        this._fireTorpedoes();
+        this.controls.consumeFire();
+      } else {
+        // Guns: only consume wantsFire if turrets actually fire
+        const ship = this.localShip.ship;
+        const canFireNow = ship.turrets.some(t => t.cooldown <= 0 && turretCanAim(t, currentAimYaw));
+        if (canFireNow) {
+          this._fireGuns(currentAimYaw);
+          this.controls.consumeFire();
+        }
+        // If can't fire yet (turret rotating or on cooldown), DON'T consume — keep wantsFire for next frame
+      }
+    }
+
+    // Update torpedo cooldowns
+    this._updateTorpedoCooldowns(dt);
+
+    // Torpedo aim fan
+    if (this.torpedoManager && this.localShip.ship) {
+      const isTorpedoMode = this.controls.weaponMode === 'torpedo';
+      const aimYaw = this.localShip.heading + this.controls.orbitYaw;
+      const tier = this.controls.torpedoTier;
+      const stats = TORPEDO_TIERS[tier];
+      this.torpedoManager.updateAimFan(
+        isTorpedoMode && this.localShip.alive,
+        new THREE.Vector3(this.localShip.pos_x, 0, this.localShip.pos_z),
+        aimYaw,
+        this.localShip.ship.torpedoTubes.length,
+        this.controls.torpedoSpread,
+        stats ? stats.range : 400
+      );
+    }
+
+    // Update torpedo visuals (trails, fan arcs)
+    if (this.torpedoManager) {
+      this.torpedoManager.update(dt, null, []);
     }
 
     // Camera follow
     const worldYaw = this.localShip.heading + this.controls.orbitYaw;
-    const targetCamPos = new THREE.Vector3(
-      this.localShip.pos_x - Math.sin(worldYaw) * CAM_DIST,
-      CAM_HEIGHT,
-      this.localShip.pos_z - Math.cos(worldYaw) * CAM_DIST
-    );
-    this.camera.position.lerp(targetCamPos, 0.12);
+    const scoped = this.controls.scoped;
+    const shipScale = this.localShip.ship ? this.localShip.ship.shipLength / 10 : 1;
+    let targetCamPos;
+    if (scoped) {
+      const scopedH = this.localShip.ship?.scopedCameraHeight || CAM_HEIGHT_SCOPED;
+      targetCamPos = new THREE.Vector3(
+        this.localShip.pos_x,
+        scopedH,
+        this.localShip.pos_z
+      );
+    } else {
+      const camDist = CAM_DIST + shipScale * 5;
+      const camHeight = CAM_HEIGHT + shipScale * 3;
+      targetCamPos = new THREE.Vector3(
+        this.localShip.pos_x - Math.sin(worldYaw) * camDist,
+        camHeight,
+        this.localShip.pos_z - Math.cos(worldYaw) * camDist
+      );
+    }
+    const camLerp = scoped ? 0.15 : 0.12;
+    this.camera.position.lerp(targetCamPos, camLerp);
+
+    const targetFov = scoped ? FOV_SCOPED : FOV_NORMAL;
+    this._currentFov += (targetFov - this._currentFov) * (scoped ? 0.18 : 0.12);
+    this.camera.fov = this._currentFov;
+    this.camera.updateProjectionMatrix();
+
+    if (this.onScopeChange) {
+      this.onScopeChange(scoped);
+    }
 
     const pitch = this.controls.orbitPitch;
     const lookDir = new THREE.Vector3(
@@ -394,16 +695,112 @@ export class MultiplayerEngine {
     this.camera.lookAt(this.camera.position.clone().add(lookDir.multiplyScalar(1000)));
 
     // HUD update
-    if (this.onHudUpdate) {
+    if (this.onHudUpdate && this.localShip.ship) {
+      const ship = this.localShip.ship;
       this.onHudUpdate({
         hp: this.localShip.hp,
         maxHp: this.localShip.max_hp,
         speed: Math.abs(this.localShip.speed * 3.6),
         ping: this._ping,
+        level: this.localShip.level,
+        shipClass: this.localShip.shipClass,
+        turrets: ship.turrets.map(t => ({
+          cooldown: t.cooldown,
+          maxCooldown: ship.fireCooldown,
+          isFront: t.isFront,
+        })),
+        weaponMode: this.controls.weaponMode,
+        torpedoTier: this.controls.torpedoTier,
+        torpedoSpread: this.controls.torpedoSpread,
+        torpedoTubes: ship.torpedoTubes.map((tube, i) => ({
+          index: i,
+          cooldown: this._torpedoCooldowns[i] || 0,
+          side: tube.side,
+          ready: (this._torpedoCooldowns[i] || 0) <= 0,
+        })),
+        torpedoMaxCooldown: this._getTorpedoCooldown(),
+      });
+    }
+
+    // Minimap update
+    if (this.onMinimapUpdate && this.localShip.ship) {
+      const otherEntities = [];
+      for (const id in this.otherShips) {
+        const entry = this.otherShips[id];
+        if (entry.lastAlive && entry.ship.mesh) {
+          otherEntities.push({
+            mesh: entry.ship.mesh,
+            heading: entry.ship.mesh.rotation.y,
+            type: 'ship',
+            alive: true,
+          });
+        }
+      }
+      this.onMinimapUpdate({
+        playerPos: { x: this.localShip.pos_x, z: this.localShip.pos_z },
+        playerHeading: this.localShip.heading,
+        enemies: otherEntities,
+        terrainImage: this._minimapTerrain,
       });
     }
 
     this.renderer.render(this.scene, this.camera);
+  }
+
+  _fireGuns(aimYaw) {
+    if (!this.localShip.ship) return;
+    const ship = this.localShip.ship;
+    const aimTarget = this._findAimTarget();
+    let anyFired = false;
+    for (const turret of ship.turrets) {
+      if (turret.cooldown <= 0 && turretCanAim(turret, aimYaw)) {
+        turret.cooldown = ship.fireCooldown;
+        anyFired = true;
+      }
+    }
+    if (anyFired) {
+      this.inputSender.sendFire({ x: aimTarget.x, y: aimTarget.y, z: aimTarget.z });
+      this.audio.playFire();
+    }
+  }
+
+  _fireTorpedoes() {
+    if (!this.localShip.ship) return;
+    const ship = this.localShip.ship;
+    const readyTubes = [];
+    for (let i = 0; i < ship.torpedoTubes.length; i++) {
+      if ((this._torpedoCooldowns[i] || 0) <= 0) readyTubes.push(i);
+    }
+    if (readyTubes.length === 0) return;
+
+    const heading = this.localShip.heading + this.controls.orbitYaw;
+    const tier = this.controls.torpedoTier;
+    const spread = this.controls.torpedoSpread;
+
+    // Send to server — torpedoes are server-authoritative
+    this.inputSender.sendTorpedo(heading, tier, spread);
+
+    // Set local cooldowns to prevent spam (server will create the actual torpedoes)
+    const cd = this._getTorpedoCooldown();
+    for (const idx of readyTubes) {
+      this._torpedoCooldowns[idx] = cd;
+    }
+    this.audio.playFire();
+  }
+
+  _updateTorpedoCooldowns(dt) {
+    for (let i = 0; i < this._torpedoCooldowns.length; i++) {
+      if (this._torpedoCooldowns[i] > 0) {
+        this._torpedoCooldowns[i] -= dt;
+      }
+    }
+  }
+
+  _getTorpedoCooldown() {
+    const tier = this.controls.torpedoTier;
+    const base = { 1: 8, 2: 8, 3: 8 };
+    const levelsAbove4 = Math.max(0, (this.localShip?.level || 1) - 4);
+    return (base[tier] || 8) * Math.pow(0.95, levelsAbove4);
   }
 
   destroy() {
@@ -413,16 +810,34 @@ export class MultiplayerEngine {
     if (this.controls) this.controls.destroy();
     if (this._rCleanup) this._rCleanup();
     if (this._cCleanup) this._cCleanup();
-    if (this.localShip && this.localShip.mesh) {
-      this.scene.remove(this.localShip.mesh);
-      this.localShip.mesh.geometry.dispose();
-      this.localShip.mesh.material.dispose();
+    if (this.localShip && this.localShip.ship) {
+      this.localShip.ship.destroy();
     }
     for (const id in this.otherShips) {
       const entry = this.otherShips[id];
-      this.scene.remove(entry.mesh);
-      entry.mesh.geometry.dispose();
-      entry.mesh.material.dispose();
+      entry.ship.destroy();
+    }
+    for (const m of this._projectileMeshes) {
+      this.scene.remove(m);
+    }
+    this._projectileMeshes = [];
+    if (this.torpedoManager) {
+      this.torpedoManager.destroy();
+      this.torpedoManager = null;
+    }
+    if (this._torpedoVisuals) {
+      for (const id in this._torpedoVisuals) {
+        const entry = this._torpedoVisuals[id];
+        this.scene.remove(entry.mesh);
+        entry.mesh.traverse(child => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this.scene.remove(entry.trail);
+        entry.trail.geometry.dispose();
+        entry.trail.material.dispose();
+      }
+      this._torpedoVisuals = {};
     }
     this.otherShips = {};
     this.interpolator.clear();

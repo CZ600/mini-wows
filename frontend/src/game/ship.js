@@ -85,7 +85,7 @@ export function getTorpedoTubes(shipClass, level) {
   return tubes;
 }
 
-const ACCEL = BASE_MAX_SPEED / 20;
+const ACCEL = BASE_MAX_SPEED / 15;
 const DECEL_FRICTION = 0.98;
 const YAW_RANGE_FULL = Math.PI;
 const YAW_RANGE_BRIDGE = 2.2;
@@ -500,8 +500,11 @@ export class Ship {
       return;
     }
 
-    if (keys.w) this.speed += ACCEL * dt;
-    if (keys.s) this.speed -= ACCEL * dt;
+    // Speed-dependent acceleration: faster at low speed, slower at high speed
+    const speedRatio = Math.abs(this.speed) / this.maxSpeed;
+    const accel = ACCEL * (1.5 - speedRatio);
+    if (keys.w) this.speed += accel * dt;
+    if (keys.s) this.speed -= accel * dt;
     if (!keys.w && !keys.s) {
       this.speed *= DECEL_FRICTION;
       if (Math.abs(this.speed) < 0.1) this.speed = 0;

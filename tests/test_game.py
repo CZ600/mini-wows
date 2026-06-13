@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from game.config import (
     LEVEL_CONFIG, CLASS_CONFIG, BASE_MAX_SPEED, get_class_config,
-    get_ship_config, get_torpedo_stats, TORPEDO_TIERS,
+    get_ship_config, get_torpedo_stats, TORPEDO_TIERS, ENEMY_SHIP_SCALE,
 )
 from game.terrain import PerlinNoise, generate_islands, Terrain
 from game.ship import ServerShip
@@ -48,6 +48,18 @@ class TestConfig:
 
     def test_torpedo_stats_invalid(self):
         assert get_torpedo_stats(99, 1) is None
+
+    def test_enemy_ship_damage_boosted(self):
+        """测试敌方舰船伤害提升50%"""
+        # 原始伤害值（提升前）
+        original_damages = {
+            1: 12, 2: 15, 3: 19, 4: 24, 5: 30, 6: 38, 7: 48, 8: 60,
+        }
+        for wave, expected_original in original_damages.items():
+            cfg = ENEMY_SHIP_SCALE[wave]
+            # 提升50%后的伤害值应该是原始值的1.5倍（使用四舍五入）
+            expected_boosted = int(expected_original * 1.5 + 0.5)
+            assert cfg["damage"] == expected_boosted, f"Wave {wave}: expected {expected_boosted}, got {cfg['damage']}"
 
 
 class TestPerlinNoise:
@@ -172,6 +184,75 @@ class TestServerShip:
         cfg = get_ship_config(5, "destroyer")
         assert ship.max_hp == cfg["hp"]
         assert ship.max_speed == cfg["max_speed"]
+
+
+class TestTurretCooldown:
+    """Tests for server-side turret cooldown behavior (no double decrement)."""
+
+    def test_cooldown_not_decremented_in_update(self):
+        """Ship.update() should NOT decrement turret cooldowns.
+        Only GameState.update() should decrement them."""
+        ship = ServerShip(1, "test", level=1)
+        assert ship.turret_cooldowns[0] == 0.0
+
+        # Simulate a fire: set cooldown
+        ship.turret_cooldowns[0] = 5.0
+
+        # Ship.update() with movement should NOT change cooldown
+        ship.update(0.05, {"w": 1})
+        assert ship.turret_cooldowns[0] == 5.0
+
+    def test_cooldown_only_decremented_externally(self):
+        """Turret cooldowns should only be decremented by external code (GameState.update)."""
+        ship = ServerShip(1, "test", level=1)
+        ship.turret_cooldowns[0] = 5.0
+
+        # Simulate GameState.update() decrementing cooldowns
+        for i in range(len(ship.turret_cooldowns)):
+            if ship.turret_cooldowns[i] > 0:
+                ship.turret_cooldowns[i] -= 0.05
+
+        assert abs(ship.turret_cooldowns[0] - 4.95) < 0.001
+
+    def test_process_fire_sets_cooldown(self):
+        """process_fire should set turret cooldowns after firing."""
+        from game.game_state import GameState
+        from game.terrain import Terrain
+
+        terrain = Terrain(12345, generate_islands(12345))
+        gs = GameState(terrain)
+        gs.add_ship(1, "player1", level=1)
+        gs.add_ship(2, "player2", level=1)
+
+        ship = gs.ships[1]
+        assert ship.turret_cooldowns[0] == 0.0
+
+        # Process a fire command
+        gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
+        assert ship.turret_cooldowns[0] > 0.0
+
+    def test_cooldown_prevents_immediate_refire(self):
+        """After firing, turret should be on cooldown and cannot fire again immediately."""
+        from game.game_state import GameState
+        from game.terrain import Terrain
+
+        terrain = Terrain(12345, generate_islands(12345))
+        gs = GameState(terrain)
+        gs.add_ship(1, "player1", level=1)
+        gs.add_ship(2, "player2", level=1)
+
+        ship = gs.ships[1]
+        fire_cooldown = ship.fire_cooldown
+
+        # First fire
+        gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
+        assert ship.turret_cooldowns[0] == fire_cooldown
+
+        # Second fire should be rejected (cooldown still active)
+        proj_count_before = len(gs.projectile_mgr.projectiles)
+        gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
+        proj_count_after = len(gs.projectile_mgr.projectiles)
+        assert proj_count_after == proj_count_before  # no new projectile
 
 
 class TestProtocol:
