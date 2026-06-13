@@ -558,6 +558,104 @@ class TestShipCollisionDetection:
         hit_events = [e for e in events if e["type"] == "hit"]
         assert len(hit_events) == 0
 
+    def test_fast_projectile_does_not_tunnel(self):
+        """200 m/s projectile must not tunnel through small ship.
+
+        At 20 Hz tick rate, 200 m/s = 10 m/tick. The level-1 ship has
+        effective half-width 3 (1 + 2 margin). A projectile going from
+        x=-5 to x=+5 in one tick has neither endpoint inside [-3, 3],
+        but the segment passes through. Swept (segment-AABB) detection
+        must catch this; point-in-box would miss it.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        pm = ProjectileManager()
+        pm.fire(2, 50, (-5.0, 1.0, 0.0), (1.0, 0.0, 0.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1, "Fast projectile must not tunnel through ship"
+        assert hit_events[0]["target"] == 1
+
+    def test_projectile_at_deck_level_hits(self):
+        """Projectile at y=2 should hit a level-1 ship (deck area).
+
+        Hull spans y in [1.0, 2.5] for level 1 (height=1.5). Old code
+        used ship_height=1.5 as upper bound and missed deck-level hits;
+        the new upper bound includes the deck region.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        pm = ProjectileManager()
+        pm.fire(2, 50, (0, 2.0, 0), (0, 0, 0))  # zero velocity, stays in place
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1
+        assert hit_events[0]["target"] == 1
+
+    def test_high_flyover_misses(self):
+        """Projectile flying well above the ship must not hit."""
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        pm = ProjectileManager()
+        pm.fire(2, 50, (-5.0, 20.0, 0.0), (1.0, 0.0, 0.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 0
+
+    def test_segment_catching_ship_at_edge(self):
+        """Projectile segment ending just inside the box should hit."""
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # From (-15, 1, 0) toward +x at 200 m/s: ends at (-5, 1, 0).
+        # Neither endpoint is inside [-3, 3] (|−15|>3, |−5|>3) — segment
+        # does NOT cross the box, so this is a clean miss.
+        pm = ProjectileManager()
+        pm.fire(2, 50, (-15.0, 1.0, 0.0), (1.0, 0.0, 0.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 0
+
+
 
 class TestGameStartRespawnLimit:
     """Verify respawnLimit flows through game_start message."""

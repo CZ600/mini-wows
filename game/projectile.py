@@ -5,7 +5,8 @@ from game.config import GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETI
 
 class ServerProjectile:
     __slots__ = [
-        "proj_id", "owner", "damage", "x", "y", "z",
+        "proj_id", "owner", "damage",
+        "x", "y", "z", "px", "py", "pz",
         "vx", "vy", "vz", "lifetime", "alive",
     ]
 
@@ -14,6 +15,7 @@ class ServerProjectile:
         self.owner = owner
         self.damage = damage
         self.x, self.y, self.z = origin
+        self.px, self.py, self.pz = origin
         speed = PROJECTILE_INITIAL_SPEED
         self.vx = direction[0] * speed
         self.vy = direction[1] * speed
@@ -23,6 +25,7 @@ class ServerProjectile:
 
     def update(self, dt):
         self.lifetime += dt
+        self.px, self.py, self.pz = self.x, self.y, self.z
         self.vy -= GRAVITY * dt
         self.x += self.vx * dt
         self.y += self.vy * dt
@@ -71,8 +74,10 @@ class ProjectileManager:
                     if p.y <= th:
                         p.alive = False
 
-        # Ship collision using numpy vectorized detection
-        # Transform projectile into each ship's local space for rotation-correct AABB
+        # Ship collision: swept AABB (segment vs box) in each ship's local space.
+        # Point-in-box would let fast projectiles (200 m/s = 10 m/tick at 20 Hz)
+        # tunnel through small ships. The segment from prev to curr position is
+        # tested against the box to catch every crossing.
         alive_ships = [(pid, s) for pid, s in ships.items() if s.alive]
         if alive_ships and self.projectiles:
             ship_ids = [pid for pid, _ in alive_ships]
@@ -80,24 +85,69 @@ class ProjectileManager:
             ship_headings = np.array([s.heading for _, s in alive_ships])
             ship_half_w = np.array([s.ship_width / 2 + 2.0 for _, s in alive_ships])
             ship_half_l = np.array([s.ship_length / 2 + 2.0 for _, s in alive_ships])
-            ship_heights = np.array([getattr(s, 'ship_height', 2.5) for _, s in alive_ships])
+            # Upper bound covers hull + deck + small bridge base; without this,
+            # projectiles at deck level (y≈2 on a level-1 ship) would miss.
+            ship_h_upper = np.array([getattr(s, 'ship_height', 2.5) + 3.0 for _, s in alive_ships])
 
             cos_h = np.cos(ship_headings)
             sin_h = np.sin(ship_headings)
+            EPS = 1e-9
 
             for p in self.projectiles:
                 if not p.alive:
                     continue
-                # Vector from ship center to projectile
-                rel_x = p.x - ship_positions[:, 0]
-                rel_z = p.z - ship_positions[:, 1]
-                # Rotate into ship local space (inverse of heading)
-                local_x = rel_x * cos_h + rel_z * sin_h
-                local_z = -rel_x * sin_h + rel_z * cos_h
-                dy = abs(p.y)
 
-                hit_mask = (np.abs(local_x) < ship_half_w) & (np.abs(local_z) < ship_half_l) & (dy < ship_heights)
-                hit_indices = np.where(hit_mask)[0]
+                # Transform prev and curr into each ship's local space (inverse heading)
+                rel_x_prev = p.px - ship_positions[:, 0]
+                rel_z_prev = p.pz - ship_positions[:, 1]
+                rel_x_curr = p.x - ship_positions[:, 0]
+                rel_z_curr = p.z - ship_positions[:, 1]
+
+                lx_prev = rel_x_prev * cos_h + rel_z_prev * sin_h
+                lz_prev = -rel_x_prev * sin_h + rel_z_prev * cos_h
+                lx_curr = rel_x_curr * cos_h + rel_z_curr * sin_h
+                lz_curr = -rel_x_curr * sin_h + rel_z_curr * cos_h
+
+                dx = lx_curr - lx_prev
+                dy = p.y - p.py
+                dz = lz_curr - lz_prev
+
+                # Avoid division by zero on axes where the segment is parallel
+                dx_s = np.where(np.abs(dx) < EPS, EPS, dx)
+                dy_s = np.where(np.abs(dy) < EPS, EPS, dy)
+                dz_s = np.where(np.abs(dz) < EPS, EPS, dz)
+
+                # Slab method: t-interval where segment overlaps each axis slab
+                tx1 = (-ship_half_w - lx_prev) / dx_s
+                tx2 = (ship_half_w - lx_prev) / dx_s
+                tx_lo = np.minimum(tx1, tx2)
+                tx_hi = np.maximum(tx1, tx2)
+
+                ty1 = (0.0 - p.py) / dy_s
+                ty2 = (ship_h_upper - p.py) / dy_s
+                ty_lo = np.minimum(ty1, ty2)
+                ty_hi = np.maximum(ty1, ty2)
+
+                tz1 = (-ship_half_l - lz_prev) / dz_s
+                tz2 = (ship_half_l - lz_prev) / dz_s
+                tz_lo = np.minimum(tz1, tz2)
+                tz_hi = np.maximum(tz1, tz2)
+
+                t_enter = np.maximum(np.maximum(tx_lo, ty_lo), tz_lo)
+                t_exit = np.minimum(np.minimum(tx_hi, ty_hi), tz_hi)
+
+                # Segment crosses the box and overlap intersects [0, 1]
+                hits = (t_enter <= t_exit) & (t_exit >= 0.0) & (t_enter <= 1.0)
+
+                # For parallel axes, require prev position inside that slab
+                par_x = np.abs(dx) < EPS
+                par_y = np.abs(dy) < EPS
+                par_z = np.abs(dz) < EPS
+                hits &= (~par_x) | (np.abs(lx_prev) < ship_half_w)
+                hits &= (~par_y) | ((p.py >= 0.0) & (p.py < ship_h_upper))
+                hits &= (~par_z) | (np.abs(lz_prev) < ship_half_l)
+
+                hit_indices = np.where(hits)[0]
 
                 for idx in hit_indices:
                     pid = ship_ids[idx]

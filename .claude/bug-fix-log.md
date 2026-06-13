@@ -250,4 +250,30 @@ type: project
 
 **测试**: 项目无前端测试框架；通过 `npm run build`（vite 构建）验证 77 模块无语法错误。前端 UI 行为需在浏览器中手动测试：联机对战中其他玩家头顶应显示标签，队友绿/敌人红，血量减少时血条缩短，死亡时标签消失；小地图四边中点显示 N/E/S/W；顶部罗盘消失。
 
-**已知无关失败**: `tests/test_multiplayer.py::TestHitDetectionRotation::test_hit_works_when_ship_rotated` 在 stash 全部修改后能通过，失败由会话开始前已存在的后端文件修改（`game_state.py`/`projectile.py` 等）导致，与本次 UI 改动无关。
+### Bug 23: 炮弹穿过船身但不判定命中
+
+**问题**: 玩家观察到炮弹视觉上穿过敌舰，但未造成伤害。
+
+**根因（双重 bug）**:
+1. **高速 tunneling**: `PROJECTILE_INITIAL_SPEED=200` 在 20 Hz tick 下每帧位移 10m，比小型舰船的有效碰撞盒还宽。`ProjectileManager.update` 使用点-盒判定（仅检查当前帧位置），当炮弹上一帧在船一侧、本帧已飞到另一侧时，两个端点都不在盒内 → 漏判。
+2. **高度上限过严**: Bug 19 的修复将碰撞高度从硬编码 2.5 改为 `ship_height`（L1 仅 1.5m），但实际船体型线延伸到 `1.0 + height`（甲板）甚至更高（桥楼）。结果甲板高度的炮弹（如 y=2 命中 L1 船）反而不判中。
+
+**修复**:
+- `game/projectile.py` `ServerProjectile`: 新增 `px/py/pz` 字段记录上一帧位置；`update()` 在位移前先备份当前位置
+- `game/projectile.py` `ProjectileManager.update`: 用 **swept AABB（线段-盒求交，slab method）** 替换点-盒判定。对每个炮弹，将其 prev→curr 线段变换到每艘船的局部坐标系，分别计算 x/y/z 三轴 slab 的进入/离开 t 值，取交集；当 `t_enter ≤ t_exit` 且与 `[0,1]` 重叠时判中。对平行线段（某轴方向≈0）额外校验 prev 位置是否在该轴 slab 内
+- 高度上限改为 `ship_height + 3.0`，覆盖甲板及小型桥楼基础部分
+
+**约束**:
+- 单帧位移无论多大（包括从船一侧瞬移到另一侧）都能被检测
+- 自弹仍然不命中 owner
+- 队伍模式下队友不互相伤害
+- 高空飞过（y 远高于船体型线）不算命中
+- 既不引入误判（segment 不与盒相交时不命中），也不漏判（segment 与盒相交必命中）
+
+**测试**: `tests/test_respawn.py::TestShipCollisionDetection` 新增 4 个测试：
+- `test_fast_projectile_does_not_tunnel`: 200 m/s 炮弹从 x=-5 到 x=+5（端点都不在 [-3,3] 内），必须命中
+- `test_projectile_at_deck_level_hits`: y=2 静止炮弹命中 L1 船（之前因 height=1.5 漏判）
+- `test_high_flyover_misses`: y=20 飞过不命中
+- `test_segment_catching_ship_at_edge`: 线段未跨过盒时不命中（防误判）
+
+此前会话中失败的 `tests/test_multiplayer.py::TestHitDetectionRotation::test_hit_works_when_ship_rotated` 现在通过。全量 162 个测试全部通过。
