@@ -72,22 +72,31 @@ class ProjectileManager:
                         p.alive = False
 
         # Ship collision using numpy vectorized detection
+        # Transform projectile into each ship's local space for rotation-correct AABB
         alive_ships = [(pid, s) for pid, s in ships.items() if s.alive]
         if alive_ships and self.projectiles:
             ship_ids = [pid for pid, _ in alive_ships]
             ship_positions = np.array([[s.pos_x, s.pos_z] for _, s in alive_ships])
+            ship_headings = np.array([s.heading for _, s in alive_ships])
             ship_half_w = np.array([s.ship_width / 2 + 0.5 for _, s in alive_ships])
             ship_half_l = np.array([s.ship_length / 2 + 0.5 for _, s in alive_ships])
             ship_heights = np.array([2.5] * len(alive_ships))
 
+            cos_h = np.cos(ship_headings)
+            sin_h = np.sin(ship_headings)
+
             for p in self.projectiles:
                 if not p.alive:
                     continue
-                dx = np.abs(ship_positions[:, 0] - p.x)
-                dz = np.abs(ship_positions[:, 1] - p.z)
+                # Vector from ship center to projectile
+                rel_x = p.x - ship_positions[:, 0]
+                rel_z = p.z - ship_positions[:, 1]
+                # Rotate into ship local space (inverse of heading)
+                local_x = rel_x * cos_h + rel_z * sin_h
+                local_z = -rel_x * sin_h + rel_z * cos_h
                 dy = abs(p.y)
 
-                hit_mask = (dx < ship_half_w) & (dz < ship_half_l) & (dy < ship_heights)
+                hit_mask = (np.abs(local_x) < ship_half_w) & (np.abs(local_z) < ship_half_l) & (dy < ship_heights)
                 hit_indices = np.where(hit_mask)[0]
 
                 for idx in hit_indices:

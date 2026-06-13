@@ -104,6 +104,15 @@ export class Terrain {
 
   isLand(x, z) { return this.getHeightAt(x, z) > 0; }
 
+  destroy() {
+    if (this.mesh) {
+      this.scene.remove(this.mesh);
+      this.mesh.geometry.dispose();
+      this.mesh.material.dispose();
+      this.mesh = null;
+    }
+  }
+
   generateMinimapImage() {
     const res = SEGMENTS + 1;
     const canvas = document.createElement('canvas');

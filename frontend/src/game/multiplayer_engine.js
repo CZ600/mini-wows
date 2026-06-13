@@ -10,7 +10,8 @@ import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED } from './config.js';
 import { Ship, CLASS_CONFIG } from './ship.js';
-import { updateTurrets, calcBallisticAngles, turretCanAim, getTurretFireData } from './turret.js';
+import { updateTurrets, calcBallisticAngles, turretCanAim } from './turret.js';
+import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 
 const CAM_DIST = 30;
@@ -41,6 +42,7 @@ export class MultiplayerEngine {
     this.onRoomUpdate = null;
     this.onCountdown = null;
     this.onScopeChange = null;
+    this._eliminated = false;
 
     this.scene = null;
     this.renderer = null;
@@ -57,6 +59,7 @@ export class MultiplayerEngine {
     this._aimTarget = new THREE.Vector3();
     this._currentFov = FOV_NORMAL;
     this._torpedoCooldowns = [];
+    this._localProjMgr = null;
     this._minimapTerrain = null;
     this._projectileMeshes = [];
     this._projectileGeometry = null;
@@ -158,8 +161,16 @@ export class MultiplayerEngine {
 
     if (type === 'game_end') {
       this._gameStarted = false;
+      this._eliminated = false;
       if (this.onGameOver) {
         this.onGameOver(msg.results);
+      }
+    }
+
+    if (type === 'player_eliminated') {
+      this._eliminated = true;
+      if (this.onEliminated) {
+        this.onEliminated();
       }
     }
 
@@ -173,7 +184,9 @@ export class MultiplayerEngine {
   }
 
   _startGame(msg) {
-    this.audio.init();
+    this._cleanupGame();
+
+    try { this.audio.init(); } catch (e) { /* audio unavailable */ }
 
     // Create terrain from server seed/islands
     this.terrain = new Terrain(this.scene, msg.terrainSeed, msg.islands);
@@ -182,6 +195,7 @@ export class MultiplayerEngine {
 
     // Create torpedo manager for rendering
     this.torpedoManager = new TorpedoManager(this.scene, this.terrain);
+    this._localProjMgr = new ProjectileManager(this.scene, this.terrain, this.audio);
 
     // Find my player data
     const myPlayer = msg.players.find(p => p.id === this._myId);
@@ -209,10 +223,15 @@ export class MultiplayerEngine {
     this._updateControlsCapabilities();
     this._torpedoCooldowns = this.localShip.ship.torpedoTubes.map(() => 0);
 
-    // Reset other ships
+    // Clean up old other ships
+    for (const id in this.otherShips) {
+      this.otherShips[id].ship.destroy();
+    }
     this.otherShips = {};
+    this.interpolator.clear();
 
     this._gameStarted = true;
+    this._eliminated = false;
     this._ping = 0;
 
     this.controls.orbitYaw = 0;
@@ -240,6 +259,7 @@ export class MultiplayerEngine {
   _createLocalShipMesh() {
     const ship = new Ship(this.scene, this.localShip.level, this.localShip.shipClass);
     ship.mesh.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
+    ship.mesh.visible = false; // hidden until first server snapshot arrives
     this.localShip.ship = ship;
     this.localShip.mesh = ship.mesh;
     this.localShip.max_speed = ship.maxSpeed;
@@ -296,6 +316,18 @@ export class MultiplayerEngine {
       const serverState = msg.you;
       this.inputSender.confirmInput(msg.lpi || 0);
 
+      // Show ship on first snapshot
+      if (!this.localShip.ship.mesh.visible) {
+        this.localShip.pos_x = serverState.x;
+        this.localShip.pos_z = serverState.z;
+        this.localShip.heading = serverState.h;
+        this.localShip.speed = serverState.spd;
+        this.localShip.ship.mesh.position.set(serverState.x, 0, serverState.z);
+        this.localShip.ship.mesh.rotation.y = serverState.h;
+        this.localShip.ship.position.set(serverState.x, 0, serverState.z);
+        this.localShip.ship.mesh.visible = true;
+      }
+
       // Check for level upgrade
       if (serverState.lvl && serverState.lvl !== this.localShip.level) {
         this.localShip.level = serverState.lvl;
@@ -350,20 +382,25 @@ export class MultiplayerEngine {
   }
 
   _updateProjectileVisuals(projs) {
+    // Only render remote player projectiles from server data
+    // Local player projectiles are rendered by _localProjMgr
+    const remote = this._localProjMgr
+      ? projs.filter(p => p.owner !== this._myId)
+      : projs;
     // Remove excess meshes
-    while (this._projectileMeshes.length > projs.length) {
+    while (this._projectileMeshes.length > remote.length) {
       const m = this._projectileMeshes.pop();
       this.scene.remove(m);
     }
     // Add missing meshes
-    while (this._projectileMeshes.length < projs.length) {
+    while (this._projectileMeshes.length < remote.length) {
       const m = new THREE.Mesh(this._projectileGeometry, this._projectileMaterial);
       this.scene.add(m);
       this._projectileMeshes.push(m);
     }
     // Update positions
-    for (let i = 0; i < projs.length; i++) {
-      this._projectileMeshes[i].position.set(projs[i].x, projs[i].y, projs[i].z);
+    for (let i = 0; i < remote.length; i++) {
+      this._projectileMeshes[i].position.set(remote[i].x, remote[i].y, remote[i].z);
     }
   }
 
@@ -441,7 +478,7 @@ export class MultiplayerEngine {
 
     // Remove torpedoes no longer in snapshot
     for (const id in this._torpedoVisuals) {
-      if (!activeIds.has(id)) {
+      if (!activeIds.has(Number(id))) {
         const entry = this._torpedoVisuals[id];
         this.scene.remove(entry.mesh);
         entry.mesh.traverse(child => {
@@ -524,7 +561,7 @@ export class MultiplayerEngine {
 
     // Remove ships no longer in snapshot
     for (const id in this.otherShips) {
-      if (!activeIds.has(id)) {
+      if (!activeIds.has(Number(id))) {
         const entry = this.otherShips[id];
         entry.ship.destroy();
         delete this.otherShips[id];
@@ -599,7 +636,7 @@ export class MultiplayerEngine {
       this.localShip.ship._updateWake(dt);
     }
 
-    // Turret aiming
+    // Turret aiming & cooldown
     let currentAimYaw = 0;
     if (this.localShip.ship && this.localShip.ship.turrets.length > 0) {
       const aimTarget = this._findAimTarget();
@@ -608,6 +645,9 @@ export class MultiplayerEngine {
       const { yaw, pitch: aimPitch } = calcBallisticAngles(turretPos, aimTarget, this.localShip.heading);
       currentAimYaw = yaw;
       updateTurrets(this.localShip.ship, yaw, aimPitch, dt);
+      for (const t of this.localShip.ship.turrets) {
+        if (t.cooldown > 0) t.cooldown -= dt;
+      }
     }
 
     // Fire handling — server-authoritative: only consume when turrets actually fire
@@ -651,6 +691,11 @@ export class MultiplayerEngine {
     // Update torpedo visuals (trails, fan arcs)
     if (this.torpedoManager) {
       this.torpedoManager.update(dt, null, []);
+    }
+
+    // Update local projectile visuals
+    if (this._localProjMgr) {
+      this._localProjMgr.update(dt, null, []);
     }
 
     // Camera follow
@@ -752,8 +797,29 @@ export class MultiplayerEngine {
     const ship = this.localShip.ship;
     const aimTarget = this._findAimTarget();
     let anyFired = false;
+
+    // Calculate common aim direction (same as server logic)
+    const turretPos = new THREE.Vector3();
+    ship.turrets[0].body.getWorldPosition(turretPos);
+    const { pitch: aimPitch } = calcBallisticAngles(turretPos, aimTarget, this.localShip.heading);
+    const worldYaw = Math.atan2(
+      aimTarget.x - this.localShip.pos_x,
+      aimTarget.z - this.localShip.pos_z
+    );
+    const dirX = Math.sin(worldYaw) * Math.cos(aimPitch);
+    const dirY = Math.sin(aimPitch);
+    const dirZ = Math.cos(worldYaw) * Math.cos(aimPitch);
+
     for (const turret of ship.turrets) {
       if (turret.cooldown <= 0 && turretCanAim(turret, aimYaw)) {
+        // Origin: turret base position in world space (different per turret)
+        const turretWorldPos = new THREE.Vector3();
+        turret.body.getWorldPosition(turretWorldPos);
+        turretWorldPos.y = 3.0; // turret height
+
+        if (this._localProjMgr) {
+          this._localProjMgr.fire(turretWorldPos, { x: dirX, y: dirY, z: dirZ }, ship.damage, 'player');
+        }
         turret.cooldown = ship.fireCooldown;
         anyFired = true;
       }
@@ -803,28 +869,42 @@ export class MultiplayerEngine {
     return (base[tier] || 8) * Math.pow(0.95, levelsAbove4);
   }
 
-  destroy() {
-    this.running = false;
-    if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
-    this.ws.disconnect();
-    if (this.controls) this.controls.destroy();
-    if (this._rCleanup) this._rCleanup();
-    if (this._cCleanup) this._cCleanup();
-    if (this.localShip && this.localShip.ship) {
-      this.localShip.ship.destroy();
+  _cleanupGame() {
+    if (this.terrain) {
+      this.terrain.destroy?.();
+      this.terrain = null;
     }
-    for (const id in this.otherShips) {
-      const entry = this.otherShips[id];
-      entry.ship.destroy();
+    if (this.water) {
+      this.scene.remove(this.water);
+      if (this.water.geometry) this.water.geometry.dispose();
+      if (this.water.material) this.water.material.dispose();
+      this.water = null;
     }
-    for (const m of this._projectileMeshes) {
-      this.scene.remove(m);
+    if (this._localProjMgr) {
+      this._localProjMgr.destroy();
+      this._localProjMgr = null;
     }
-    this._projectileMeshes = [];
     if (this.torpedoManager) {
       this.torpedoManager.destroy();
       this.torpedoManager = null;
     }
+    if (this.localShip && this.localShip.ship) {
+      this.localShip.ship.mesh.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+      this.localShip.ship.destroy();
+      this.localShip = null;
+    }
+    for (const id in this.otherShips) {
+      this.otherShips[id].ship.destroy();
+    }
+    this.otherShips = {};
+    this.interpolator.clear();
+    for (const m of this._projectileMeshes) {
+      this.scene.remove(m);
+    }
+    this._projectileMeshes = [];
     if (this._torpedoVisuals) {
       for (const id in this._torpedoVisuals) {
         const entry = this._torpedoVisuals[id];
@@ -839,9 +919,16 @@ export class MultiplayerEngine {
       }
       this._torpedoVisuals = {};
     }
-    this.otherShips = {};
-    this.interpolator.clear();
-    if (this.terrain) this.terrain.destroy?.();
+  }
+
+  destroy() {
+    this.running = false;
+    if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
+    this.ws.disconnect();
+    if (this.controls) this.controls.destroy();
+    this._cleanupGame();
+    if (this._rCleanup) this._rCleanup();
+    if (this._cCleanup) this._cCleanup();
     if (this.renderer) this.renderer.dispose();
   }
 }

@@ -111,6 +111,36 @@ class GameState:
         keys = msg.get("k", {})
         ship.update(DT, keys, self.terrain)
 
+    def _get_turret_offsets(self, ship):
+        """Return list of (dx, dz) offsets for each turret relative to ship center."""
+        from game.config import get_ship_config
+        cfg = get_ship_config(ship.level, ship.ship_class)
+        n_front = cfg["front_turrets"]
+        n_back = cfg["back_turrets"]
+        length = ship.ship_length
+        spacing = max(1.5, ship.ship_width * 0.85)
+
+        offsets = []
+        front_center = length * 0.2
+        for i in range(n_front):
+            offset = (i - (n_front - 1) / 2) * spacing
+            offsets.append((0, front_center + offset))
+
+        back_center = -length * 0.2
+        for i in range(n_back):
+            offset = (i - (n_back - 1) / 2) * spacing
+            offsets.append((0, back_center + offset))
+
+        return offsets
+
+    def _turret_world_pos(self, ship, local_dx, local_dz):
+        """Convert turret local offset to world position based on ship heading."""
+        cos_h = math.cos(ship.heading)
+        sin_h = math.sin(ship.heading)
+        wx = ship.pos_x + sin_h * local_dz + cos_h * local_dx
+        wz = ship.pos_z + cos_h * local_dz - sin_h * local_dx
+        return wx, wz
+
     def process_fire(self, player_id, msg):
         """Server-authoritative fire: client sends aim target, server creates projectile."""
         ship = self.ships.get(player_id)
@@ -130,7 +160,6 @@ class GameState:
         aim_y = aim.get("y", 2)
         aim_z = aim.get("z", ship.pos_z)
 
-        # Fire from ship position toward aim target (server-authoritative)
         origin_y = 3.0  # turret height
         dx = aim_x - ship.pos_x
         dz = aim_z - ship.pos_z
@@ -157,10 +186,17 @@ class GameState:
             math.cos(yaw) * math.cos(pitch),
         )
 
+        turret_offsets = self._get_turret_offsets(ship)
+
         for i in ready_turrets:
+            if i < len(turret_offsets):
+                ldx, ldz = turret_offsets[i]
+                ox, oz = self._turret_world_pos(ship, ldx, ldz)
+            else:
+                ox, oz = ship.pos_x, ship.pos_z
             self.projectile_mgr.fire(
                 player_id, ship.damage,
-                (ship.pos_x, origin_y, ship.pos_z),
+                (ox, origin_y, oz),
                 direction,
             )
             ship.turret_cooldowns[i] = ship.fire_cooldown

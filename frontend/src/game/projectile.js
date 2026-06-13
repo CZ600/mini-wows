@@ -17,7 +17,7 @@ export class ProjectileManager {
   fire(origin, direction, damage, owner) {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.3, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0x333333 })
+      new THREE.MeshBasicMaterial({ color: owner === 'player' ? 0xffaa00 : 0xff6644 })
     );
     mesh.position.copy(origin);
     this.scene.add(mesh);

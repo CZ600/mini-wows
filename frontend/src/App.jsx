@@ -1,11 +1,14 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate, Outlet } from 'react-router-dom';
+import { useGame, NavigationHelper } from './context/GameContext.jsx';
+import { AuthRoute, AdminRoute } from './components/AuthRoute.jsx';
+import { GameProvider } from './context/GameContext.jsx';
 import LoginScreen from './components/LoginScreen.jsx';
 import RegisterScreen from './components/RegisterScreen.jsx';
 import MenuScreen from './components/MenuScreen.jsx';
 import SingleSetupScreen from './components/SingleSetupScreen.jsx';
 import MultiSetupScreen from './components/MultiSetupScreen.jsx';
 import AdminDashboard from './components/AdminDashboard.jsx';
-import LobbyScreen from './components/LobbyScreen.jsx';
 import RoomScreen from './components/RoomScreen.jsx';
 import GameCanvas from './components/GameCanvas.jsx';
 import HUD from './components/HUD.jsx';
@@ -14,9 +17,6 @@ import Minimap from './components/Minimap.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
-import { GameEngine } from './game/engine.js';
-import { MultiplayerEngine } from './game/multiplayer_engine.js';
-import { createPlayer, createGame, finishGame, getMe, clearToken, getPlayerProgress, savePlayerProgress, resetPlayerProgress, getPlayerClass, setPlayerClass } from './api.js';
 import './App.css';
 
 function ScopeOverlay() {
@@ -79,265 +79,191 @@ function LevelUpNotification({ info }) {
   );
 }
 
-export default function App() {
-  const [authState, setAuthState] = useState('CHECKING');
-  const [user, setUser] = useState(null);
-  const [gameState, setGameState] = useState('MENU');
-  const [hudData, setHudData] = useState(null);
-  const [minimapData, setMinimapData] = useState(null);
+// ── Page Components ──
+
+function LoginPage() {
+  const { handleLogin } = useGame();
+  const navigate = useNavigate();
+  return <LoginScreen onLogin={handleLogin} onSwitchToRegister={() => navigate('/register')} />;
+}
+
+function RegisterPage() {
+  const { handleLogin } = useGame();
+  const navigate = useNavigate();
+  return <RegisterScreen onRegister={handleLogin} onSwitchToLogin={() => navigate('/login')} />;
+}
+
+function MenuPage() {
+  const { user, handleLogout } = useGame();
+  const navigate = useNavigate();
   const [showLeaderboard, setShowLeaderboard] = useState(false);
-  const [gameResult, setGameResult] = useState({ score: 0, enemies: 0, level: 1 });
-  const [scoped, setScoped] = useState(false);
-  const [levelUpInfo, setLevelUpInfo] = useState(null);
-  const [showClassSelect, setShowClassSelect] = useState(false);
+  return (
+    <>
+      <MenuScreen
+        user={user}
+        onSinglePlayer={() => navigate('/single')}
+        onMultiplayer={() => navigate('/multi')}
+        onShowLeaderboard={() => setShowLeaderboard(v => !v)}
+        onShowAdmin={() => navigate('/admin')}
+        onLogout={handleLogout}
+      />
+      <LeaderboardPanel visible={showLeaderboard} onClose={() => setShowLeaderboard(false)} />
+    </>
+  );
+}
 
-  // Multiplayer state
-  const [roomInfo, setRoomInfo] = useState(null);
-  const [mpHudData, setMpHudData] = useState(null);
-  const [mpCountdown, setMpCountdown] = useState(null);
-  const [mpMinimapData, setMpMinimapData] = useState(null);
-  const [mpScoped, setMpScoped] = useState(false);
+function SingleSetupPage() {
+  const { user, handleStart } = useGame();
+  const navigate = useNavigate();
+  return <SingleSetupScreen user={user} onStart={handleStart} onBack={() => navigate('/')} />;
+}
 
-  const engineRef = useRef(null);
-  const mpEngineRef = useRef(null);
-  const playerIdRef = useRef(null);
-  const gameIdRef = useRef(null);
-  const levelUpTimerRef = useRef(null);
-  const mpCanvasRef = useRef(null);
-  const mpInitializedRef = useRef(false);
-  const [spInitialized, setSpInitialized] = useState(false);
-  const pendingStartRef = useRef(null);
+function MultiSetupPage() {
+  const { user, handleQuickMatch, handleCreateRoom, handleJoinRoom } = useGame();
+  const navigate = useNavigate();
+  return (
+    <MultiSetupScreen
+      user={user}
+      onQuickMatch={handleQuickMatch}
+      onCreateRoom={handleCreateRoom}
+      onJoinRoom={handleJoinRoom}
+      onBack={() => navigate('/')}
+    />
+  );
+}
 
-  if (!engineRef.current) {
-    engineRef.current = new GameEngine();
+function RoomPage() {
+  const { user, roomInfo, mpCountdown, pendingRoomRef, handleReady, handleLeaveRoom, handleSelectClass } = useGame();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!roomInfo && !pendingRoomRef.current) {
+      navigate('/multi', { replace: true });
+    }
+  }, [roomInfo, navigate, pendingRoomRef]);
+
+  if (!roomInfo) {
+    return (
+      <div id="menu-screen">
+        <div className="menu-container">
+          <h1 className="game-title">3D 海战</h1>
+          <p className="menu-welcome">正在加入房间...</p>
+        </div>
+      </div>
+    );
   }
-  if (!mpEngineRef.current) {
-    mpEngineRef.current = new MultiplayerEngine();
-  }
-  const engine = engineRef.current;
-  const mpEngine = mpEngineRef.current;
 
-  engine.onHudUpdate = setHudData;
-  engine.onMinimapUpdate = setMinimapData;
-  engine.onScopeChange = setScoped;
-  engine.onLevelUp = useCallback((info) => {
-    setLevelUpInfo(info);
-    if (levelUpTimerRef.current) clearTimeout(levelUpTimerRef.current);
-    levelUpTimerRef.current = setTimeout(() => setLevelUpInfo(null), 6000);
-    if (playerIdRef.current) {
-      savePlayerProgress(playerIdRef.current, info.newLevel).catch(() => {});
-    }
-  }, []);
-  engine.onGameOver = useCallback((score, level, enemies) => {
-    setGameResult({ score, enemies, level });
-    setGameState('GAME_OVER');
-    if (document.pointerLockElement) document.exitPointerLock();
-    if (gameIdRef.current) {
-      finishGame(gameIdRef.current, score, level, enemies, 'sunk').catch(() => {});
-    }
-  }, []);
-  engine.onClassSelect = useCallback(() => {
-    setShowClassSelect(true);
-    setGameState('CLASS_SELECT');
-  }, []);
+  return (
+    <RoomScreen
+      roomInfo={{ ...roomInfo, countdown: mpCountdown }}
+      userId={user.id}
+      onReady={handleReady}
+      onLeave={handleLeaveRoom}
+      onSelectClass={handleSelectClass}
+    />
+  );
+}
+
+function SinglePlayPage() {
+  const { engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized, pendingStartRef } = useGame();
+  const navigate = useNavigate();
 
   useEffect(() => {
-    (async () => {
-      try {
-        const userData = await getMe();
-        if (userData) {
-          setUser(userData);
-          setAuthState('AUTHENTICATED');
-        } else {
-          setAuthState('LOGIN');
-        }
-      } catch {
-        setAuthState('LOGIN');
-      }
-    })();
-  }, []);
-
-  // Init mpEngine when canvas is available in multiplayer states
-  useEffect(() => {
-    const isMpState = gameState === 'LOBBY' || gameState === 'ROOM' || gameState === 'MULTIPLAYER';
-    if (isMpState && mpCanvasRef.current && !mpInitializedRef.current) {
-      mpEngine.init(mpCanvasRef.current);
-      mpInitializedRef.current = true;
+    if (!pendingStartRef.current) {
+      navigate('/single', { replace: true });
+      return;
     }
-  }, [gameState, mpEngine]);
-
-  // Start single-player engine after GameCanvas mounts and init() completes
-  useEffect(() => {
-    if (gameState === 'PLAYING' && spInitialized && pendingStartRef.current) {
+    if (spInitialized && pendingStartRef.current) {
       const { level, shipClass } = pendingStartRef.current;
       pendingStartRef.current = null;
       engine.start(level, shipClass);
     }
-  }, [gameState, engine, spInitialized]);
+  }, [spInitialized, engine, pendingStartRef, navigate]);
 
-  const handleLogin = (userData) => {
-    setUser(userData);
-    setAuthState('AUTHENTICATED');
-  };
+  if (!pendingStartRef.current) return null;
 
-  const handleLogout = () => {
-    clearToken();
-    setUser(null);
-    setAuthState('LOGIN');
-    setGameState('MENU');
-    setShowLeaderboard(false);
-  };
+  return (
+    <>
+      <GameCanvas engine={engine} onInit={() => setSpInitialized(true)} />
+      {hudData && <HUD data={hudData} />}
+      {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
+      {minimapData && !scoped && <Minimap data={minimapData} />}
+      {scoped && <ScopeOverlay />}
+    </>
+  );
+}
 
-  const handleStart = async (name, initialLevel = 1, initialClass = null) => {
-    try {
-      const p = await createPlayer(name);
-      playerIdRef.current = p.id;
-      const g = await createGame(p.id);
-      gameIdRef.current = g.id;
-    } catch {
-      console.warn('API unavailable, playing offline');
+// Shared canvas layout for multiplayer flow (lobby/room/play).
+// Keeps canvas and mpEngine initialized across these pages so snapshots
+// received during room state don't crash (Ship constructor needs scene).
+function MultiCanvasLayout() {
+  const { mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData, mpScoped, mpEliminated } = useGame();
+
+  useEffect(() => {
+    if (mpCanvasRef.current && !mpInitializedRef.current) {
+      mpEngine.init(mpCanvasRef.current);
+      mpInitializedRef.current = true;
     }
-    if (playerIdRef.current && initialLevel > 1) {
-      savePlayerProgress(playerIdRef.current, initialLevel).catch(() => {});
-    }
-    if (playerIdRef.current && initialClass) {
-      setPlayerClass(playerIdRef.current, initialClass).catch(() => {});
-    }
-    pendingStartRef.current = { level: initialLevel, shipClass: initialClass };
-    setSpInitialized(false);
-    setGameState('PLAYING');
-    setShowLeaderboard(false);
-  };
+  }, [mpEngine, mpCanvasRef, mpInitializedRef]);
 
-  const handleContinue = async () => {
-    let startLevel = 1;
-    let shipClass = null;
-    if (playerIdRef.current) {
-      try {
-        const progress = await getPlayerProgress(playerIdRef.current);
-        startLevel = progress.level || 1;
-        shipClass = progress.shipClass || null;
-      } catch { /* offline */ }
-    }
-    pendingStartRef.current = { level: startLevel, shipClass };
-    setSpInitialized(false);
-    setGameState('PLAYING');
-    if (playerIdRef.current) {
-      try {
-        const g = await createGame(playerIdRef.current);
-        gameIdRef.current = g.id;
-      } catch { /* offline */ }
-      savePlayerProgress(playerIdRef.current, startLevel).catch(() => {});
-    }
-  };
+  return (
+    <>
+      <canvas ref={mpCanvasRef} id="game-canvas" />
+      {mpHudData && <MultiplayerHUD data={mpHudData} />}
+      {mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
+      {mpScoped && <ScopeOverlay />}
+      {mpEliminated && (
+        <div id="gameover-screen">
+          <div className="gameover-container">
+            <h1>战舰沉没</h1>
+            <p>你已被淘汰，正在观战中...</p>
+          </div>
+        </div>
+      )}
+      <Outlet />
+    </>
+  );
+}
 
-  const handleRestart = async () => {
-    if (playerIdRef.current) {
-      resetPlayerProgress(playerIdRef.current).catch(() => {});
-    }
-    pendingStartRef.current = { level: 1, shipClass: null };
-    setSpInitialized(false);
-    setGameState('PLAYING');
-    if (playerIdRef.current) {
-      try {
-        const g = await createGame(playerIdRef.current);
-        gameIdRef.current = g.id;
-      } catch { /* offline */ }
-    }
-  };
+function GameOverPage() {
+  const { gameResult, handleContinue, handleRestart, handleBackToLobby } = useGame();
+  return (
+    <GameOverScreen
+      score={gameResult.score}
+      enemies={gameResult.enemies}
+      level={gameResult.level}
+      multiplayerResults={gameResult.multiplayerResults}
+      onContinue={handleContinue}
+      onRestart={handleRestart}
+      onBackToLobby={handleBackToLobby}
+    />
+  );
+}
 
-  const handleClassSelect = async (shipClass) => {
-    engine.selectClass(shipClass);
-    setShowClassSelect(false);
-    setGameState('PLAYING');
-    if (playerIdRef.current) {
-      setPlayerClass(playerIdRef.current, shipClass).catch(() => {});
-      savePlayerProgress(playerIdRef.current, 4).catch(() => {});
-    }
-  };
+function ClassSelectPage() {
+  const { handleClassSelect } = useGame();
+  return <ClassSelectScreen onSelect={handleClassSelect} />;
+}
 
-  // Multiplayer handlers
-  mpEngine.onHudUpdate = setMpHudData;
-  mpEngine.onMinimapUpdate = setMpMinimapData;
-  mpEngine.onScopeChange = setMpScoped;
-  mpEngine.onRoomUpdate = (info) => {
-    setRoomInfo(info);
-  };
-  mpEngine.onCountdown = (seconds) => {
-    setMpCountdown(seconds);
-  };
-  mpEngine.onGameStart = () => {
-    setGameState('MULTIPLAYER');
-  };
-  mpEngine.onGameOver = (results) => {
-    setGameState('GAME_OVER');
-    setGameResult({ score: 0, enemies: 0, level: 1, multiplayerResults: results });
-  };
-  mpEngine.onError = (msg) => {
-    console.error('MP Error:', msg);
-    alert(msg);
-  };
+function AdminPage() {
+  const navigate = useNavigate();
+  return <AdminDashboard onClose={() => navigate('/')} />;
+}
 
-  const ensureMpConnected = () => {
-    if (!mpEngine.ws.connected) {
-      // Wire up message handlers before connecting so responses are not lost
-      mpEngine.ws.onMessage = (msg) => mpEngine._handleMessage(msg);
-      mpEngine.ws.onDisconnect = () => {
-        if (mpEngine.onDisconnect) mpEngine.onDisconnect();
-      };
-      const token = localStorage.getItem('token');
-      mpEngine.connect(token, user.id);
-    }
-  };
+// ── App with Routes ──
 
-  const handleMultiplayer = () => {
-    ensureMpConnected();
-    setGameState('LOBBY');
-  };
+export default function App() {
+  return (
+    <GameProvider>
+      <NavigationHelper>
+        <AppRoutes />
+      </NavigationHelper>
+    </GameProvider>
+  );
+}
 
-  const handleQuickMatch = (mode, level, shipClass) => {
-    ensureMpConnected();
-    mpEngine.quickMatch(mode, level, shipClass);
-    setGameState('ROOM');
-  };
-
-  const handleCreateRoom = (mode, level, shipClass) => {
-    ensureMpConnected();
-    mpEngine.createRoom(mode, level, shipClass);
-    setGameState('ROOM');
-  };
-
-  const handleJoinRoom = (roomId) => {
-    ensureMpConnected();
-    mpEngine.joinRoom(roomId);
-    setGameState('ROOM');
-  };
-
-  const handleReady = () => {
-    mpEngine.ready();
-  };
-
-  const handleSelectClass = (shipClass) => {
-    mpEngine.ws.send({ type: 'set_ship_class', shipClass });
-  };
-
-  const handleLeaveRoom = () => {
-    mpEngine.leaveRoom();
-    setRoomInfo(null);
-    setMpCountdown(null);
-    setGameState('LOBBY');
-  };
-
-  const handleBackToMenu = () => {
-    mpEngine.disconnect();
-    if (mpInitializedRef.current) {
-      mpEngine.destroy();
-      mpInitializedRef.current = false;
-    }
-    setRoomInfo(null);
-    setMpCountdown(null);
-    setGameState('MENU');
-  };
+function AppRoutes() {
+  const { authState } = useGame();
 
   if (authState === 'CHECKING') {
     return (
@@ -350,99 +276,22 @@ export default function App() {
     );
   }
 
-  if (authState === 'LOGIN') {
-    return <LoginScreen onLogin={handleLogin} onSwitchToRegister={() => setAuthState('REGISTER')} />;
-  }
-
-  if (authState === 'REGISTER') {
-    return <RegisterScreen onRegister={handleLogin} onSwitchToLogin={() => setAuthState('LOGIN')} />;
-  }
-
   return (
-    <>
-      {gameState === 'MENU' && (
-        <MenuScreen
-          user={user}
-          onSinglePlayer={() => setGameState('SINGLE_SETUP')}
-          onMultiplayer={() => setGameState('MULTI_SETUP')}
-          onShowLeaderboard={() => setShowLeaderboard(v => !v)}
-          onShowAdmin={() => setGameState('ADMIN')}
-          onLogout={handleLogout}
-        />
-      )}
-
-      {gameState === 'SINGLE_SETUP' && (
-        <SingleSetupScreen
-          user={user}
-          onStart={handleStart}
-          onBack={() => setGameState('MENU')}
-        />
-      )}
-
-      {gameState === 'MULTI_SETUP' && (
-        <MultiSetupScreen
-          user={user}
-          onQuickMatch={handleQuickMatch}
-          onCreateRoom={handleCreateRoom}
-          onJoinRoom={handleJoinRoom}
-          onBack={() => setGameState('MENU')}
-        />
-      )}
-
-      {gameState === 'ADMIN' && user?.role === 'admin' && (
-        <AdminDashboard onClose={() => setGameState('MENU')} />
-      )}
-
-      {gameState === 'LOBBY' && (
-        <LobbyScreen
-          user={user}
-          onQuickMatch={handleQuickMatch}
-          onCreateRoom={handleCreateRoom}
-          onJoinRoom={handleJoinRoom}
-          onBack={handleBackToMenu}
-        />
-      )}
-
-      {gameState === 'ROOM' && (
-        <RoomScreen
-          roomInfo={roomInfo ? { ...roomInfo, countdown: mpCountdown } : null}
-          userId={user.id}
-          onReady={handleReady}
-          onLeave={handleLeaveRoom}
-          onSelectClass={handleSelectClass}
-        />
-      )}
-      <LeaderboardPanel visible={gameState === 'MENU' && showLeaderboard} onClose={() => setShowLeaderboard(false)} />
-
-      {/* Single-player canvas */}
-      {gameState === 'PLAYING' && <GameCanvas engine={engine} onInit={() => setSpInitialized(true)} />}
-
-      {/* Multiplayer canvas */}
-      {(gameState === 'LOBBY' || gameState === 'ROOM' || gameState === 'MULTIPLAYER') && (
-        <canvas ref={mpCanvasRef} id="game-canvas" />
-      )}
-
-      {gameState === 'PLAYING' && hudData && <HUD data={hudData} />}
-      {gameState === 'MULTIPLAYER' && mpHudData && <MultiplayerHUD data={mpHudData} />}
-      {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
-      {gameState === 'PLAYING' && minimapData && !scoped && <Minimap data={minimapData} />}
-      {gameState === 'MULTIPLAYER' && mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
-      {gameState === 'PLAYING' && scoped && <ScopeOverlay />}
-      {gameState === 'MULTIPLAYER' && mpScoped && <ScopeOverlay />}
-
-      {showClassSelect && (
-        <ClassSelectScreen onSelect={handleClassSelect} />
-      )}
-
-      {gameState === 'GAME_OVER' && (
-        <GameOverScreen
-          score={gameResult.score}
-          enemies={gameResult.enemies}
-          level={gameResult.level}
-          onContinue={handleContinue}
-          onRestart={handleRestart}
-        />
-      )}
-    </>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route path="/" element={<AuthRoute><MenuPage /></AuthRoute>} />
+      <Route path="/single" element={<AuthRoute><SingleSetupPage /></AuthRoute>} />
+      <Route path="/multi" element={<AuthRoute><MultiSetupPage /></AuthRoute>} />
+      <Route element={<AuthRoute><MultiCanvasLayout /></AuthRoute>}>
+        <Route path="/multi/room" element={<RoomPage />} />
+        <Route path="/multi/play" element={<div />} />
+      </Route>
+      <Route path="/admin" element={<AuthRoute><AdminRoute><AdminPage /></AdminRoute></AuthRoute>} />
+      <Route path="/play" element={<AuthRoute><SinglePlayPage /></AuthRoute>} />
+      <Route path="/gameover" element={<AuthRoute><GameOverPage /></AuthRoute>} />
+      <Route path="/class-select" element={<AuthRoute><ClassSelectPage /></AuthRoute>} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

@@ -6,32 +6,22 @@ const MODES = [
   { id: 'pve',  name: '联机 PvE',  icon: '🤖', desc: '2-6人合作对抗AI波次' },
 ];
 
-const CLASSES = [
-  { id: 'destroyer', name: '驱逐舰', icon: '⚡' },
-  { id: 'cruiser', name: '巡洋舰', icon: '🛡️' },
-  { id: 'battleship', name: '战列舰', icon: '🏰' },
-];
-
 export default function LobbyScreen({ user, onQuickMatch, onCreateRoom, onJoinRoom, onBack }) {
   const [selectedMode, setSelectedMode] = useState('ffa');
   const [initialLevel, setInitialLevel] = useState(1);
-  const [shipClass, setShipClass] = useState(null);
   const [joinRoomId, setJoinRoomId] = useState('');
   const [showJoinInput, setShowJoinInput] = useState(false);
 
-  const needsClass = initialLevel >= 4;
-  const ready = !needsClass || shipClass;
-
   const handleQuickMatch = () => {
-    if (ready) onQuickMatch(selectedMode, initialLevel, shipClass);
+    onQuickMatch(selectedMode, initialLevel);
   };
 
   const handleCreateRoom = () => {
-    if (ready) onCreateRoom(selectedMode, initialLevel, shipClass);
+    onCreateRoom(selectedMode, initialLevel);
   };
 
   const handleJoinRoom = () => {
-    if (joinRoomId.trim()) onJoinRoom(joinRoomId.trim(), initialLevel, shipClass);
+    if (joinRoomId.trim()) onJoinRoom(joinRoomId.trim());
   };
 
   return (
@@ -64,7 +54,7 @@ export default function LobbyScreen({ user, onQuickMatch, onCreateRoom, onJoinRo
               <button
                 key={lv}
                 className={`level-btn ${initialLevel === lv ? 'active' : ''}`}
-                onClick={() => { setInitialLevel(lv); if (lv < 4) setShipClass(null); }}
+                onClick={() => setInitialLevel(lv)}
               >
                 {lv}
               </button>
@@ -72,28 +62,10 @@ export default function LobbyScreen({ user, onQuickMatch, onCreateRoom, onJoinRo
           </div>
         </div>
 
-        {needsClass && (
-          <div className="class-select-section">
-            <p className="level-select-label">技术路线</p>
-            <div className="class-cards-inline">
-              {CLASSES.map(cls => (
-                <div
-                  key={cls.id}
-                  className={`class-card-mini ${shipClass === cls.id ? 'selected' : ''}`}
-                  onClick={() => setShipClass(cls.id)}
-                >
-                  <div style={{ fontSize: '24px' }}>{cls.icon}</div>
-                  <div className="class-name-mini">{cls.name}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <button className="menu-btn" onClick={handleQuickMatch} disabled={!ready}>
+        <button className="menu-btn" onClick={handleQuickMatch}>
           快速匹配
         </button>
-        <button className="menu-btn secondary" onClick={handleCreateRoom} disabled={!ready}>
+        <button className="menu-btn secondary" onClick={handleCreateRoom}>
           创建房间
         </button>
 

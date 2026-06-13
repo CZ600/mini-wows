@@ -1,12 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getRooms } from '../api.js';
 
-const SHIP_CLASSES = [
-  { id: 'destroyer', name: '驱逐舰', icon: '⚡' },
-  { id: 'cruiser', name: '巡洋舰', icon: '🛡️' },
-  { id: 'battleship', name: '战列舰', icon: '🏰' },
-];
-
 const MODES = [
   { id: 'ffa', name: '自由对战', desc: '所有人互相对抗' },
   { id: 'team', name: '团队对战', desc: '分成两队对抗' },
@@ -21,7 +15,6 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
   // Create/Quick Match state
   const [selectedMode, setSelectedMode] = useState('ffa');
   const [selectedLevel, setSelectedLevel] = useState(1);
-  const [selectedClass, setSelectedClass] = useState('destroyer');
 
   useEffect(() => {
     if (view === 'rooms') {
@@ -41,11 +34,11 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
   };
 
   const handleCreate = () => {
-    onCreateRoom(selectedMode, selectedLevel, selectedClass);
+    onCreateRoom(selectedMode, selectedLevel);
   };
 
   const handleQuickMatch = () => {
-    onQuickMatch(selectedMode, selectedLevel, selectedClass);
+    onQuickMatch(selectedMode, selectedLevel);
   };
 
   const renderMainView = () => (
@@ -164,20 +157,8 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
         </div>
       </div>
 
-      <div style={{ marginBottom: '24px' }}>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: '8px' }}>选择职业</p>
-        <div className="ship-class-cards">
-          {SHIP_CLASSES.map(cls => (
-            <div
-              key={cls.id}
-              className={`ship-class-card ${selectedClass === cls.id ? 'active' : ''}`}
-              onClick={() => setSelectedClass(cls.id)}
-            >
-              <div className="class-icon">{cls.icon}</div>
-              <div className="class-name">{cls.name}</div>
-            </div>
-          ))}
-        </div>
+      <div style={{ marginBottom: '24px', color: 'var(--text-secondary)', fontSize: '14px' }}>
+        职业选择将在准备阶段进行
       </div>
 
       <button

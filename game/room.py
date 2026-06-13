@@ -218,6 +218,15 @@ class Room:
                     await self._end_game()
                     return
 
+                # Send elimination notice to newly dead players
+                for evt in self.game_state.events:
+                    if evt.get("type") == "entity_destroyed":
+                        target = evt.get("target")
+                        if target in self.players:
+                            await self.send_to(target, {
+                                "type": "player_eliminated",
+                            })
+
                 # Clean up disconnected players past grace period
                 now = time.monotonic()
                 for pid, conn in list(self.players.items()):

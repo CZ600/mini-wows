@@ -82,24 +82,28 @@ class TorpedoManager:
             if t.alive:
                 t.update(dt)
 
-        # Collision detection with numpy
+        # Collision detection with numpy — rotation-correct
         alive_ships = [(pid, s) for pid, s in ships.items() if s.alive]
         if alive_ships and self.torpedoes:
             ship_ids = [pid for pid, _ in alive_ships]
             ship_pos = np.array([[s.pos_x, s.pos_z] for _, s in alive_ships])
-            ship_radius = np.array([
-                max(s.ship_length, s.ship_width) / 2
-                for _, s in alive_ships
-            ])
+            ship_headings = np.array([s.heading for _, s in alive_ships])
+            ship_half_w = np.array([s.ship_width / 2 + TORPEDO_HIT_RADIUS for _, s in alive_ships])
+            ship_half_l = np.array([s.ship_length / 2 + TORPEDO_HIT_RADIUS for _, s in alive_ships])
+
+            cos_h = np.cos(ship_headings)
+            sin_h = np.sin(ship_headings)
 
             for t in self.torpedoes:
                 if not t.alive:
                     continue
-                torp_pos = np.array([t.x, t.z])
-                diffs = ship_pos - torp_pos
-                dists = np.sqrt(np.sum(diffs ** 2, axis=1))
-                hit_radius = ship_radius + TORPEDO_HIT_RADIUS
-                hit_indices = np.where(dists < hit_radius)[0]
+                rel_x = t.x - ship_pos[:, 0]
+                rel_z = t.z - ship_pos[:, 1]
+                local_x = rel_x * cos_h + rel_z * sin_h
+                local_z = -rel_x * sin_h + rel_z * cos_h
+
+                hit_mask = (np.abs(local_x) < ship_half_w) & (np.abs(local_z) < ship_half_l)
+                hit_indices = np.where(hit_mask)[0]
 
                 for idx in hit_indices:
                     pid = ship_ids[idx]
