@@ -19,7 +19,7 @@ SNAPSHOT_HISTORY_SIZE = TICK_RATE * SNAPSHOT_HISTORY_SECONDS
 
 # Ship physics
 BASE_MAX_SPEED = 16.67
-ACCEL = BASE_MAX_SPEED / 20.0
+ACCEL = BASE_MAX_SPEED / 15.0
 DECEL_FRICTION = 0.98
 
 # Projectiles
@@ -121,14 +121,14 @@ ENEMY_SCALE = {
 }
 
 ENEMY_SHIP_SCALE = {
-    1:  {"hp": 120,  "damage": 12, "speed": 8,   "score": 5},
-    2:  {"hp": 160,  "damage": 15, "speed": 9,   "score": 7},
-    3:  {"hp": 210,  "damage": 19, "speed": 10,  "score": 10},
-    4:  {"hp": 270,  "damage": 24, "speed": 10,  "score": 13},
-    5:  {"hp": 340,  "damage": 30, "speed": 11,  "score": 17},
-    6:  {"hp": 420,  "damage": 38, "speed": 11,  "score": 21},
-    7:  {"hp": 520,  "damage": 48, "speed": 12,  "score": 26},
-    8:  {"hp": 640,  "damage": 60, "speed": 13,  "score": 32},
+    1:  {"hp": 120,  "damage": 18, "speed": 8,   "score": 5},
+    2:  {"hp": 160,  "damage": 23, "speed": 9,   "score": 7},
+    3:  {"hp": 210,  "damage": 29, "speed": 10,  "score": 10},
+    4:  {"hp": 270,  "damage": 36, "speed": 10,  "score": 13},
+    5:  {"hp": 340,  "damage": 45, "speed": 11,  "score": 17},
+    6:  {"hp": 420,  "damage": 57, "speed": 11,  "score": 21},
+    7:  {"hp": 520,  "damage": 72, "speed": 12,  "score": 26},
+    8:  {"hp": 640,  "damage": 90, "speed": 13,  "score": 32},
 }
 
 LEVEL_THRESHOLDS = [0, 10, 50, 85, 150, 250, 380, 560, 780, 1050]

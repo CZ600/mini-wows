@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+game.db
+.env
+*.egg-info/
+dist/
+build/
+.vite/

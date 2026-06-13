@@ -93,7 +93,7 @@ export default function HUD({ data }) {
           </div>
         </div>
 
-        {/* Middle Column - Weapon Selection */}
+        {/* Middle Column - Weapon Selection with Cooldown */}
         <div className="hud-bottom-middle">
           {weaponMode === 'gun' ? (
             <>
@@ -101,6 +101,30 @@ export default function HUD({ data }) {
                 <div className="weapon-name">火炮</div>
                 <div className="weapon-ammo">
                   {frontTurrets.length + backTurrets.length} 门
+                </div>
+                <div className="weapon-cooldown">
+                  {frontTurrets.map((t, i) => {
+                    const ready = t.cooldown <= 0;
+                    return (
+                      <div key={`f${i}`} className="cooldown-item">
+                        <span className="cooldown-label">前{i + 1}</span>
+                        <span className={`cooldown-time ${ready ? 'ready' : ''}`}>
+                          {ready ? '就绪' : t.cooldown.toFixed(1) + 's'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {backTurrets.map((t, i) => {
+                    const ready = t.cooldown <= 0;
+                    return (
+                      <div key={`b${i}`} className="cooldown-item">
+                        <span className="cooldown-label">后{i + 1}</span>
+                        <span className={`cooldown-time ${ready ? 'ready' : ''}`}>
+                          {ready ? '就绪' : t.cooldown.toFixed(1) + 's'}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
               {torpedoTubes && torpedoTubes.length > 0 && (
@@ -123,6 +147,20 @@ export default function HUD({ data }) {
                 <div className="weapon-ammo">
                   {torpedoSpread === 'narrow' ? '窄扇' : '宽扇'}
                 </div>
+                <div className="weapon-cooldown">
+                  {(() => {
+                    const allReady = torpedoTubes.every(t => t.ready);
+                    const maxCooldown = allReady ? 0 : Math.max(...torpedoTubes.map(t => t.cooldown));
+                    return (
+                      <div className="cooldown-item">
+                        <span className="cooldown-label">装填</span>
+                        <span className={`cooldown-time ${allReady ? 'ready' : ''}`}>
+                          {allReady ? '就绪' : maxCooldown.toFixed(1) + 's'}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             </>
           )}
@@ -138,39 +176,6 @@ export default function HUD({ data }) {
           </div>
         </div>
       </div>
-
-      {/* Turret Cooldown Bars */}
-      <div id="turret-bar-container" style={{ bottom: '80px' }}>
-        <div className="turret-group">
-          {frontTurrets.map((t, i) => renderTurret('前', t, i))}
-        </div>
-        <div className="turret-group">
-          {backTurrets.map((t, i) => renderTurret('后', t, i))}
-        </div>
-      </div>
-
-      {/* Torpedo Tubes */}
-      {weaponMode === 'torpedo' && torpedoTubes && torpedoTubes.length > 0 && (
-        <div id="torpedo-bar-container">
-          <div className="torpedo-group-label">鱼雷管</div>
-          {torpedoTubes.map((tube, i) => {
-            const elapsed = tube.ready ? torpedoMaxCooldown : Math.max(0, torpedoMaxCooldown - tube.cooldown);
-            const progress = Math.min(1, elapsed / torpedoMaxCooldown);
-            return (
-              <div key={i} className="turret-indicator">
-                <span className="turret-label">{tube.side === 'port' ? '左' : '右'}{i + 1}</span>
-                <div className="turret-bar-outer">
-                  <div className="turret-bar-inner" style={{
-                    width: '100%',
-                    background: tube.ready ? '#4dff88' : `linear-gradient(to right, #4dff88 ${(progress * 100).toFixed(1)}%, #ff9800 ${(progress * 100).toFixed(1)}%)`,
-                  }} />
-                </div>
-                <span className="turret-time">{tube.ready ? '就绪' : Math.max(0, tube.cooldown).toFixed(1) + 's'}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </>
   );
 }

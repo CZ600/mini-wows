@@ -44,7 +44,7 @@ export default function SingleSetupScreen({ user, onStart, onBack }) {
         <div className="setup-title">单人模式</div>
       </div>
       <div className="setup-body">
-        <h3 style={{ color: 'var(--accent)', marginBottom: '16px' }}>选择初始等级</h3>
+        <h3 className="section-title">选择初始等级</h3>
         <div className="level-grid">
           {Array.from({ length: 10 }, (_, i) => i + 1).map(lv => (
             <div
@@ -63,7 +63,7 @@ export default function SingleSetupScreen({ user, onStart, onBack }) {
 
         {needsClass && (
           <>
-            <h3 style={{ color: 'var(--accent)', marginBottom: '16px' }}>选择技术路线</h3>
+            <h3 className="section-title">选择技术路线</h3>
             <div className="ship-class-cards">
               {SHIP_CLASSES.map(cls => (
                 <div

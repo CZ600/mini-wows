@@ -1,4 +1,5 @@
 import math
+import random
 from collections import deque
 from game.config import (
     DT, SNAPSHOT_HISTORY_SIZE, GRAVITY, PROJECTILE_INITIAL_SPEED,
@@ -26,12 +27,79 @@ class GameState:
         self.enemy_mgr = EnemyManager()
         self.wave = 0
         self.level = 1
+        self._spawn_index = 0
 
     def add_ship(self, player_id, username, level=1, ship_class=None, team=None):
         ship = ServerShip(player_id, username, level, ship_class, team)
-        ship.find_safe_spawn(self.terrain)
+        self._assign_spawn(ship, team)
         self.ships[player_id] = ship
+        self._spawn_index += 1
         return ship
+
+    def _assign_spawn(self, ship, team):
+        """Assign spawn position based on game mode."""
+        mode = self.mode
+        idx = self._spawn_index
+
+        if mode == "team":
+            self._spawn_team(ship, team, idx)
+        elif mode in ("pve", "solo"):
+            self._spawn_pve(ship, idx)
+        else:
+            self._spawn_ffa(ship, idx)
+
+    def _spawn_ffa(self, ship, idx):
+        """FFA: players spread 400-1000m apart around a circle."""
+        # Radius 550, 8 sectors → min angular sep 45° → min distance ≈ 421m
+        sector_count = 8
+        sector_angle = 2 * math.pi / sector_count
+        angle = idx * sector_angle
+        dist = 550
+        x = math.cos(angle) * dist
+        z = math.sin(angle) * dist
+        x, z = self._find_water(x, z)
+        ship.pos_x = x
+        ship.pos_z = z
+
+    def _spawn_team(self, ship, team, idx):
+        """Team: two groups ~500m apart, teammates within 300m."""
+        if team == "red":
+            base_x, base_z = -250.0, 0.0
+        else:
+            base_x, base_z = 250.0, 0.0
+
+        # Offset teammates slightly
+        teammates_so_far = sum(
+            1 for s in self.ships.values() if s.team == team
+        )
+        angle = teammates_so_far * math.pi * 2 / 3
+        offset_dist = min(teammates_so_far * 100, 250)
+        x = base_x + math.cos(angle) * offset_dist
+        z = base_z + math.sin(angle) * offset_dist
+        x, z = self._find_water(x, z)
+        ship.pos_x = x
+        ship.pos_z = z
+
+    def _spawn_pve(self, ship, idx):
+        """PvE: humans in a line, 300m spacing."""
+        x = (idx - 1.5) * 300
+        z = 0.0
+        x, z = self._find_water(x, z)
+        ship.pos_x = x
+        ship.pos_z = z
+
+    def _find_water(self, start_x, start_z):
+        """Find nearest water position from start point."""
+        if self.terrain and not self.terrain.is_land(start_x, start_z):
+            return start_x, start_z
+        for r in range(50, 2001, 50):
+            for a_idx in range(12):
+                angle = a_idx * math.pi / 6
+                x = start_x + math.cos(angle) * r
+                z = start_z + math.sin(angle) * r
+                if self.terrain and not self.terrain.is_land(x, z):
+                    return x, z
+        return start_x, start_z
 
     def remove_ship(self, player_id):
         self.ships.pop(player_id, None)

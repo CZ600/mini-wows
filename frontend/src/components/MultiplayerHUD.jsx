@@ -5,6 +5,20 @@ export default function MultiplayerHUD({ data, events }) {
   const hpColor = hpPercent > 60 ? '#4dff88' : hpPercent > 30 ? '#ff9800' : '#ff4d4d';
   const speed = data.speed || 0;
   const ping = data.ping || 0;
+  const level = data.level || 1;
+  const shipClass = data.shipClass;
+
+  const turrets = data.turrets || [];
+  const frontTurrets = turrets.filter(t => t.isFront);
+  const backTurrets = turrets.filter(t => !t.isFront);
+
+  const weaponMode = data.weaponMode || 'gun';
+  const torpedoTier = data.torpedoTier || 1;
+  const torpedoSpread = data.torpedoSpread || 'narrow';
+  const torpedoTubes = data.torpedoTubes || [];
+
+  const tierLabels = { 1: '短/快', 2: '中程', 3: '远/慢' };
+  const classNames = { destroyer: '驱逐舰', cruiser: '巡洋舰', battleship: '战列舰' };
 
   return (
     <>
@@ -16,8 +30,14 @@ export default function MultiplayerHUD({ data, events }) {
         <span className="compass-dir">W</span>
       </div>
 
-      {/* HP Bar - Top Center */}
+      {/* Crosshair */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
+        <div id="crosshair">
+          <div className="cross-h" />
+          <div className="cross-v" />
+        </div>
+
+        {/* Top Left - HP */}
         <div id="hud-left">
           <div className="hud-row">
             <span className="hud-label">血量</span>
@@ -28,7 +48,10 @@ export default function MultiplayerHUD({ data, events }) {
           </div>
         </div>
 
+        {/* Top Right - Level & Ping */}
         <div id="hud-right">
+          <div className="hud-row"><span className="hud-label">等级</span><span>{level}</span></div>
+          {shipClass && <div className="hud-row"><span className="hud-label">职业</span><span>{classNames[shipClass] || shipClass}</span></div>}
           <div className="hud-row">
             <span className="hud-label">延迟</span>
             <span style={{ color: ping < 50 ? '#4dff88' : ping < 100 ? '#ff9800' : '#ff4d4d' }}>
@@ -62,7 +85,60 @@ export default function MultiplayerHUD({ data, events }) {
             <span>{speed.toFixed(1)} km/h</span>
           </div>
         </div>
-        <div className="hud-bottom-middle" />
+
+        {/* Middle - Weapon info */}
+        <div className="hud-bottom-middle">
+          {weaponMode === 'gun' ? (
+            <div className="weapon-box selected">
+              <div className="weapon-name">火炮</div>
+              <div className="weapon-ammo">{frontTurrets.length + backTurrets.length} 门</div>
+              <div className="weapon-cooldown">
+                {frontTurrets.map((t, i) => {
+                  const ready = t.cooldown <= 0;
+                  return (
+                    <div key={`f${i}`} className="cooldown-item">
+                      <span className="cooldown-label">前{i + 1}</span>
+                      <span className={`cooldown-time ${ready ? 'ready' : ''}`}>
+                        {ready ? '就绪' : t.cooldown.toFixed(1) + 's'}
+                      </span>
+                    </div>
+                  );
+                })}
+                {backTurrets.map((t, i) => {
+                  const ready = t.cooldown <= 0;
+                  return (
+                    <div key={`b${i}`} className="cooldown-item">
+                      <span className="cooldown-label">后{i + 1}</span>
+                      <span className={`cooldown-time ${ready ? 'ready' : ''}`}>
+                        {ready ? '就绪' : t.cooldown.toFixed(1) + 's'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="weapon-box selected">
+              <div className="weapon-name">鱼雷 {tierLabels[torpedoTier] || ''}</div>
+              <div className="weapon-ammo">{torpedoSpread === 'narrow' ? '窄扇' : '宽扇'}</div>
+              <div className="weapon-cooldown">
+                {(() => {
+                  const allReady = torpedoTubes.every(t => t.ready);
+                  const maxCooldown = allReady ? 0 : Math.max(...torpedoTubes.map(t => t.cooldown));
+                  return (
+                    <div className="cooldown-item">
+                      <span className="cooldown-label">装填</span>
+                      <span className={`cooldown-time ${allReady ? 'ready' : ''}`}>
+                        {allReady ? '就绪' : maxCooldown.toFixed(1) + 's'}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="hud-bottom-right" />
       </div>
     </>

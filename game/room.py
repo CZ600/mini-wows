@@ -32,6 +32,7 @@ class PlayerConn:
         self.input_seq = 0
         self.last_ping_ts = 0
         self.ping = 0
+        self.last_client_ts = 0
 
     def to_info(self):
         return {
@@ -40,14 +41,28 @@ class PlayerConn:
             "ready": self.ready,
             "team": self.team,
             "connected": self.connected,
+            "level": self.level,
+            "shipClass": self.ship_class,
+        }
+
+    def to_lobby_info(self):
+        """Info sent during lobby/room phase (includes room-level context)."""
+        return {
+            "id": self.player_id,
+            "name": self.username,
+            "ready": self.ready,
+            "team": self.team,
+            "connected": self.connected,
+            "shipClass": self.ship_class,
         }
 
 
 class Room:
-    def __init__(self, room_id, mode="ffa", host_id=None):
+    def __init__(self, room_id, mode="ffa", host_id=None, room_level=1):
         self.room_id = room_id
         self.mode = mode
         self.host_id = host_id
+        self.room_level = room_level
         self.state = RoomState.WAITING
         self.players = {}
         self.terrain_seed = int(time.time() * 1000) % (2**31)
@@ -61,7 +76,8 @@ class Room:
 
     def add_player(self, player_id, username, ws, level=1, ship_class=None):
         conn = PlayerConn(player_id, username, ws)
-        conn.level = level
+        # All players use the room's level (set by host)
+        conn.level = self.room_level
         conn.ship_class = ship_class
         self.players[player_id] = conn
         if self.host_id is None:
@@ -87,6 +103,19 @@ class Room:
 
     def get_player_list(self):
         return [p.to_info() for p in self.players.values()]
+
+    def get_lobby_player_list(self):
+        return [p.to_lobby_info() for p in self.players.values()]
+
+    def get_room_info(self):
+        return {
+            "roomId": self.room_id,
+            "mode": self.mode,
+            "roomLevel": self.room_level,
+            "players": self.get_lobby_player_list(),
+            "terrainSeed": self.terrain_seed,
+            "islands": self.islands,
+        }
 
     def _connected_count(self):
         return sum(1 for p in self.players.values() if p.connected)
@@ -177,7 +206,7 @@ class Room:
                         continue
                     snap = self.game_state.get_snapshot(pid)
                     snap["lpi"] = conn.input_seq
-                    snap["ping"] = conn.ping
+                    snap["cts"] = conn.last_client_ts
                     try:
                         await conn.ws.send_bytes(encode(snap))
                     except Exception:
@@ -265,7 +294,8 @@ class Room:
     async def _broadcast_room_update(self):
         await self._broadcast({
             "type": "room_update",
-            "players": self.get_player_list(),
+            "roomLevel": self.room_level,
+            "players": self.get_lobby_player_list(),
         })
 
     async def _broadcast(self, msg):

@@ -95,6 +95,8 @@ export default function App() {
   const [roomInfo, setRoomInfo] = useState(null);
   const [mpHudData, setMpHudData] = useState(null);
   const [mpCountdown, setMpCountdown] = useState(null);
+  const [mpMinimapData, setMpMinimapData] = useState(null);
+  const [mpScoped, setMpScoped] = useState(false);
 
   const engineRef = useRef(null);
   const mpEngineRef = useRef(null);
@@ -103,7 +105,7 @@ export default function App() {
   const levelUpTimerRef = useRef(null);
   const mpCanvasRef = useRef(null);
   const mpInitializedRef = useRef(false);
-  const spInitializedRef = useRef(false);
+  const [spInitialized, setSpInitialized] = useState(false);
   const pendingStartRef = useRef(null);
 
   if (!engineRef.current) {
@@ -166,12 +168,12 @@ export default function App() {
 
   // Start single-player engine after GameCanvas mounts and init() completes
   useEffect(() => {
-    if (gameState === 'PLAYING' && spInitializedRef.current && pendingStartRef.current) {
+    if (gameState === 'PLAYING' && spInitialized && pendingStartRef.current) {
       const { level, shipClass } = pendingStartRef.current;
       pendingStartRef.current = null;
       engine.start(level, shipClass);
     }
-  }, [gameState, engine]);
+  }, [gameState, engine, spInitialized]);
 
   const handleLogin = (userData) => {
     setUser(userData);
@@ -202,7 +204,7 @@ export default function App() {
       setPlayerClass(playerIdRef.current, initialClass).catch(() => {});
     }
     pendingStartRef.current = { level: initialLevel, shipClass: initialClass };
-    spInitializedRef.current = false;
+    setSpInitialized(false);
     setGameState('PLAYING');
     setShowLeaderboard(false);
   };
@@ -218,7 +220,7 @@ export default function App() {
       } catch { /* offline */ }
     }
     pendingStartRef.current = { level: startLevel, shipClass };
-    spInitializedRef.current = false;
+    setSpInitialized(false);
     setGameState('PLAYING');
     if (playerIdRef.current) {
       try {
@@ -234,7 +236,7 @@ export default function App() {
       resetPlayerProgress(playerIdRef.current).catch(() => {});
     }
     pendingStartRef.current = { level: 1, shipClass: null };
-    spInitializedRef.current = false;
+    setSpInitialized(false);
     setGameState('PLAYING');
     if (playerIdRef.current) {
       try {
@@ -256,6 +258,8 @@ export default function App() {
 
   // Multiplayer handlers
   mpEngine.onHudUpdate = setMpHudData;
+  mpEngine.onMinimapUpdate = setMpMinimapData;
+  mpEngine.onScopeChange = setMpScoped;
   mpEngine.onRoomUpdate = (info) => {
     setRoomInfo(info);
   };
@@ -274,30 +278,47 @@ export default function App() {
     alert(msg);
   };
 
+  const ensureMpConnected = () => {
+    if (!mpEngine.ws.connected) {
+      // Wire up message handlers before connecting so responses are not lost
+      mpEngine.ws.onMessage = (msg) => mpEngine._handleMessage(msg);
+      mpEngine.ws.onDisconnect = () => {
+        if (mpEngine.onDisconnect) mpEngine.onDisconnect();
+      };
+      const token = localStorage.getItem('token');
+      mpEngine.connect(token, user.id);
+    }
+  };
+
   const handleMultiplayer = () => {
-    const token = localStorage.getItem('token');
-    // Init will happen in useEffect when canvas mounts
-    mpEngine.connect(token, user.id);
+    ensureMpConnected();
     setGameState('LOBBY');
   };
 
   const handleQuickMatch = (mode, level, shipClass) => {
+    ensureMpConnected();
     mpEngine.quickMatch(mode, level, shipClass);
     setGameState('ROOM');
   };
 
   const handleCreateRoom = (mode, level, shipClass) => {
+    ensureMpConnected();
     mpEngine.createRoom(mode, level, shipClass);
     setGameState('ROOM');
   };
 
-  const handleJoinRoom = (roomId, level, shipClass) => {
-    mpEngine.joinRoom(roomId, level, shipClass);
+  const handleJoinRoom = (roomId) => {
+    ensureMpConnected();
+    mpEngine.joinRoom(roomId);
     setGameState('ROOM');
   };
 
   const handleReady = () => {
     mpEngine.ready();
+  };
+
+  const handleSelectClass = (shipClass) => {
+    mpEngine.ws.send({ type: 'set_ship_class', shipClass });
   };
 
   const handleLeaveRoom = () => {
@@ -388,12 +409,13 @@ export default function App() {
           userId={user.id}
           onReady={handleReady}
           onLeave={handleLeaveRoom}
+          onSelectClass={handleSelectClass}
         />
       )}
       <LeaderboardPanel visible={gameState === 'MENU' && showLeaderboard} onClose={() => setShowLeaderboard(false)} />
 
       {/* Single-player canvas */}
-      {gameState === 'PLAYING' && <GameCanvas engine={engine} onInit={() => { spInitializedRef.current = true; }} />}
+      {gameState === 'PLAYING' && <GameCanvas engine={engine} onInit={() => setSpInitialized(true)} />}
 
       {/* Multiplayer canvas */}
       {(gameState === 'LOBBY' || gameState === 'ROOM' || gameState === 'MULTIPLAYER') && (
@@ -404,7 +426,9 @@ export default function App() {
       {gameState === 'MULTIPLAYER' && mpHudData && <MultiplayerHUD data={mpHudData} />}
       {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
       {gameState === 'PLAYING' && minimapData && !scoped && <Minimap data={minimapData} />}
+      {gameState === 'MULTIPLAYER' && mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
       {gameState === 'PLAYING' && scoped && <ScopeOverlay />}
+      {gameState === 'MULTIPLAYER' && mpScoped && <ScopeOverlay />}
 
       {showClassSelect && (
         <ClassSelectScreen onSelect={handleClassSelect} />

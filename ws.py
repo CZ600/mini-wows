@@ -42,14 +42,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     await ws.send_bytes(encode({"type": "error", "msg": err}))
                 else:
                     current_room_id = room.room_id
-                    await ws.send_bytes(encode({
-                        "type": "room_created",
-                        "roomId": room.room_id,
-                        "mode": room.mode,
-                        "players": room.get_player_list(),
-                        "terrainSeed": room.terrain_seed,
-                        "islands": room.islands,
-                    }))
+                    info = room.get_room_info()
+                    info["type"] = "room_created"
+                    await ws.send_bytes(encode(info))
 
             elif msg_type == "join_room":
                 room_id = msg.get("roomId", "")
@@ -62,14 +57,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     await ws.send_bytes(encode({"type": "error", "msg": err}))
                 else:
                     current_room_id = room.room_id
-                    await ws.send_bytes(encode({
-                        "type": "room_joined",
-                        "roomId": room.room_id,
-                        "mode": room.mode,
-                        "players": room.get_player_list(),
-                        "terrainSeed": room.terrain_seed,
-                        "islands": room.islands,
-                    }))
+                    info = room.get_room_info()
+                    info["type"] = "room_joined"
+                    await ws.send_bytes(encode(info))
                     # Notify others
                     await room._broadcast_room_update()
 
@@ -82,14 +72,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 )
                 if room:
                     current_room_id = room.room_id
-                    await ws.send_bytes(encode({
-                        "type": "room_joined",
-                        "roomId": room.room_id,
-                        "mode": room.mode,
-                        "players": room.get_player_list(),
-                        "terrainSeed": room.terrain_seed,
-                        "islands": room.islands,
-                    }))
+                    info = room.get_room_info()
+                    info["type"] = "room_joined"
+                    await ws.send_bytes(encode(info))
                     await room._broadcast_room_update()
                 else:
                     # Create a new room
@@ -98,18 +83,27 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     )
                     if room:
                         current_room_id = room.room_id
-                        await ws.send_bytes(encode({
-                            "type": "room_created",
-                            "roomId": room.room_id,
-                            "mode": room.mode,
-                            "players": room.get_player_list(),
-                            "terrainSeed": room.terrain_seed,
-                            "islands": room.islands,
-                        }))
+                        info = room.get_room_info()
+                        info["type"] = "room_created"
+                        await ws.send_bytes(encode(info))
+
+            elif msg_type == "set_ship_class":
+                room = room_manager.get_room(current_room_id) if current_room_id else None
+                if room:
+                    conn = room.players.get(player_id)
+                    if conn:
+                        conn.ship_class = msg.get("shipClass")
+                        await room._broadcast_room_update()
 
             elif msg_type == "ready":
                 room = room_manager.get_room(current_room_id) if current_room_id else None
                 if room:
+                    # For level 4+ rooms, require ship class selection
+                    if room.room_level >= 4:
+                        conn = room.players.get(player_id)
+                        if conn and not conn.ship_class:
+                            await ws.send_bytes(encode({"type": "error", "msg": "请选择舰船类型"}))
+                            continue
                     room.set_ready(player_id, True)
                     await room._broadcast_room_update()
                     # Try countdown
@@ -126,13 +120,10 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             elif msg_type in ("input", "fire", "fire_torpedo"):
                 room = room_manager.get_room(current_room_id) if current_room_id else None
                 if room:
-                    # Calculate ping from timestamp
-                    ts = msg.get("ts", 0)
-                    if ts:
-                        import time
-                        conn = room.players.get(player_id)
-                        if conn:
-                            conn.ping = int((time.time() * 1000 - ts) / 2)
+                    # Echo client timestamp back for client-side RTT calculation
+                    conn = room.players.get(player_id)
+                    if conn:
+                        conn.last_client_ts = msg.get("ts", 0)
                     room.queue_input(player_id, msg)
 
             elif msg_type == "chat":

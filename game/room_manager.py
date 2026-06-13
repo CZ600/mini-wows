@@ -50,7 +50,7 @@ class RoomManager:
         room_id = f"r{self._next_id}"
         self._next_id += 1
 
-        room = Room(room_id, mode, host_id=player_id)
+        room = Room(room_id, mode, host_id=player_id, room_level=level)
         self.rooms[room_id] = room
 
         if player_id and ws:
@@ -113,6 +113,7 @@ class RoomManager:
                 result.append({
                     "roomId": room.room_id,
                     "mode": room.mode,
+                    "roomLevel": room.room_level,
                     "playerCount": room._connected_count(),
                     "maxPlayers": max_players,
                     "status": room.state.value,
@@ -127,8 +128,8 @@ class RoomManager:
             for pid, p in room.players.items():
                 players.append({
                     "id": pid,
-                    "username": p.get("username", "unknown"),
-                    "connected": p.get("ws") is not None,
+                    "username": p.username,
+                    "connected": p.connected,
                 })
             result.append({
                 "roomId": room.room_id,

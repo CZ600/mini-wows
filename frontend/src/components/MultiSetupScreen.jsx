@@ -90,6 +90,7 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
             <tr>
               <th>房间ID</th>
               <th>模式</th>
+              <th>等级</th>
               <th>人数</th>
               <th>状态</th>
               <th>操作</th>
@@ -100,6 +101,7 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
               <tr key={room.roomId}>
                 <td>{room.roomId}</td>
                 <td>{{ ffa: '自由对战', team: '团队对战', pve: '合作模式' }[room.mode] || room.mode}</td>
+                <td>Lv.{room.roomLevel || 1}</td>
                 <td>{room.playerCount}/{room.maxPlayers}</td>
                 <td>
                   <span className={`status-badge ${room.status === 'waiting' ? 'active' : 'inactive'}`}>
@@ -110,7 +112,7 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
                   {room.status === 'waiting' && (
                     <button
                       className="room-join-btn"
-                      onClick={() => onJoinRoom(room.roomId, selectedLevel, selectedClass)}
+                      onClick={() => onJoinRoom(room.roomId)}
                     >
                       加入
                     </button>
