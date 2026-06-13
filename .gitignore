@@ -8,3 +8,5 @@ game.db
 dist/
 build/
 .vite/
+.claude\CLAUDE.md
+claude\CLAUDE.md
