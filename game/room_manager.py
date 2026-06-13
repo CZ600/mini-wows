@@ -42,7 +42,7 @@ class RoomManager:
         self.rooms.clear()
 
     def create_room(self, mode="ffa", player_id=None, username=None, ws=None,
-                    level=1, ship_class=None):
+                    level=1, ship_class=None, respawn_limit=0):
         if mode not in MODE_CONFIG:
             return None, "Invalid mode"
 
@@ -50,7 +50,7 @@ class RoomManager:
         room_id = f"r{self._next_id}"
         self._next_id += 1
 
-        room = Room(room_id, mode, host_id=player_id, room_level=level)
+        room = Room(room_id, mode, host_id=player_id, room_level=level, respawn_limit=respawn_limit)
         self.rooms[room_id] = room
 
         if player_id and ws:

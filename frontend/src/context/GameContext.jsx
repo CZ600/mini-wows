@@ -228,19 +228,19 @@ export function GameProvider({ children }) {
     nav('/multi');
   };
 
-  const handleQuickMatch = (mode, level, shipClass) => {
+  const handleQuickMatch = (mode, level, shipClass, respawnLimit) => {
     ensureMpConnected();
     pendingRoomRef.current = true;
     setRoomInfo(null);
-    mpEngine.quickMatch(mode, level, shipClass);
+    mpEngine.quickMatch(mode, level, shipClass, respawnLimit);
     nav('/multi/room');
   };
 
-  const handleCreateRoom = (mode, level, shipClass) => {
+  const handleCreateRoom = (mode, level, shipClass, respawnLimit) => {
     ensureMpConnected();
     pendingRoomRef.current = true;
     setRoomInfo(null);
-    mpEngine.createRoom(mode, level, shipClass);
+    mpEngine.createRoom(mode, level, shipClass, respawnLimit);
     nav('/multi/room');
   };
 

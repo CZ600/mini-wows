@@ -13,7 +13,7 @@ from game.enemy import EnemyManager
 
 
 class GameState:
-    def __init__(self, terrain: Terrain, mode="ffa"):
+    def __init__(self, terrain: Terrain, mode="ffa", respawn_limit=0):
         self.terrain = terrain
         self.mode = mode
         self.ships = {}
@@ -28,11 +28,16 @@ class GameState:
         self.wave = 0
         self.level = 1
         self._spawn_index = 0
+        self.respawn_limit = respawn_limit
+        self._respawn_remaining = {}  # player_id -> remaining respawns
+        self._initial_spawns = {}     # player_id -> (x, z)
 
     def add_ship(self, player_id, username, level=1, ship_class=None, team=None):
         ship = ServerShip(player_id, username, level, ship_class, team)
         self._assign_spawn(ship, team)
         self.ships[player_id] = ship
+        self._initial_spawns[player_id] = (ship.pos_x, ship.pos_z)
+        self._respawn_remaining[player_id] = self.respawn_limit
         self._spawn_index += 1
         return ship
 
@@ -103,6 +108,30 @@ class GameState:
 
     def remove_ship(self, player_id):
         self.ships.pop(player_id, None)
+
+    def _process_respawns(self):
+        """Check for dead ships and respawn those with remaining lives."""
+        for pid, ship in self.ships.items():
+            if ship.alive:
+                continue
+            remaining = self._respawn_remaining.get(pid, 0)
+            if remaining <= 0:
+                continue
+
+            spawn_x, spawn_z = self._initial_spawns.get(pid, (0, 0))
+            ship.alive = True
+            ship.hp = ship.max_hp
+            ship.pos_x = spawn_x
+            ship.pos_z = spawn_z
+            ship.speed = 0
+            for i in range(len(ship.turret_cooldowns)):
+                ship.turret_cooldowns[i] = 0
+            self._respawn_remaining[pid] = remaining - 1
+            self.events.append({
+                "type": "player_respawned",
+                "target": pid,
+                "remaining": remaining - 1,
+            })
 
     def process_input(self, player_id, msg):
         ship = self.ships.get(player_id)
@@ -244,6 +273,9 @@ class GameState:
         proj_events = self.projectile_mgr.update(dt, self.terrain, self.ships)
         self.events.extend(proj_events)
 
+        # Process respawns
+        self._process_respawns()
+
         # Update torpedoes
         torp_events = self.torpedo_mgr.update(dt, self.ships)
         self.events.extend(torp_events)
@@ -279,6 +311,7 @@ class GameState:
         others = []
         for pid, ship in self.ships.items():
             snap = ship.to_snapshot()
+            snap["rspn"] = self._respawn_remaining.get(pid, 0)
             if pid == player_id:
                 you = snap
             else:

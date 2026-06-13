@@ -9,15 +9,16 @@ const MODES = [
 export default function LobbyScreen({ user, onQuickMatch, onCreateRoom, onJoinRoom, onBack }) {
   const [selectedMode, setSelectedMode] = useState('ffa');
   const [initialLevel, setInitialLevel] = useState(1);
+  const [respawnLimit, setRespawnLimit] = useState(0);
   const [joinRoomId, setJoinRoomId] = useState('');
   const [showJoinInput, setShowJoinInput] = useState(false);
 
   const handleQuickMatch = () => {
-    onQuickMatch(selectedMode, initialLevel);
+    onQuickMatch(selectedMode, initialLevel, null, respawnLimit);
   };
 
   const handleCreateRoom = () => {
-    onCreateRoom(selectedMode, initialLevel);
+    onCreateRoom(selectedMode, initialLevel, null, respawnLimit);
   };
 
   const handleJoinRoom = () => {
@@ -37,7 +38,7 @@ export default function LobbyScreen({ user, onQuickMatch, onCreateRoom, onJoinRo
               <div
                 key={m.id}
                 className={`mode-card ${selectedMode === m.id ? 'selected' : ''}`}
-                onClick={() => setSelectedMode(m.id)}
+                onClick={() => { setSelectedMode(m.id); if (m.id !== 'ffa') setRespawnLimit(0); }}
               >
                 <div style={{ fontSize: '32px' }}>{m.icon}</div>
                 <div className="mode-name">{m.name}</div>
@@ -61,6 +62,23 @@ export default function LobbyScreen({ user, onQuickMatch, onCreateRoom, onJoinRo
             ))}
           </div>
         </div>
+
+        {selectedMode === 'ffa' && (
+          <div className="level-select-section">
+            <p className="level-select-label">重生次数（0 = 死亡即淘汰）</p>
+            <div className="level-buttons">
+              {Array.from({ length: 11 }, (_, i) => i).map(n => (
+                <button
+                  key={n}
+                  className={`level-btn ${respawnLimit === n ? 'active' : ''}`}
+                  onClick={() => setRespawnLimit(n)}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <button className="menu-btn" onClick={handleQuickMatch}>
           快速匹配

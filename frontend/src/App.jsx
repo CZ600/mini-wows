@@ -137,9 +137,12 @@ function RoomPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!roomInfo && !pendingRoomRef.current) {
+    if (roomInfo) return;
+    if (pendingRoomRef.current) return;
+    const timeout = setTimeout(() => {
       navigate('/multi', { replace: true });
-    }
+    }, 3000);
+    return () => clearTimeout(timeout);
   }, [roomInfo, navigate, pendingRoomRef]);
 
   if (!roomInfo) {
@@ -148,6 +151,9 @@ function RoomPage() {
         <div className="menu-container">
           <h1 className="game-title">3D 海战</h1>
           <p className="menu-welcome">正在加入房间...</p>
+          <button className="menu-btn secondary" onClick={() => navigate('/multi')} style={{ marginTop: '16px' }}>
+            返回大厅
+          </button>
         </div>
       </div>
     );

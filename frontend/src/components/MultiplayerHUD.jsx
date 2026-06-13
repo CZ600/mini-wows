@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+
 export default function MultiplayerHUD({ data, events }) {
   if (!data) return null;
 
@@ -7,6 +9,7 @@ export default function MultiplayerHUD({ data, events }) {
   const ping = data.ping || 0;
   const level = data.level || 1;
   const shipClass = data.shipClass;
+  const respawns = data.respawns ?? null;
 
   const turrets = data.turrets || [];
   const frontTurrets = turrets.filter(t => t.isFront);
@@ -48,13 +51,28 @@ export default function MultiplayerHUD({ data, events }) {
           </div>
         </div>
 
-        {/* Top Right - Level & Ping */}
+        {/* Top Right - Level, Respawn & Ping */}
         <div id="hud-right">
-          <div className="hud-row"><span className="hud-label">等级</span><span>{level}</span></div>
-          {shipClass && <div className="hud-row"><span className="hud-label">职业</span><span>{classNames[shipClass] || shipClass}</span></div>}
-          <div className="hud-row">
+          <div className="hud-row hud-row-boxed">
+            <span className="hud-label">等级</span><span className="hud-value">{level}</span>
+          </div>
+          {shipClass && (
+            <div className="hud-row hud-row-boxed">
+              <span className="hud-label">职业</span>
+              <span className="hud-value">{classNames[shipClass] || shipClass}</span>
+            </div>
+          )}
+          {respawns !== null && (
+            <div className="hud-row hud-row-boxed">
+              <span className="hud-label">重生</span>
+              <span className="hud-value" style={{ color: respawns > 0 ? '#4dff88' : '#ff4d4d' }}>
+                {respawns}
+              </span>
+            </div>
+          )}
+          <div className="hud-row hud-row-boxed">
             <span className="hud-label">延迟</span>
-            <span style={{ color: ping < 50 ? '#4dff88' : ping < 100 ? '#ff9800' : '#ff4d4d' }}>
+            <span className="hud-value" style={{ color: ping < 50 ? '#4dff88' : ping < 100 ? '#ff9800' : '#ff4d4d' }}>
               {ping}ms
             </span>
           </div>
@@ -80,9 +98,10 @@ export default function MultiplayerHUD({ data, events }) {
       {/* Bottom Bar */}
       <div id="hud-bottom-bar">
         <div className="hud-bottom-left">
-          <div className="hud-row">
+          <div className="speed-display">
             <span className="hud-label">速度</span>
-            <span>{speed.toFixed(1)} km/h</span>
+            <span className="speed-value">{speed.toFixed(1)}</span>
+            <span className="speed-unit">km/h</span>
           </div>
         </div>
 

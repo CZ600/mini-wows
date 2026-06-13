@@ -14,6 +14,7 @@ export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelec
   const roomId = roomInfo?.roomId || '';
   const mode = roomInfo?.mode || 'ffa';
   const roomLevel = roomInfo?.roomLevel || 1;
+  const respawnLimit = roomInfo?.respawnLimit ?? 0;
   const countdown = roomInfo?.countdown;
 
   const modeNames = { ffa: 'PvP 乱斗', team: '5v5 组队', pve: '联机 PvE', solo: '单人 PvE' };
@@ -34,6 +35,9 @@ export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelec
         <h1 className="game-title">房间</h1>
         <p style={{ color: '#aaa', marginBottom: '8px' }}>
           模式: {modeNames[mode] || mode} | 等级: <strong style={{ color: '#ffaa00' }}>Lv.{roomLevel}</strong> | 房间号: <strong style={{ color: '#fff', fontSize: '18px' }}>{roomId}</strong>
+          {mode === 'ffa' && (
+            <> | 重生: <strong style={{ color: respawnLimit > 0 ? '#4dff88' : '#ff4d4d' }}>{respawnLimit}次</strong></>
+          )}
         </p>
 
         {countdown != null && (

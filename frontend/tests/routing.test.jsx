@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { GameProvider, useGame } from '../src/context/GameContext.jsx';
 import { AuthRoute, AdminRoute } from '../src/components/AuthRoute.jsx';
@@ -127,6 +127,104 @@ describe('GameContext', () => {
       </GameProvider>
     );
     expect(screen.getByTestId('consumer')).toBeTruthy();
+  });
+});
+
+describe('Room join flow', () => {
+  it('sets pendingRoomRef.current to true when handleJoinRoom is called', async () => {
+    getMe.mockResolvedValue({ id: 1, username: 'testuser', role: 'user' });
+
+    let ctxRef = null;
+    function Consumer() {
+      ctxRef = useGame();
+      return null;
+    }
+
+    render(
+      <GameProvider>
+        <MemoryRouter>
+          <Consumer />
+        </MemoryRouter>
+      </GameProvider>
+    );
+
+    await vi.waitFor(() => {
+      expect(ctxRef.user).not.toBeNull();
+    });
+
+    expect(ctxRef.pendingRoomRef.current).toBe(false);
+
+    ctxRef.handleJoinRoom('r1');
+
+    expect(ctxRef.pendingRoomRef.current).toBe(true);
+  });
+
+  it('sets pendingRoomRef.current to true when handleCreateRoom is called', async () => {
+    getMe.mockResolvedValue({ id: 1, username: 'testuser', role: 'user' });
+
+    let ctxRef = null;
+    function Consumer() {
+      ctxRef = useGame();
+      return null;
+    }
+
+    render(
+      <GameProvider>
+        <MemoryRouter>
+          <Consumer />
+        </MemoryRouter>
+      </GameProvider>
+    );
+
+    await vi.waitFor(() => {
+      expect(ctxRef.user).not.toBeNull();
+    });
+
+    ctxRef.handleCreateRoom('ffa', 1, null, 0);
+
+    expect(ctxRef.pendingRoomRef.current).toBe(true);
+  });
+
+  it('sets pendingRoomRef.current to false when onRoomUpdate fires', async () => {
+    getMe.mockResolvedValue({ id: 1, username: 'testuser', role: 'user' });
+
+    let ctxRef = null;
+    let mpEngineRef = null;
+    function Consumer() {
+      ctxRef = useGame();
+      mpEngineRef = ctxRef.mpEngine;
+      return null;
+    }
+
+    render(
+      <GameProvider>
+        <MemoryRouter>
+          <Consumer />
+        </MemoryRouter>
+      </GameProvider>
+    );
+
+    await vi.waitFor(() => {
+      expect(ctxRef.user).not.toBeNull();
+    });
+
+    act(() => {
+      ctxRef.handleJoinRoom('r1');
+    });
+    expect(ctxRef.pendingRoomRef.current).toBe(true);
+
+    await act(async () => {
+      mpEngineRef.onRoomUpdate({
+        roomId: 'r1',
+        mode: 'ffa',
+        roomLevel: 1,
+        respawnLimit: 0,
+        players: [],
+      });
+    });
+
+    expect(ctxRef.pendingRoomRef.current).toBe(false);
+    expect(ctxRef.roomInfo).not.toBeNull();
   });
 });
 

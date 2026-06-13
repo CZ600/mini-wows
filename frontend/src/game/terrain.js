@@ -14,6 +14,7 @@ function seededRandom(seed) {
 
 export class Terrain {
   constructor(scene, terrainSeed, islands) {
+    this.scene = scene;
     this.noise = new PerlinNoise(123);
     this.heights = new Float32Array((SEGMENTS + 1) * (SEGMENTS + 1));
 
@@ -106,7 +107,7 @@ export class Terrain {
 
   destroy() {
     if (this.mesh) {
-      this.scene.remove(this.mesh);
+      if (this.scene) this.scene.remove(this.mesh);
       this.mesh.geometry.dispose();
       this.mesh.material.dispose();
       this.mesh = null;

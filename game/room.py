@@ -58,11 +58,12 @@ class PlayerConn:
 
 
 class Room:
-    def __init__(self, room_id, mode="ffa", host_id=None, room_level=1):
+    def __init__(self, room_id, mode="ffa", host_id=None, room_level=1, respawn_limit=0):
         self.room_id = room_id
         self.mode = mode
         self.host_id = host_id
         self.room_level = room_level
+        self.respawn_limit = respawn_limit
         self.state = RoomState.WAITING
         self.players = {}
         self.terrain_seed = int(time.time() * 1000) % (2**31)
@@ -112,6 +113,7 @@ class Room:
             "roomId": self.room_id,
             "mode": self.mode,
             "roomLevel": self.room_level,
+            "respawnLimit": self.respawn_limit,
             "players": self.get_lobby_player_list(),
             "terrainSeed": self.terrain_seed,
             "islands": self.islands,
@@ -159,7 +161,7 @@ class Room:
             for conn in self.players.values():
                 conn.team = None
 
-        self.game_state = GameState(self.terrain, self.mode)
+        self.game_state = GameState(self.terrain, self.mode, respawn_limit=self.respawn_limit)
 
         for pid, conn in self.players.items():
             if conn.connected:
@@ -218,11 +220,15 @@ class Room:
                     await self._end_game()
                     return
 
-                # Send elimination notice to newly dead players
+                # Send elimination notice to newly dead players with no respawns
+                respawned_players = set()
+                for evt in self.game_state.events:
+                    if evt.get("type") == "player_respawned":
+                        respawned_players.add(evt.get("target"))
                 for evt in self.game_state.events:
                     if evt.get("type") == "entity_destroyed":
                         target = evt.get("target")
-                        if target in self.players:
+                        if target in self.players and target not in respawned_players:
                             await self.send_to(target, {
                                 "type": "player_eliminated",
                             })
@@ -303,7 +309,9 @@ class Room:
     async def _broadcast_room_update(self):
         await self._broadcast({
             "type": "room_update",
+            "mode": self.mode,
             "roomLevel": self.room_level,
+            "respawnLimit": self.respawn_limit,
             "players": self.get_lobby_player_list(),
         })
 

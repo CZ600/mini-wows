@@ -35,8 +35,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 mode = msg.get("mode", "ffa")
                 level = msg.get("level", 1)
                 ship_class = msg.get("shipClass")
+                respawn_limit = msg.get("respawnLimit", 0)
                 room, err = room_manager.create_room(
-                    mode, player_id, username, ws, level, ship_class
+                    mode, player_id, username, ws, level, ship_class, respawn_limit
                 )
                 if err:
                     await ws.send_bytes(encode({"type": "error", "msg": err}))
@@ -67,6 +68,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 mode = msg.get("mode", "ffa")
                 level = msg.get("level", 1)
                 ship_class = msg.get("shipClass")
+                respawn_limit = msg.get("respawnLimit", 0)
                 room, err = room_manager.find_quick_match(
                     mode, player_id, username, ws, level, ship_class
                 )
@@ -79,7 +81,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 else:
                     # Create a new room
                     room, err = room_manager.create_room(
-                        mode, player_id, username, ws, level, ship_class
+                        mode, player_id, username, ws, level, ship_class, respawn_limit
                     )
                     if room:
                         current_room_id = room.room_id

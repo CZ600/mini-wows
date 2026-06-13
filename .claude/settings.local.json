@@ -74,7 +74,15 @@
       "Skill(superpowers:brainstorming)",
       "Bash(curl -s http://localhost:8000/api/health)",
       "Bash(curl -s http://localhost:8000/)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git rm *)",
+      "Bash(PYTHONIOENCODING=utf-8 D:/app/anaconda3/envs/agent/python.exe *)",
+      "Read(//d/project/pythonProject/homework/wow/**)",
+      "Bash(curl -s http://localhost:8000/api/rooms)",
+      "Bash(curl -s http://localhost:5173/src/App.jsx)",
+      "Bash(curl -s http://localhost:5173/src/context/GameContext.jsx)",
+      "Bash(curl -s http://localhost:8000/api/auth/me)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

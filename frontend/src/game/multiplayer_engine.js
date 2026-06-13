@@ -61,10 +61,11 @@ export class MultiplayerEngine {
     this._torpedoCooldowns = [];
     this._localProjMgr = null;
     this._minimapTerrain = null;
-    this._projectileMeshes = [];
+    this._projectileMeshes = new Map(); // id -> mesh
     this._projectileGeometry = null;
     this._projectileMaterial = null;
     this.torpedoManager = null;
+    this._myRespawns = 0;
   }
 
   init(canvas) {
@@ -82,8 +83,8 @@ export class MultiplayerEngine {
     this._loop = this._loop.bind(this);
     this.animFrameId = requestAnimationFrame(this._loop);
 
-    this._projectileGeometry = new THREE.SphereGeometry(0.3, 6, 6);
-    this._projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+    this._projectileGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+    this._projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xff6644 });
 
     // Wire up WS handlers
     this.ws.onMessage = (msg) => this._handleMessage(msg);
@@ -97,16 +98,16 @@ export class MultiplayerEngine {
     this.ws.connect(token);
   }
 
-  createRoom(mode, level = 1, shipClass = null) {
-    this.ws.send({ type: 'create_room', mode, level, shipClass });
+  createRoom(mode, level = 1, shipClass = null, respawnLimit = 0) {
+    this.ws.send({ type: 'create_room', mode, level, shipClass, respawnLimit });
   }
 
   joinRoom(roomId) {
     this.ws.send({ type: 'join_room', roomId });
   }
 
-  quickMatch(mode, level = 1, shipClass = null) {
-    this.ws.send({ type: 'quick_match', mode, level, shipClass });
+  quickMatch(mode, level = 1, shipClass = null, respawnLimit = 0) {
+    this.ws.send({ type: 'quick_match', mode, level, shipClass, respawnLimit });
   }
 
   ready() {
@@ -124,11 +125,13 @@ export class MultiplayerEngine {
       this._currentRoomId = msg.roomId;
       this._roomMode = msg.mode;
       this._roomLevel = msg.roomLevel || 1;
+      this._respawnLimit = msg.respawnLimit || 0;
       if (this.onRoomUpdate) {
         this.onRoomUpdate({
           roomId: msg.roomId,
           mode: msg.mode,
           roomLevel: msg.roomLevel || 1,
+          respawnLimit: msg.respawnLimit || 0,
           players: msg.players,
           terrainSeed: msg.terrainSeed,
           islands: msg.islands,
@@ -137,11 +140,15 @@ export class MultiplayerEngine {
     }
 
     if (type === 'room_update') {
+      this._roomMode = msg.mode || this._roomMode;
+      this._roomLevel = msg.roomLevel || this._roomLevel || 1;
+      this._respawnLimit = msg.respawnLimit ?? this._respawnLimit;
       if (this.onRoomUpdate) {
         this.onRoomUpdate({
           roomId: this._currentRoomId,
           mode: this._roomMode,
-          roomLevel: msg.roomLevel || this._roomLevel || 1,
+          roomLevel: this._roomLevel,
+          respawnLimit: this._respawnLimit,
           players: msg.players,
         });
       }
@@ -316,6 +323,9 @@ export class MultiplayerEngine {
       const serverState = msg.you;
       this.inputSender.confirmInput(msg.lpi || 0);
 
+      // Update respawn count
+      this._myRespawns = serverState.rspn || 0;
+
       // Show ship on first snapshot
       if (!this.localShip.ship.mesh.visible) {
         this.localShip.pos_x = serverState.x;
@@ -345,6 +355,22 @@ export class MultiplayerEngine {
         this.localShip.alive = false;
         this.localShip.hp = 0;
         if (this.localShip.ship) this.localShip.ship.sink();
+      } else if (serverState.alive && !this.localShip.alive) {
+        // Respawned
+        this.localShip.alive = true;
+        this.localShip.hp = serverState.hp;
+        this.localShip.max_hp = serverState.mhp;
+        this.localShip.pos_x = serverState.x;
+        this.localShip.pos_z = serverState.z;
+        this.localShip.heading = serverState.h;
+        this.localShip.speed = 0;
+        this._eliminated = false;
+        if (this.localShip.ship) {
+          this.localShip.ship.mesh.position.set(serverState.x, 0, serverState.z);
+          this.localShip.ship.mesh.rotation.y = serverState.h;
+          this.localShip.ship.mesh.visible = true;
+          this.localShip.ship.position.set(serverState.x, 0, serverState.z);
+        }
       } else if (serverState.alive) {
         reconcile(this.localShip, serverState, this.inputSender.getPendingInputs());
         this.localShip.hp = serverState.hp;
@@ -387,20 +413,66 @@ export class MultiplayerEngine {
     const remote = this._localProjMgr
       ? projs.filter(p => p.owner !== this._myId)
       : projs;
-    // Remove excess meshes
-    while (this._projectileMeshes.length > remote.length) {
-      const m = this._projectileMeshes.pop();
-      this.scene.remove(m);
+    const activeIds = new Set();
+
+    for (const p of remote) {
+      activeIds.add(p.id);
+      let entry = this._projectileMeshes.get(p.id);
+      if (!entry) {
+        const mesh = new THREE.Mesh(this._projectileGeometry, this._projectileMaterial);
+        this.scene.add(mesh);
+
+        // Trail
+        const trailGeo = new THREE.BufferGeometry();
+        const trailPositions = new Float32Array(60 * 3);
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+        const trailMat = new THREE.PointsMaterial({
+          color: 0xff6644,
+          size: 1.2,
+          transparent: true,
+          opacity: 0.85,
+        });
+        const trail = new THREE.Points(trailGeo, trailMat);
+        this.scene.add(trail);
+
+        entry = { mesh, trail, trailData: [] };
+        this._projectileMeshes.set(p.id, entry);
+      }
+      entry.mesh.position.set(p.x, p.y, p.z);
+
+      // Update trail
+      entry.trailData.push({ x: p.x, y: p.y, z: p.z });
+      if (entry.trailData.length > 60) entry.trailData.shift();
+      const positions = entry.trail.geometry.attributes.position.array;
+      for (let j = 0; j < 60; j++) {
+        if (j < entry.trailData.length) {
+          const tp = entry.trailData[j];
+          positions[j * 3] = tp.x;
+          positions[j * 3 + 1] = tp.y;
+          positions[j * 3 + 2] = tp.z;
+        } else {
+          positions[j * 3 + 1] = -100;
+        }
+      }
+      entry.trail.geometry.attributes.position.needsUpdate = true;
     }
-    // Add missing meshes
-    while (this._projectileMeshes.length < remote.length) {
-      const m = new THREE.Mesh(this._projectileGeometry, this._projectileMaterial);
-      this.scene.add(m);
-      this._projectileMeshes.push(m);
+
+    // Remove meshes for projectiles no longer in snapshot (safe pattern)
+    const toRemove = [];
+    for (const [id, entry] of this._projectileMeshes) {
+      if (!activeIds.has(id)) {
+        toRemove.push(id);
+      }
     }
-    // Update positions
-    for (let i = 0; i < remote.length; i++) {
-      this._projectileMeshes[i].position.set(remote[i].x, remote[i].y, remote[i].z);
+    for (const id of toRemove) {
+      const entry = this._projectileMeshes.get(id);
+      if (entry) {
+        this.scene.remove(entry.mesh);
+        this.scene.remove(entry.trail);
+        entry.trail.geometry.dispose();
+        entry.trail.material.dispose();
+      }
+      this._projectileMeshes.delete(id);
     }
   }
 
@@ -476,20 +548,24 @@ export class MultiplayerEngine {
       entry.trail.geometry.attributes.position.needsUpdate = true;
     }
 
-    // Remove torpedoes no longer in snapshot
+    // Remove torpedoes no longer in snapshot (safe pattern)
+    const toRemoveTorps = [];
     for (const id in this._torpedoVisuals) {
       if (!activeIds.has(Number(id))) {
-        const entry = this._torpedoVisuals[id];
-        this.scene.remove(entry.mesh);
-        entry.mesh.traverse(child => {
-          if (child.geometry) child.geometry.dispose();
-          if (child.material) child.material.dispose();
-        });
-        this.scene.remove(entry.trail);
-        entry.trail.geometry.dispose();
-        entry.trail.material.dispose();
-        delete this._torpedoVisuals[id];
+        toRemoveTorps.push(id);
       }
+    }
+    for (const id of toRemoveTorps) {
+      const entry = this._torpedoVisuals[id];
+      this.scene.remove(entry.mesh);
+      entry.mesh.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+      this.scene.remove(entry.trail);
+      entry.trail.geometry.dispose();
+      entry.trail.material.dispose();
+      delete this._torpedoVisuals[id];
     }
   }
 
@@ -543,6 +619,41 @@ export class MultiplayerEngine {
         continue;
       }
 
+      if (!snap.alive && !entry.lastAlive) continue;
+
+      // Handle respawn: was dead, now alive
+      if (snap.alive && !entry.lastAlive) {
+        entry.lastAlive = true;
+        if (!entry.ship.mesh.visible) {
+          entry.ship.mesh.visible = true;
+          // Rebuild ship mesh if it was destroyed during sink
+          const level = snap.lvl || 1;
+          const shipClass = snap.shipClass || null;
+          entry.ship.destroy();
+          const ship = new Ship(this.scene, level, shipClass);
+          ship.mesh.position.set(snap.x, 0, snap.z);
+          ship.mesh.rotation.y = snap.h;
+
+          // Re-add name label
+          const canvas = document.createElement('canvas');
+          canvas.width = 256;
+          canvas.height = 64;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 24px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(snap.name || snap.id, 128, 40);
+          const texture = new THREE.CanvasTexture(canvas);
+          const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+          const sprite = new THREE.Sprite(spriteMat);
+          sprite.position.y = 5;
+          sprite.scale.set(8, 2, 1);
+          ship.mesh.add(sprite);
+
+          entry.ship = ship;
+        }
+      }
+
       if (!snap.alive) continue;
 
       // Use interpolated position only when enough snapshots exist for interpolation
@@ -559,14 +670,18 @@ export class MultiplayerEngine {
       entry.lastAlive = snap.alive;
     }
 
-    // Remove ships no longer in snapshot
+    // Remove ships no longer in snapshot (safe pattern)
+    const toRemoveShips = [];
     for (const id in this.otherShips) {
       if (!activeIds.has(Number(id))) {
-        const entry = this.otherShips[id];
-        entry.ship.destroy();
-        delete this.otherShips[id];
-        this.interpolator.removeEntity(id);
+        toRemoveShips.push(id);
       }
+    }
+    for (const id of toRemoveShips) {
+      const entry = this.otherShips[id];
+      entry.ship.destroy();
+      delete this.otherShips[id];
+      this.interpolator.removeEntity(id);
     }
   }
 
@@ -749,6 +864,7 @@ export class MultiplayerEngine {
         ping: this._ping,
         level: this.localShip.level,
         shipClass: this.localShip.shipClass,
+        respawns: this._myRespawns,
         turrets: ship.turrets.map(t => ({
           cooldown: t.cooldown,
           maxCooldown: ship.fireCooldown,
@@ -901,10 +1017,15 @@ export class MultiplayerEngine {
     }
     this.otherShips = {};
     this.interpolator.clear();
-    for (const m of this._projectileMeshes) {
-      this.scene.remove(m);
+    for (const [id, entry] of this._projectileMeshes) {
+      this.scene.remove(entry.mesh);
+      if (entry.trail) {
+        this.scene.remove(entry.trail);
+        entry.trail.geometry.dispose();
+        entry.trail.material.dispose();
+      }
     }
-    this._projectileMeshes = [];
+    this._projectileMeshes = new Map();
     if (this._torpedoVisuals) {
       for (const id in this._torpedoVisuals) {
         const entry = this._torpedoVisuals[id];

@@ -15,6 +15,7 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
   // Create/Quick Match state
   const [selectedMode, setSelectedMode] = useState('ffa');
   const [selectedLevel, setSelectedLevel] = useState(1);
+  const [respawnLimit, setRespawnLimit] = useState(0);
 
   useEffect(() => {
     if (view === 'rooms') {
@@ -34,11 +35,11 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
   };
 
   const handleCreate = () => {
-    onCreateRoom(selectedMode, selectedLevel);
+    onCreateRoom(selectedMode, selectedLevel, null, respawnLimit);
   };
 
   const handleQuickMatch = () => {
-    onQuickMatch(selectedMode, selectedLevel);
+    onQuickMatch(selectedMode, selectedLevel, null, respawnLimit);
   };
 
   const renderMainView = () => (
@@ -119,6 +120,28 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
     </div>
   );
 
+  const renderRespawnSelector = (isQuickMatch = false) => {
+    if (isQuickMatch || selectedMode !== 'ffa') return null;
+    return (
+      <div style={{ marginBottom: '16px' }}>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '8px' }}>
+          重生次数（0 = 死亡即淘汰）
+        </p>
+        <div className="level-grid" style={{ maxWidth: '550px' }}>
+          {Array.from({ length: 11 }, (_, i) => i).map(n => (
+            <div
+              key={n}
+              className={`level-grid-item ${respawnLimit === n ? 'active' : ''}`}
+              onClick={() => setRespawnLimit(n)}
+            >
+              <div className="level-num">{n}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderSetupForm = (isQuickMatch) => (
     <div>
       <h3 style={{ color: 'var(--accent)', marginBottom: '16px' }}>
@@ -132,7 +155,7 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
             <div
               key={mode.id}
               className={`level-grid-item ${selectedMode === mode.id ? 'active' : ''}`}
-              onClick={() => setSelectedMode(mode.id)}
+              onClick={() => { setSelectedMode(mode.id); if (mode.id !== 'ffa') setRespawnLimit(0); }}
               style={{ flex: 1 }}
             >
               <div className="level-num" style={{ fontSize: '18px' }}>{mode.name}</div>
@@ -156,6 +179,8 @@ export default function MultiSetupScreen({ user, onQuickMatch, onCreateRoom, onJ
           ))}
         </div>
       </div>
+
+      {renderRespawnSelector(isQuickMatch)}
 
       <div style={{ marginBottom: '24px', color: 'var(--text-secondary)', fontSize: '14px' }}>
         职业选择将在准备阶段进行
