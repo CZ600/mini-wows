@@ -84,5 +84,13 @@ export default function Minimap({ data }) {
     return () => cancelAnimationFrame(id);
   }, [draw]);
 
-  return <canvas ref={canvasRef} id="minimap" width={SIZE} height={SIZE} />;
+  return (
+    <div id="minimap-wrap">
+      <canvas ref={canvasRef} id="minimap" width={SIZE} height={SIZE} />
+      <span className="minimap-dir minimap-dir-n">N</span>
+      <span className="minimap-dir minimap-dir-e">E</span>
+      <span className="minimap-dir minimap-dir-s">S</span>
+      <span className="minimap-dir minimap-dir-w">W</span>
+    </div>
+  );
 }

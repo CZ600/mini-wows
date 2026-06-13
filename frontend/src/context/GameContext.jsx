@@ -47,6 +47,7 @@ export function GameProvider({ children }) {
   const [mpMinimapData, setMpMinimapData] = useState(null);
   const [mpScoped, setMpScoped] = useState(false);
   const [mpEliminated, setMpEliminated] = useState(false);
+  const [mpShipLabels, setMpShipLabels] = useState(null);
 
   // Game result
   const [gameResult, setGameResult] = useState({ score: 0, enemies: 0, level: 1 });
@@ -92,6 +93,7 @@ export function GameProvider({ children }) {
   mpEngine.onHudUpdate = setMpHudData;
   mpEngine.onMinimapUpdate = setMpMinimapData;
   mpEngine.onScopeChange = setMpScoped;
+  mpEngine.onShipLabelsUpdate = setMpShipLabels;
   mpEngine.onRoomUpdate = (info) => {
     pendingRoomRef.current = false;
     setRoomInfo(info);
@@ -278,6 +280,7 @@ export function GameProvider({ children }) {
     setMpEliminated(false);
     setMpHudData(null);
     setMpMinimapData(null);
+    setMpShipLabels(null);
     nav('/');
   };
 
@@ -302,7 +305,7 @@ export function GameProvider({ children }) {
     hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,
 
     // Multiplayer state
-    roomInfo, mpHudData, mpCountdown, mpMinimapData, mpScoped, mpEliminated,
+    roomInfo, mpHudData, mpCountdown, mpMinimapData, mpScoped, mpEliminated, mpShipLabels,
 
     // Game result
     gameResult,

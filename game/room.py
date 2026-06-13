@@ -175,6 +175,7 @@ class Room:
             "type": "game_start",
             "terrainSeed": self.terrain_seed,
             "islands": self.islands,
+            "respawnLimit": self.respawn_limit,
             "players": self.get_player_list(),
         })
 

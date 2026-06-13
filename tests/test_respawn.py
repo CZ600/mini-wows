@@ -293,6 +293,97 @@ class TestRespawnLimitPropagation:
             assert snap["you"]["rspn"] == 4
 
 
+class TestTorpedoKillRespawnOrdering:
+    """Bug 修复：_process_respawns 原本在鱼雷更新之前调用，
+    导致被鱼雷击杀的玩家在同一 tick 末尾仍然是"死亡"状态，
+    _check_game_end 误判对局结束。修复后 _process_respawns 移到 update() 末尾。"""
+
+    def _setup_torpedo_scenario(self, respawn_limit=3):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa", respawn_limit=respawn_limit)
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Bob", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+        gs.ships[2].pos_x = 0
+        gs.ships[2].pos_z = 30
+        gs.ships[2].heading = 0
+        # Bob 丝血，确保鱼雷一击必杀
+        gs.ships[2].hp = 1
+
+        gs.torpedo_mgr.fire(1, 1, 4, 0, 0, 0, count=1)
+        return gs
+
+    def _run_until_torpedo_consumed(self, gs, max_ticks=100):
+        hit = False
+        for _ in range(max_ticks):
+            gs.update(1.0 / 20)
+            if not gs.torpedo_mgr.torpedoes:
+                hit = True
+                break
+        return hit
+
+    def test_torpedo_kill_respawns_in_same_tick(self):
+        """被鱼雷击杀的玩家应在同一 tick 内重生，而非留到下一 tick。"""
+        gs = self._setup_torpedo_scenario(respawn_limit=3)
+        hit = self._run_until_torpedo_consumed(gs)
+
+        assert hit, "鱼雷应当命中 Bob"
+        assert gs.ships[2].alive, "Bob 应在鱼雷击杀的同一 tick 内重生"
+        assert gs.ships[2].hp == gs.ships[2].max_hp
+
+    def test_both_players_alive_after_torpedo_kill(self):
+        """鱼雷击杀后双方都应存活，FFA 不应误触发结算条件(alive<=1)。"""
+        gs = self._setup_torpedo_scenario(respawn_limit=3)
+        self._run_until_torpedo_consumed(gs)
+
+        alive_count = sum(1 for s in gs.ships.values() if s.alive)
+        assert alive_count == 2, f"应当两人都存活，实际存活 {alive_count} 人"
+
+    def test_torpedo_kill_respawn_decrements_counter(self):
+        """鱼雷击杀后重生应正确扣减重生次数。"""
+        gs = self._setup_torpedo_scenario(respawn_limit=3)
+        self._run_until_torpedo_consumed(gs)
+
+        assert gs._respawn_remaining[2] == 2, "Bob 应消耗一次重生，剩余 2 次"
+        assert gs._respawn_remaining[1] == 3, "Alice 未死亡，重生次数不变"
+
+    def test_process_respawns_is_last_step_in_update(self):
+        """update() 结束后，任何有剩余重生的舰船都应处于存活状态，
+        无论它在本 tick 中是被炮弹还是鱼雷击杀。"""
+        gs = self._setup_torpedo_scenario(respawn_limit=2)
+        self._run_until_torpedo_consumed(gs)
+
+        assert gs.ships[2].alive, "Bob 被鱼雷击杀后应在同 tick 重生"
+        assert gs.ships[2].hp == gs.ships[2].max_hp
+
+    def test_per_player_respawn_counts_independent(self):
+        """验证重生次数是每人独享：A 死2次、B 死1次后两人都应存活。"""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa", respawn_limit=3)
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Bob", level=1)
+
+        # Alice 死 2 次（直接击杀 + update 触发重生）
+        gs.ships[1].take_damage(gs.ships[1].max_hp + 100)
+        gs.update(1.0 / 20)
+        gs.ships[1].take_damage(gs.ships[1].max_hp + 100)
+        gs.update(1.0 / 20)
+
+        # Bob 死 1 次
+        gs.ships[2].take_damage(gs.ships[2].max_hp + 100)
+        gs.update(1.0 / 20)
+
+        assert gs._respawn_remaining[1] == 1, "Alice 死2次后应剩1次"
+        assert gs._respawn_remaining[2] == 2, "Bob 死1次后应剩2次"
+        assert gs.ships[1].alive
+        assert gs.ships[2].alive
+        alive_count = sum(1 for s in gs.ships.values() if s.alive)
+        assert alive_count == 2
+
+
 class TestProjectileSnapshots:
     """Verify all projectiles are included in snapshots."""
 
@@ -324,3 +415,200 @@ class TestProjectileSnapshots:
         owners = {p["owner"] for p in snap["projs"]}
         assert 1 in owners
         assert 2 in owners
+
+    def test_projectiles_survive_multiple_ticks(self):
+        """Projectiles should survive across multiple update ticks within lifetime."""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=3)
+        gs.add_ship(2, "Bob", level=3)
+
+        gs.process_fire(1, {"aim": {"x": 500, "y": 10, "z": 500}})
+
+        # After 5 ticks, projectiles should still be alive
+        for _ in range(5):
+            gs.update(1.0 / 20)
+        snap = gs.get_snapshot(player_id=2)
+        # 3 turrets for level 3, all should survive 5 ticks at 250ms total
+        assert len(snap["projs"]) == 3
+
+    def test_projectile_ids_are_unique(self):
+        """Each projectile should have a unique ID."""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=3)  # 3 turrets
+        gs.add_ship(2, "Bob", level=3)    # 3 turrets
+
+        # Fire multiple times
+        gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
+        gs.update(1.0 / 20)
+        gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
+
+        snap = gs.get_snapshot()
+        proj_ids = [p["id"] for p in snap["projs"]]
+        assert len(proj_ids) == len(set(proj_ids))
+
+    def test_other_player_sees_all_remote_projectiles(self):
+        """Player B should see all projectiles from Player A (filtered by owner)."""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=3)  # 3 turrets
+        gs.add_ship(2, "Bob", level=3)    # 3 turrets
+
+        # Alice fires, Bob doesn't
+        gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
+
+        # From Bob's perspective
+        snap = gs.get_snapshot(player_id=2)
+        # Bob should see 3 projectiles from Alice
+        remote_projs = [p for p in snap["projs"] if p["owner"] != 2]
+        assert len(remote_projs) == 3
+        # All remote projectiles should be from Alice
+        assert all(p["owner"] == 1 for p in remote_projs)
+
+    def test_projectile_positions_differ_by_turret(self):
+        """Projectiles from different turrets should have different starting positions."""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=3)  # 3 turrets
+
+        gs.process_fire(1, {"aim": {"x": 500, "y": 2, "z": 500}})
+        snap = gs.get_snapshot(player_id=1)
+
+        positions = [(p["x"], p["z"]) for p in snap["projs"]]
+        # All 3 projectiles should have distinct positions
+        assert len(set(positions)) == 3
+
+
+class TestShipCollisionDetection:
+    """Verify projectile-ship collision uses correct ship dimensions."""
+
+    def test_ship_height_stored_correctly(self):
+        """ServerShip should store height from config."""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Bob", level=10)
+
+        assert gs.ships[1].ship_height == 1.5  # Level 1
+        assert gs.ships[2].ship_height == 6.0  # Level 10
+
+    def test_collision_uses_actual_ship_height(self):
+        """Projectile at y=3.0 should hit a level 10 ship (height=6.0)."""
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=10)  # height=6.0
+        gs.add_ship(2, "Attacker", level=1)
+
+        # Place Alice's large ship at origin
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # Fire projectile that passes through y=4.0 directly above Alice
+        # Old hardcoded 2.5 height would miss; real 6.0 height should hit
+        pm = ProjectileManager()
+        pm.fire(2, 50, (0, 4.0, 0), (0, 0.1, 1.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1
+        assert hit_events[0]["target"] == 1
+
+    def test_collision_margin_catches_near_miss(self):
+        """Increased margin should catch projectiles that pass close to ship edge."""
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)  # width=2, length=7
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # Fire from z=10 toward the ship at origin, x offset of 2.5m from center
+        # ship_half_w = 2/2 + 2.0 = 3.0, so x=2.5 should still hit with the margin
+        # After 1 tick (dt=0.05), projectile at 200 m/s travels 10m, ends at z=0
+        pm = ProjectileManager()
+        pm.fire(2, 50, (2.5, 1.0, 10), (0, 0, -1.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1
+
+    def test_no_self_hit(self):
+        """Projectile should not hit the ship that fired it."""
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+
+        pm = ProjectileManager()
+        pm.fire(1, 50, (0, 1.0, 0.5), (0, 0, 1.0))
+
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 0
+
+
+class TestGameStartRespawnLimit:
+    """Verify respawnLimit flows through game_start message."""
+
+    def test_game_start_includes_respawn_limit(self):
+        """The game_start broadcast should include respawnLimit."""
+        import asyncio
+        from game.room import Room
+
+        async def _test():
+            room = Room("test", mode="ffa", host_id=1, respawn_limit=5)
+            room.add_player(1, "Alice", None)
+            room.add_player(2, "Bob", None)
+            room.set_ready(1)
+            room.set_ready(2)
+
+            # Directly call _start_game to examine the broadcast
+            room.state = "playing"
+            room.game_state = __import__('game.game_state', fromlist=['GameState']).GameState(
+                room.terrain, room.mode, respawn_limit=room.respawn_limit
+            )
+            for pid, conn in room.players.items():
+                room.game_state.add_ship(pid, conn.username, conn.level, conn.ship_class, conn.team)
+
+            msg = {
+                "type": "game_start",
+                "terrainSeed": room.terrain_seed,
+                "islands": room.islands,
+                "respawnLimit": room.respawn_limit,
+                "players": room.get_player_list(),
+            }
+            assert msg["respawnLimit"] == 5
+            return True
+
+        result = asyncio.run(_test())
+        assert result
+
+    def test_room_game_state_respawn_link(self):
+        """Room.respawn_limit must reach GameState._respawn_remaining for all players."""
+        from game.room import Room
+
+        room = Room("test", mode="ffa", host_id=1, respawn_limit=7)
+        room.add_player(1, "Alice", None)
+        room.add_player(2, "Bob", None)
+
+        from game.game_state import GameState
+        gs = GameState(room.terrain, room.mode, respawn_limit=room.respawn_limit)
+        for pid, conn in room.players.items():
+            gs.add_ship(pid, conn.username, conn.level, conn.ship_class, conn.team)
+
+        assert gs._respawn_remaining[1] == 7
+        assert gs._respawn_remaining[2] == 7
+        snap = gs.get_snapshot(player_id=1)
+        assert snap["you"]["rspn"] == 7

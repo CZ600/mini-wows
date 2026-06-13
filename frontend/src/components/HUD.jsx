@@ -36,14 +36,6 @@ export default function HUD({ data }) {
 
   return (
     <>
-      {/* Compass */}
-      <div id="compass">
-        <span className="compass-dir">N</span>
-        <span className="compass-dir">E</span>
-        <span className="compass-dir">S</span>
-        <span className="compass-dir">W</span>
-      </div>
-
       {/* HP Bar - Top Center */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
         <div id="crosshair">

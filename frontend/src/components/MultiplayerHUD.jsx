@@ -25,14 +25,6 @@ export default function MultiplayerHUD({ data, events }) {
 
   return (
     <>
-      {/* Compass */}
-      <div id="compass">
-        <span className="compass-dir">N</span>
-        <span className="compass-dir">E</span>
-        <span className="compass-dir">S</span>
-        <span className="compass-dir">W</span>
-      </div>
-
       {/* Crosshair */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
         <div id="crosshair">

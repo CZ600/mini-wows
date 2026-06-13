@@ -17,6 +17,7 @@ class ServerShip:
         cfg = get_ship_config(level, ship_class)
         self.ship_length = cfg["length"]
         self.ship_width = cfg["width"]
+        self.ship_height = cfg["height"]
         self.turn_radius = cfg["turn_radius"]
         self.max_hp = cfg["hp"]
         self.hp = self.max_hp

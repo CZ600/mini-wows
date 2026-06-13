@@ -150,3 +150,104 @@ type: project
 **修复**:
 - `terrain.js` 构造函数: 新增 `this.scene = scene` 保存场景引用
 - `terrain.js` `destroy()`: 新增 `if (this.scene)` 防御性检查，即使 scene 未设置也不会崩溃
+
+### Bug 16: 重生次数始终为 0（再次出现）
+
+**问题**: 与 Bug 11 相同症状，问题在修复后再次出现。无论房主设置几次重生限制，进入游戏后 HUD 显示重生次数为 0。
+
+**原因**: `_startGame` 从不初始化 `_myRespawns`，该值只从快照的 `rspn` 字段获取。虽然快照正确携带了该字段，但如果快照处理过程中 `msg.you` 异常为空（例如快照到达时组件尚未完全挂载、重连场景等），`_myRespawns` 保持构造函数中的初始值 0。此外 `game_start` 消息不包含 `respawnLimit`，无法作为后备初始化来源。
+
+**修复**:
+- `room.py`: `game_start` 广播消息新增 `respawnLimit` 字段，值为 `self.respawn_limit`
+- `multiplayer_engine.js` `_startGame`: 从 `msg.respawnLimit ?? this._respawnLimit ?? 0` 初始化 `_myRespawns`，确保 HUD 在第一个快照到达前就显示正确值
+- `test_respawn.py`: 新增 `TestGameStartRespawnLimit` 类，验证 `respawnLimit` 在 `game_start` 消息和 `Room→GameState→snapshot` 链路中的正确传递
+
+### Bug 17: 敌方炮弹同步数量不匹配
+
+**问题**: 玩家看见敌方射出的炮弹只有一个，无论敌方发射多少发。
+
+**原因**: 经过端到端代码审查和服务端测试验证，服务端逻辑完全正确——`process_fire` 为每个就绪炮塔分别创建弹丸，所有弹丸均包含在快照中。客户端 `_updateProjectileVisuals` 的 Map-based 跟踪、远程过滤和网格创建逻辑也正确。但发现了两个可能的潜在问题：(1) msgpack/JavaScript 的数字类型一致性（`p.owner` 与 `this._myId` 比较）在极端情况下可能导致过滤失败。(2) 多个弹丸从不同炮塔以几乎相同的方向发射时，轨迹接近平行，远距离视觉上难以区分。
+
+**修复**:
+- `test_respawn.py`: 新增 6 个 `TestProjectileSnapshots` 测试用例，覆盖多弹丸存活、唯一 ID、其他玩家视角过滤、不同炮塔起始位置等场景。所有 24 个测试通过。
+- 服务端代码无需修改（已通过完整测试验证）。
+- 客户端过滤逻辑保持现有 `!==` 严格比较（MsgPack 正确保留数字类型）。
+
+### Bug 18: 炮弹显示数量翻倍
+
+**问题**: 敌方发射 3 发炮弹，玩家看到 6 发炮弹飞来，显示数量是实际的 2 倍。
+
+**原因**: `_updateProjectileVisuals` 中的远程炮弹过滤使用 `p.owner !== this._myId`。`p.owner` 来自服务端 msgpack 整数，`this._myId` 来自 JWT→JSON API 解析的 number。当两者类型不一致（number vs string）时，`!==` 返回 `true`，本地玩家的炮弹也被当成"远程炮弹"渲染，与 `_localProjMgr` 的本地预测炮弹叠加导致数量翻倍。
+
+**修复**:
+- `multiplayer_engine.js` `_updateProjectileVisuals`: 过滤比较改为 `String(p.owner) !== String(this._myId)`，统一转为字符串再比较，消除类型不一致问题
+
+### Bug 19: 炮弹碰撞检测不准确
+
+**问题**: 炮弹命中舰船的碰撞检测不准确，有时炮弹穿过船体也无法造成伤害。高等级舰船（高度 > 2.5m）尤其明显。
+
+**原因**: (1) `projectile.py` 碰撞检测中舰船高度硬编码为 `2.5`，但实际舰船高度随等级变化（Lv1: 1.5m → Lv10: 6.0m），高等级舰船在 y=2.5~6.0 范围内的炮弹无法被检测到。(2) `ServerShip` 未存储高度属性。(3) 碰撞边距仅 0.5m，在 200m/s 弹速、50ms 每帧（10m/帧）条件下，炮弹容易跳过碰撞盒。
+
+**修复**:
+- `ship.py` `ServerShip.__init__`: 新增 `self.ship_height = cfg["height"]`
+- `projectile.py`: 高度检测从硬编码 `2.5` 改为 `getattr(s, 'ship_height', 2.5)`；碰撞边距从 `0.5` 增加到 `2.0`，减少高速炮弹跳过碰撞盒的概率
+- `test_respawn.py`: 新增 `TestShipCollisionDetection` 类（4 个测试），验证高度属性存储、实际高度碰撞检测、边距改进、自弹不命中
+
+### Bug 20: 鱼雷击杀导致对局误结算（重生次数"看似共享"）
+
+**问题**: 双人对局设置重生3次，A死2次、B死1次后对局直接结算。用户怀疑重生次数是所有玩家共享的。
+
+**原因**: 重生次数本身**已经是每人独享**的（`_respawn_remaining` 按 `player_id` 分别存储）。真正的根因是 `GameState.update()` 中 `_process_respawns()` 的调用位置——在炮弹更新之后、鱼雷更新之前。当玩家被鱼雷击杀时（鱼雷更新在 `_process_respawns` 之后执行），该玩家在本 tick 末尾仍然是"死亡"状态。紧接着 `_check_game_end` 检查存活人数 ≤ 1 就误判对局结束，而该玩家本应在下一 tick 重生。
+
+**修复**:
+- `game_state.py` `update()`: 将 `_process_respawns()` 调用从"炮弹更新后、鱼雷更新前"移到 `update()` 最末尾（所有伤害源之后），确保同 tick 内被鱼雷/敌方击杀的玩家立即重生，`_check_game_end` 看到正确的存活状态
+- `test_respawn.py`: 新增 `TestTorpedoKillRespawnOrdering` 类（5 个测试），验证鱼雷击杀同 tick 重生、双方存活、重生次数扣减、丝血鱼雷击杀、每人独享重生计数
+
+### Bug 21: 联机模式炮弹数量不匹配（其他玩家看到6发）
+
+**问题**: 舰船不论实际射出3发还是6发炮弹，别的玩家视角中都是所有火炮齐射6发。
+
+**原因**: 客户端 `_fireGuns` 只让满足 `turretCanAim` 的炮塔开火（桥楼船后炮塔 `yawRange=2.2`，向前方射击时无法转向），但服务端 `process_fire` **只检查冷却不查瞄准范围**，所有冷却完毕的炮塔都发射。服务端创建多余的炮弹并通过快照广播给其他玩家，导致数量翻倍。
+
+**修复**:
+- `game_state.py`: 新增 `_get_turret_yaw_caps(ship)` 返回每门炮塔的 `(yaw_center, yaw_range)`（前炮塔 yawCenter=0，后炮塔 yawCenter=π；有桥楼 yawRange=2.2，无桥楼 yawRange=π），以及 `_turret_can_aim()` 静态方法，镜像客户端 `turretCanAim` 逻辑
+- `game_state.py` `process_fire`: 计算目标相对船头的局部偏航角，过滤出冷却完毕 **且** 能瞄准目标的炮塔，只让这些炮塔发射
+- `test_game.py`: 新增 `TestTurretAimFilter` 类（7 个测试），验证桥楼船前/后射击只发射对应炮塔、无桥楼船全向发射、等级10/战列舰前射只发3门
+
+### Bug 22: 鱼雷伤害提升（在当前值基础上 ×1.5）
+
+**问题**: 用户要求将鱼雷伤害在当前数值上再 ×1.5。
+
+**修复**:
+- `game/torpedo.py` `TorpedoManager.fire`: 伤害公式从 `(50 + tier * 20) * 2` 改为 `(50 + tier * 20) * 3`（tier1: 140→210, tier2: 180→270, tier3: 220→330）
+- `test_balance.py` `TestTorpedoDamage`: 更新期望值与文档字符串
+
+### Feature 3: 对战 UI 优化（头顶血条+小地图方位）
+
+**新增**: 联机对战模式下其他玩家舰船头顶显示固定大小的血量条与昵称（HTML Overlay，不随距离变化），删除无用顶部罗盘，改为小地图四边中点标注 N/E/S/W 方位字母。
+
+**变更**:
+- `multiplayer_engine.js`:
+  - 新增 `onShipLabelsUpdate` 回调、`_localTeam` 字段、`_labelTempVec` 复用向量
+  - `_processSnapshot`: 从 `msg.you.team` 同步本地玩家队伍
+  - `_syncOtherShipMeshes`: 在 `otherShips[id]` 上保存 `lastSnap`（含 hp/mhp/team/alive/name）
+  - 新增 `_computeShipLabels()`: 每帧将其他玩家头顶世界坐标投影到屏幕坐标，输出 `{id,name,hp,maxHp,isFriendly,x,y}` 数组；过滤死亡玩家、相机背后、屏幕外
+  - `_loop`: render 前调用回调推送标签；early-return 路径推送空数组以清空状态
+- `components/ShipLabels.jsx`（新增）: HTML Overlay 渲染昵称（白色，>12 字符省略）+ 血量条（队友绿/敌人红）+ 血量数值（剩余/总）
+- `context/GameContext.jsx`: 新增 `mpShipLabels` state，绑定 `mpEngine.onShipLabelsUpdate`，`handleBackToMenu` 清理
+- `App.jsx` `MultiCanvasLayout`: 在非瞄准镜模式下挂载 `<ShipLabels>`
+- `components/MultiplayerHUD.jsx` & `components/HUD.jsx`: 删除顶部 `<div id="compass">`
+- `components/Minimap.jsx`: 用 `#minimap-wrap` 包裹 canvas，四边中点添加 N/E/S/W 字母
+- `App.css`: 新增 `#ship-labels/.ship-label*` 样式与 `#minimap-wrap/.minimap-dir*` 样式；移除原 `#minimap` 的 fixed 定位（改由 wrapper 承担）
+
+**约束**:
+- 标签固定屏幕大小，不随距离缩放（HTML 天然特性）
+- 死亡玩家（`snap.alive=false`）不显示标签
+- 屏幕外/相机背后的玩家不显示标签
+- 瞄准镜模式下不显示标签
+- FFA 模式（team=null）所有其他玩家显示为敌人
+- 队伍模式（team 相同）显示为队友（绿色血条）
+
+**测试**: 项目无前端测试框架；通过 `npm run build`（vite 构建）验证 77 模块无语法错误。前端 UI 行为需在浏览器中手动测试：联机对战中其他玩家头顶应显示标签，队友绿/敌人红，血量减少时血条缩短，死亡时标签消失；小地图四边中点显示 N/E/S/W；顶部罗盘消失。
+
+**已知无关失败**: `tests/test_multiplayer.py::TestHitDetectionRotation::test_hit_works_when_ship_rotated` 在 stash 全部修改后能通过，失败由会话开始前已存在的后端文件修改（`game_state.py`/`projectile.py` 等）导致，与本次 UI 改动无关。

@@ -51,7 +51,7 @@ class TorpedoManager:
         if not stats:
             return []
 
-        damage = 50 + tier * 20
+        damage = (50 + tier * 20) * 3
         angles = self._calc_spread(count, spread)
         created = []
 

@@ -42,6 +42,7 @@ export class MultiplayerEngine {
     this.onRoomUpdate = null;
     this.onCountdown = null;
     this.onScopeChange = null;
+    this.onShipLabelsUpdate = null;
     this._eliminated = false;
 
     this.scene = null;
@@ -66,9 +67,28 @@ export class MultiplayerEngine {
     this._projectileMaterial = null;
     this.torpedoManager = null;
     this._myRespawns = 0;
+    this._localTeam = null;
+    this._labelTempVec = new THREE.Vector3();
   }
 
   init(canvas) {
+    // If already initialized with the same canvas, skip
+    if (this._initDone && this.renderer?.domElement === canvas) return;
+
+    // If re-initializing with a new canvas (React Strict Mode remount),
+    // dispose the old renderer and recreate it
+    if (this._initDone && this.renderer?.domElement !== canvas) {
+      if (this._rCleanup) this._rCleanup();
+      this.renderer.dispose();
+      const { renderer, cleanup: rCleanup } = createRenderer(canvas);
+      this.renderer = renderer;
+      this._rCleanup = rCleanup;
+      this.canvas = canvas;
+      return;
+    }
+
+    // First-time initialization
+    this._initDone = true;
     this.canvas = canvas;
     this.scene = createScene();
     const { renderer, cleanup: rCleanup } = createRenderer(canvas);
@@ -237,9 +257,14 @@ export class MultiplayerEngine {
     this.otherShips = {};
     this.interpolator.clear();
 
+    // Initialize respawn count from server game_start message (definitive source)
+    this._myRespawns = msg.respawnLimit ?? this._respawnLimit ?? 0;
+    this._respawnLimit = this._myRespawns;
+
     this._gameStarted = true;
     this._eliminated = false;
     this._ping = 0;
+    this._localTeam = null;
 
     this.controls.orbitYaw = 0;
     this.controls.orbitPitch = -0.18;
@@ -326,6 +351,9 @@ export class MultiplayerEngine {
       // Update respawn count
       this._myRespawns = serverState.rspn || 0;
 
+      // Track local team for friend/foe detection
+      this._localTeam = serverState.team ?? null;
+
       // Show ship on first snapshot
       if (!this.localShip.ship.mesh.visible) {
         this.localShip.pos_x = serverState.x;
@@ -410,8 +438,9 @@ export class MultiplayerEngine {
   _updateProjectileVisuals(projs) {
     // Only render remote player projectiles from server data
     // Local player projectiles are rendered by _localProjMgr
+    const myId = String(this._myId ?? '');
     const remote = this._localProjMgr
-      ? projs.filter(p => p.owner !== this._myId)
+      ? projs.filter(p => String(p.owner) !== myId)
       : projs;
     const activeIds = new Set();
 
@@ -603,6 +632,7 @@ export class MultiplayerEngine {
       }
 
       const entry = this.otherShips[snap.id];
+      entry.lastSnap = snap;
 
       // Check for level upgrade
       const newLevel = snap.lvl || 1;
@@ -685,6 +715,48 @@ export class MultiplayerEngine {
     }
   }
 
+  _computeShipLabels() {
+    const labels = [];
+    if (!this.canvas) return labels;
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    if (!width || !height) return labels;
+
+    const v = this._labelTempVec;
+    v.set(0, 0, 0);
+
+    for (const id in this.otherShips) {
+      const entry = this.otherShips[id];
+      if (!entry.lastSnap) continue;
+      const snap = entry.lastSnap;
+      if (!snap.alive) continue;
+      if (!entry.ship || !entry.ship.mesh || !entry.ship.mesh.visible) continue;
+
+      const labelY = (entry.ship.scopedCameraHeight || 8) + 1.5;
+      v.set(snap.x, labelY, snap.z);
+      v.project(this.camera);
+
+      if (v.z > 1 || v.z < -1) continue;
+
+      const sx = (v.x + 1) / 2 * width;
+      const sy = (1 - v.y) / 2 * height;
+      if (sx < -120 || sx > width + 120 || sy < -80 || sy > height + 80) continue;
+
+      const isFriendly = this._localTeam != null && snap.team === this._localTeam;
+
+      labels.push({
+        id,
+        name: snap.name || String(id),
+        hp: snap.hp,
+        maxHp: snap.mhp,
+        isFriendly,
+        x: sx,
+        y: sy,
+      });
+    }
+    return labels;
+  }
+
   _loop(time) {
     if (!this.running) return;
     this.animFrameId = requestAnimationFrame(this._loop);
@@ -697,6 +769,7 @@ export class MultiplayerEngine {
     }
 
     if (!this._gameStarted || !this.localShip) {
+      if (this.onShipLabelsUpdate) this.onShipLabelsUpdate([]);
       this.renderer.render(this.scene, this.camera);
       return;
     }
@@ -905,6 +978,12 @@ export class MultiplayerEngine {
       });
     }
 
+    // Ship labels (HP bar + name) — HTML overlay positions
+    if (this.onShipLabelsUpdate) {
+      this.camera.updateMatrixWorld();
+      this.onShipLabelsUpdate(this._computeShipLabels());
+    }
+
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1043,6 +1122,7 @@ export class MultiplayerEngine {
   }
 
   destroy() {
+    this._initDone = false;
     this.running = false;
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     this.ws.disconnect();

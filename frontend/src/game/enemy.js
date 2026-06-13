@@ -2,16 +2,16 @@ import * as THREE from 'three';
 import { LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
 
 export const ENEMY_SCALE = {
-  1:  { hp: 100,  damage: 10, count: 10, size: 10, score: 3 },
-  2:  { hp: 130,  damage: 12, count: 10, size: 10, score: 4 },
-  3:  { hp: 170,  damage: 15, count: 12, size: 10, score: 5 },
-  4:  { hp: 220,  damage: 18, count: 12, size: 11, score: 7 },
-  5:  { hp: 280,  damage: 22, count: 14, size: 11, score: 9 },
-  6:  { hp: 350,  damage: 29, count: 14, size: 12, score: 11 },
-  7:  { hp: 430,  damage: 38, count: 16, size: 12, score: 14 },
-  8:  { hp: 520,  damage: 49, count: 16, size: 13, score: 17 },
-  9:  { hp: 630,  damage: 62, count: 18, size: 13, score: 21 },
-  10: { hp: 750,  damage: 77, count: 20, size: 14, score: 25 },
+  1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
+  2:  { hp: 130,  damage: 24, count: 10, size: 10, score: 4 },
+  3:  { hp: 170,  damage: 30, count: 12, size: 10, score: 5 },
+  4:  { hp: 220,  damage: 36, count: 12, size: 11, score: 7 },
+  5:  { hp: 280,  damage: 44, count: 14, size: 11, score: 9 },
+  6:  { hp: 350,  damage: 58, count: 14, size: 12, score: 11 },
+  7:  { hp: 430,  damage: 76, count: 16, size: 12, score: 14 },
+  8:  { hp: 520,  damage: 98, count: 16, size: 13, score: 17 },
+  9:  { hp: 630,  damage: 124, count: 18, size: 13, score: 21 },
+  10: { hp: 750,  damage: 154, count: 20, size: 14, score: 25 },
 };
 
 export const ENEMY_SHIP_SCALE = {

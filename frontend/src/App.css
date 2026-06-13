@@ -192,10 +192,44 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 .levelup-stat { margin: 0 6px; white-space: nowrap; }
 
 /* 小地图 */
-#minimap {
+#minimap-wrap {
   position: fixed; bottom: 20px; right: 20px; z-index: 51;
   border: 2px solid #4a6a8a; border-radius: 4px;
   pointer-events: none;
+}
+#minimap { display: block; }
+.minimap-dir {
+  position: absolute; color: #d8e8ff; font-size: 11px; font-weight: bold;
+  text-shadow: 0 0 3px rgba(0,0,0,0.9); pointer-events: none;
+  font-family: monospace;
+}
+.minimap-dir-n { top: 2px; left: 50%; transform: translateX(-50%); }
+.minimap-dir-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.minimap-dir-w { left: 3px; top: 50%; transform: translateY(-50%); }
+.minimap-dir-e { right: 3px; top: 50%; transform: translateY(-50%); }
+
+/* 其他玩家头顶标签（昵称+血条） */
+#ship-labels {
+  position: fixed; inset: 0; z-index: 49; pointer-events: none;
+}
+.ship-label {
+  position: absolute; transform: translate(-50%, -100%);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 2px 6px; min-width: 80px;
+}
+.ship-label-name {
+  color: #ffffff; font-size: 12px; font-weight: bold; font-family: monospace;
+  text-shadow: 0 0 3px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.7);
+  white-space: nowrap; line-height: 1;
+}
+.ship-label-bar-outer {
+  width: 80px; height: 4px; background: rgba(0,0,0,0.7);
+  border: 1px solid rgba(0,0,0,0.5); border-radius: 2px; overflow: hidden;
+}
+.ship-label-bar-inner { height: 100%; transition: width 0.15s linear; }
+.ship-label-hp {
+  font-size: 10px; font-family: monospace; line-height: 1;
+  text-shadow: 0 0 3px rgba(0,0,0,0.95);
 }
 
 /* 游戏结束 */

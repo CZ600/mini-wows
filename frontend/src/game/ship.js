@@ -1,16 +1,16 @@
 import * as THREE from 'three';
 
 export const LEVEL_CONFIG = {
-  1:  { length: 7,  width: 2,  height: 1.5, hp: 100,  turnRadius: 20, fireCooldown: 5.0, damage: 30, frontTurrets: 1, backTurrets: 0, hasBridge: false },
-  2:  { length: 13, width: 3,  height: 2.0, hp: 150,  turnRadius: 30, fireCooldown: 4.5, damage: 35, frontTurrets: 1, backTurrets: 1, hasBridge: false },
-  3:  { length: 18, width: 4,  height: 2.5, hp: 220,  turnRadius: 35, fireCooldown: 4.0, damage: 40, frontTurrets: 2, backTurrets: 1, hasBridge: false },
-  4:  { length: 23, width: 5,  height: 3.0, hp: 300,  turnRadius: 40, fireCooldown: 3.5, damage: 45, frontTurrets: 2, backTurrets: 2, hasBridge: true },
-  5:  { length: 28, width: 6,  height: 3.5, hp: 400,  turnRadius: 45, fireCooldown: 3.2, damage: 50, frontTurrets: 2, backTurrets: 2, hasBridge: true },
-  6:  { length: 33, width: 7,  height: 4.0, hp: 520,  turnRadius: 50, fireCooldown: 2.8, damage: 55, frontTurrets: 3, backTurrets: 2, hasBridge: true },
-  7:  { length: 38, width: 8,  height: 4.5, hp: 650,  turnRadius: 55, fireCooldown: 2.5, damage: 60, frontTurrets: 3, backTurrets: 2, hasBridge: true },
-  8:  { length: 43, width: 9,  height: 5.0, hp: 800,  turnRadius: 60, fireCooldown: 2.2, damage: 65, frontTurrets: 3, backTurrets: 3, hasBridge: true },
-  9:  { length: 48, width: 10, height: 5.5, hp: 950,  turnRadius: 65, fireCooldown: 2.0, damage: 70, frontTurrets: 3, backTurrets: 3, hasBridge: true },
-  10: { length: 53, width: 11, height: 6.0, hp: 1100, turnRadius: 70, fireCooldown: 1.8, damage: 80, frontTurrets: 3, backTurrets: 3, hasBridge: true },
+  1:  { length: 7,  width: 2,  height: 1.5, hp: 300,  turnRadius: 20, fireCooldown: 5.0, damage: 30, frontTurrets: 1, backTurrets: 0, hasBridge: false },
+  2:  { length: 13, width: 3,  height: 2.0, hp: 450,  turnRadius: 30, fireCooldown: 4.5, damage: 35, frontTurrets: 1, backTurrets: 1, hasBridge: false },
+  3:  { length: 18, width: 4,  height: 2.5, hp: 660,  turnRadius: 35, fireCooldown: 4.0, damage: 40, frontTurrets: 2, backTurrets: 1, hasBridge: false },
+  4:  { length: 23, width: 5,  height: 3.0, hp: 900,  turnRadius: 40, fireCooldown: 3.5, damage: 45, frontTurrets: 2, backTurrets: 2, hasBridge: true },
+  5:  { length: 28, width: 6,  height: 3.5, hp: 1200, turnRadius: 45, fireCooldown: 3.2, damage: 50, frontTurrets: 2, backTurrets: 2, hasBridge: true },
+  6:  { length: 33, width: 7,  height: 4.0, hp: 1560, turnRadius: 50, fireCooldown: 2.8, damage: 55, frontTurrets: 3, backTurrets: 2, hasBridge: true },
+  7:  { length: 38, width: 8,  height: 4.5, hp: 1950, turnRadius: 55, fireCooldown: 2.5, damage: 60, frontTurrets: 3, backTurrets: 2, hasBridge: true },
+  8:  { length: 43, width: 9,  height: 5.0, hp: 2400, turnRadius: 60, fireCooldown: 2.2, damage: 65, frontTurrets: 3, backTurrets: 3, hasBridge: true },
+  9:  { length: 48, width: 10, height: 5.5, hp: 2850, turnRadius: 65, fireCooldown: 2.0, damage: 70, frontTurrets: 3, backTurrets: 3, hasBridge: true },
+  10: { length: 53, width: 11, height: 6.0, hp: 3300, turnRadius: 70, fireCooldown: 1.8, damage: 80, frontTurrets: 3, backTurrets: 3, hasBridge: true },
 };
 
 export const CLASS_CONFIG = {
@@ -24,22 +24,22 @@ export const CLASS_CONFIG = {
     10: { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 8, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7 },
   },
   cruiser: {
-    4:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
-    5:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
-    6:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
-    7:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
-    8:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
-    9:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
-    10: { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.0, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    4:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    5:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    6:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    7:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    8:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    9:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
+    10: { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85 },
   },
   battleship: {
-    4:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
-    5:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
-    6:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
-    7:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
-    8:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
-    9:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
-    10: { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 2.05, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    4:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    5:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    6:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    7:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    8:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    9:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
+    10: { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0 },
   },
 };
 

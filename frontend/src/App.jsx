@@ -14,6 +14,7 @@ import GameCanvas from './components/GameCanvas.jsx';
 import HUD from './components/HUD.jsx';
 import MultiplayerHUD from './components/MultiplayerHUD.jsx';
 import Minimap from './components/Minimap.jsx';
+import ShipLabels from './components/ShipLabels.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
@@ -203,20 +204,20 @@ function SinglePlayPage() {
 // Keeps canvas and mpEngine initialized across these pages so snapshots
 // received during room state don't crash (Ship constructor needs scene).
 function MultiCanvasLayout() {
-  const { mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData, mpScoped, mpEliminated } = useGame();
+  const { mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData, mpScoped, mpEliminated, mpShipLabels } = useGame();
 
   useEffect(() => {
-    if (mpCanvasRef.current && !mpInitializedRef.current) {
+    if (mpCanvasRef.current) {
       mpEngine.init(mpCanvasRef.current);
-      mpInitializedRef.current = true;
     }
-  }, [mpEngine, mpCanvasRef, mpInitializedRef]);
+  }, [mpEngine, mpCanvasRef]);
 
   return (
     <>
       <canvas ref={mpCanvasRef} id="game-canvas" />
       {mpHudData && <MultiplayerHUD data={mpHudData} />}
       {mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
+      {mpShipLabels && !mpScoped && <ShipLabels labels={mpShipLabels} />}
       {mpScoped && <ScopeOverlay />}
       {mpEliminated && (
         <div id="gameover-screen">

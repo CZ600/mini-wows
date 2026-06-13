@@ -78,9 +78,9 @@ class ProjectileManager:
             ship_ids = [pid for pid, _ in alive_ships]
             ship_positions = np.array([[s.pos_x, s.pos_z] for _, s in alive_ships])
             ship_headings = np.array([s.heading for _, s in alive_ships])
-            ship_half_w = np.array([s.ship_width / 2 + 0.5 for _, s in alive_ships])
-            ship_half_l = np.array([s.ship_length / 2 + 0.5 for _, s in alive_ships])
-            ship_heights = np.array([2.5] * len(alive_ships))
+            ship_half_w = np.array([s.ship_width / 2 + 2.0 for _, s in alive_ships])
+            ship_half_l = np.array([s.ship_length / 2 + 2.0 for _, s in alive_ships])
+            ship_heights = np.array([getattr(s, 'ship_height', 2.5) for _, s in alive_ships])
 
             cos_h = np.cos(ship_headings)
             sin_h = np.sin(ship_headings)

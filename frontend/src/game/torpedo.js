@@ -145,7 +145,7 @@ export class TorpedoManager {
           const dz = t.mesh.position.z - ep.z;
           const dist = Math.sqrt(dx * dx + dz * dz);
           if (dist < HIT_RADIUS + enemy.size / 2) {
-            enemy.takeDamage(50 + t.tier * 20);
+            enemy.takeDamage((50 + t.tier * 20) * 2);
             hit = true;
             break;
           }
@@ -159,7 +159,7 @@ export class TorpedoManager {
         const dist = Math.sqrt(dx * dx + dz * dz);
         const hitRadius = Math.max(ship.shipLength, ship.shipWidth) / 2;
         if (dist < hitRadius + HIT_RADIUS) {
-          ship.takeDamage(30 + t.tier * 15);
+          ship.takeDamage((30 + t.tier * 15) * 2);
           hit = true;
         }
       }

@@ -170,6 +170,30 @@ class GameState:
         wz = ship.pos_z + cos_h * local_dz - sin_h * local_dx
         return wx, wz
 
+    YAW_RANGE_FULL = math.pi
+    YAW_RANGE_BRIDGE = 2.2
+
+    def _get_turret_yaw_caps(self, ship):
+        """Return list of (yaw_center, yaw_range) per turret, mirroring client buildTurretDefs."""
+        from game.config import get_ship_config
+        cfg = get_ship_config(ship.level, ship.ship_class)
+        n_front = cfg["front_turrets"]
+        n_back = cfg["back_turrets"]
+        has_bridge = cfg.get("has_bridge", False)
+        yaw_range = self.YAW_RANGE_BRIDGE if has_bridge else self.YAW_RANGE_FULL
+        caps = []
+        for _ in range(n_front):
+            caps.append((0.0, yaw_range))
+        for _ in range(n_back):
+            caps.append((math.pi, yaw_range))
+        return caps
+
+    @staticmethod
+    def _turret_can_aim(yaw_center, yaw_range, local_aim_yaw):
+        """Mirrors client turretCanAim: check if aim yaw is within turret's arc."""
+        diff = (local_aim_yaw - yaw_center + math.pi) % (2 * math.pi) - math.pi
+        return abs(diff) <= yaw_range + 0.05
+
     def process_fire(self, player_id, msg):
         """Server-authoritative fire: client sends aim target, server creates projectile."""
         ship = self.ships.get(player_id)
@@ -215,9 +239,20 @@ class GameState:
             math.cos(yaw) * math.cos(pitch),
         )
 
+        local_aim_yaw = yaw - ship.heading
+        turret_caps = self._get_turret_yaw_caps(ship)
+
+        fireable = [
+            i for i in ready_turrets
+            if i < len(turret_caps)
+            and self._turret_can_aim(turret_caps[i][0], turret_caps[i][1], local_aim_yaw)
+        ]
+        if not fireable:
+            return
+
         turret_offsets = self._get_turret_offsets(ship)
 
-        for i in ready_turrets:
+        for i in fireable:
             if i < len(turret_offsets):
                 ldx, ldz = turret_offsets[i]
                 ox, oz = self._turret_world_pos(ship, ldx, ldz)
@@ -273,9 +308,6 @@ class GameState:
         proj_events = self.projectile_mgr.update(dt, self.terrain, self.ships)
         self.events.extend(proj_events)
 
-        # Process respawns
-        self._process_respawns()
-
         # Update torpedoes
         torp_events = self.torpedo_mgr.update(dt, self.ships)
         self.events.extend(torp_events)
@@ -296,6 +328,11 @@ class GameState:
                     "destroyed_by": "player",
                     "score": getattr(enemy, "score_value", 0),
                 })
+
+        # Process respawns — must run AFTER all damage sources so that
+        # ships killed by torpedoes/enemies this tick respawn immediately,
+        # preventing _check_game_end from seeing them as dead.
+        self._process_respawns()
 
         # Wave spawning for PvE modes
         if self.mode in ("pve", "solo"):

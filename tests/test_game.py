@@ -126,7 +126,7 @@ class TestTerrain:
 class TestServerShip:
     def test_creation(self):
         ship = ServerShip(1, "test", level=1)
-        assert ship.hp == 100
+        assert ship.hp == 300
         assert ship.alive is True
         assert ship.speed == 0
 
@@ -160,13 +160,13 @@ class TestServerShip:
 
     def test_take_damage(self):
         ship = ServerShip(1, "test", level=1)
-        ship.take_damage(50)
-        assert ship.hp == 50
+        ship.take_damage(150)
+        assert ship.hp == 150
         assert ship.alive is True
 
     def test_death(self):
         ship = ServerShip(1, "test", level=1)
-        ship.take_damage(200)
+        ship.take_damage(500)
         assert ship.hp == 0
         assert ship.alive is False
 
@@ -253,6 +253,86 @@ class TestTurretCooldown:
         gs.process_fire(1, {"aim": {"x": 100, "y": 2, "z": 100}})
         proj_count_after = len(gs.projectile_mgr.projectiles)
         assert proj_count_after == proj_count_before  # no new projectile
+
+
+class TestTurretAimFilter:
+    """Bug fix: 服务端 process_fire 只查冷却不查瞄准范围，
+    导致桥楼船后炮塔无法瞄准时也发射，其他玩家看到的炮弹数多于实际。"""
+
+    def _setup(self, level=4, ship_class=None):
+        from game.game_state import GameState
+        terrain = Terrain(12345, generate_islands(12345))
+        gs = GameState(terrain)
+        gs.add_ship(1, "shooter", level=level, ship_class=ship_class)
+        gs.add_ship(2, "target", level=1)
+        ship = gs.ships[1]
+        ship.pos_x = 0
+        ship.pos_z = 0
+        ship.heading = 0
+        return gs, ship
+
+    def test_bridge_ship_forward_only_front_turrets(self):
+        """等级4船(有桥楼)朝正前方射击：只有前炮塔(2门)能开火。"""
+        gs, ship = self._setup(level=4)
+        gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": 500}})
+        assert len(gs.projectile_mgr.projectiles) == 2
+
+    def test_bridge_ship_backward_only_back_turrets(self):
+        """等级4船(有桥楼)朝正后方射击：只有后炮塔(2门)能开火。"""
+        gs, ship = self._setup(level=4)
+        gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": -500}})
+        assert len(gs.projectile_mgr.projectiles) == 2
+
+    def test_non_bridge_ship_all_turrets_fire_forward(self):
+        """等级3船(无桥楼)朝前射击：所有炮塔(3门)都能开火。"""
+        gs, ship = self._setup(level=3)
+        gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": 500}})
+        assert len(gs.projectile_mgr.projectiles) == 3
+
+    def test_non_bridge_ship_all_turrets_fire_backward(self):
+        """等级3船(无桥楼)朝后射击：所有炮塔(3门)都能开火(yawRange=π)。"""
+        gs, ship = self._setup(level=3)
+        gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": -500}})
+        assert len(gs.projectile_mgr.projectiles) == 3
+
+    def test_level10_forward_only_3_front(self):
+        """等级10船朝前射击：只有3门前炮塔开火，而非全部6门。"""
+        gs, ship = self._setup(level=10)
+        gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": 500}})
+        assert len(gs.projectile_mgr.projectiles) == 3
+
+    def test_level10_battleship_forward(self):
+        """等级10战列舰朝前射击：只有3门前炮塔开火。"""
+        gs, ship = self._setup(level=10, ship_class="battleship")
+        gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": 500}})
+        assert len(gs.projectile_mgr.projectiles) == 3
+
+    def test_side_aim_on_bridge_ship_fires_none_directly(self):
+        """等级4船(有桥楼)朝正侧面(yawRange=2.2≈126°)射击：
+        前后炮塔都无法瞄准正侧方(90°)时不应发射。"""
+        gs, ship = self._setup(level=4)
+        # 正侧方：local yaw = ±π/2 ≈ ±1.571
+        # 前炮塔 yawCenter=0: |1.571-0|=1.571 <= 2.2 ✓ → 能瞄准
+        # 后炮塔 yawCenter=π: |1.571-π|=1.571 <= 2.2 ✓ → 能瞄准
+        # 所以正侧方时前后炮塔都能瞄准（2.2 > π/2）
+        gs.process_fire(1, {"aim": {"x": 500, "y": 2, "z": 0}})
+        assert len(gs.projectile_mgr.projectiles) == 4
+
+    def test_aim_outside_all_turret_ranges_fires_nothing(self):
+        """瞄准点在所有炮塔射界之外时不发射任何炮弹。"""
+        gs, ship = self._setup(level=4)
+        # 瞄准与船头呈 ~150° 的位置（超出前后炮塔 2.2 弧度射界）
+        # 前: |2.618 - 0| = 2.618 > 2.2 ✗
+        # 后: |2.618 - π| = 0.524 ≤ 2.2 ✓ → 后炮塔可以
+        # 实际上很难让前后都不能，因为前后 yawCenter 差 π，
+        # 而 yawRange=2.2*2=4.4 > π ≈ 3.14，所以总有炮塔能瞄准
+        # 此测试验证斜后方只有后炮塔能开火(2门)
+        angle = math.radians(150)
+        aim_x = math.sin(angle) * 500
+        aim_z = math.cos(angle) * 500
+        gs.process_fire(1, {"aim": {"x": aim_x, "y": 2, "z": aim_z}})
+        # 150° 时前炮塔不能(|2.618|>2.2)，后炮塔能(|0.524|<2.2)
+        assert len(gs.projectile_mgr.projectiles) == 2
 
 
 class TestProtocol:

@@ -17,6 +17,7 @@ export class Controls {
     this._availableTiers = [1, 2, 3];
 
     this._onKeyDown = (e) => {
+      if (e.key == null) return;
       const k = e.key.toLowerCase();
       if (k in this.keys) this.keys[k] = true;
 
@@ -58,6 +59,7 @@ export class Controls {
       }
     };
     this._onKeyUp = (e) => {
+      if (e.key == null) return;
       const k = e.key.toLowerCase();
       if (k in this.keys) this.keys[k] = false;
     };
