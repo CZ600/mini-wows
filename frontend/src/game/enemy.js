@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
+import { applyCannonSpread, compensateDragPitch } from './turret.js';
 
 export const ENEMY_SCALE = {
   1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
@@ -233,7 +234,7 @@ class EnemyShip {
     this.patrolTargetZ = this.spawnZ + Math.sin(angle) * r;
   }
 
-  updateShip(dt, playerPos, projectileManager, camera, torpedoManager) {
+  updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager) {
     this.cooldown -= dt;
     this.torpedoCooldown -= dt;
 
@@ -310,12 +311,20 @@ class EnemyShip {
     }
 
     if ((this.state === 'chase' || this.state === 'orbit') && dist < ENEMY_DETECT_RANGE) {
-      const targetYaw = Math.atan2(dx, dz);
+      // Lead prediction
+      const flightTime = dist / ENEMY_FIRE_SPEED;
+      const leadX = playerPos.x + Math.sin(playerHeading) * playerSpeed * flightTime;
+      const leadZ = playerPos.z + Math.cos(playerHeading) * playerSpeed * flightTime;
+      const leadDx = leadX - this.mesh.position.x;
+      const leadDz = leadZ - this.mesh.position.z;
+      const leadDist = Math.sqrt(leadDx * leadDx + leadDz * leadDz);
+
+      const targetYaw = Math.atan2(leadDx, leadDz);
       const localYaw = targetYaw - this.heading;
       for (const b of this._turretBodies) b.rotation.y = localYaw;
 
       const fireOriginY = this._deckY + 1;
-      const horizDist = dist;
+      const horizDist = leadDist;
       const dy = playerPos.y - fireOriginY;
 
       let pitch;
@@ -331,6 +340,8 @@ class EnemyShip {
         pitch = Math.max(-20 * Math.PI / 180, Math.min(80 * Math.PI / 180, pitch));
       }
 
+      pitch = compensateDragPitch(pitch, horizDist, ENEMY_FIRE_SPEED);
+
       for (const b of this._turretBarrels) b.rotation.x = Math.PI / 2 - pitch;
 
       if (this.cooldown <= 0) {
@@ -342,7 +353,8 @@ class EnemyShip {
         const dirX = Math.sin(targetYaw) * Math.cos(pitch);
         const dirY = Math.sin(pitch);
         const dirZ = Math.cos(targetYaw) * Math.cos(pitch);
-        projectileManager.fire(firePos, { x: dirX, y: dirY, z: dirZ }, this.damage, 'enemy');
+        const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist);
+        projectileManager.fire(firePos, dir, this.damage, 'enemy');
         this.cooldown = ENEMY_FIRE_COOLDOWN;
       }
     }
@@ -515,12 +527,12 @@ export class EnemyManager {
     };
   }
 
-  update(dt, playerPos, projectileManager, camera, torpedoManager) {
+  update(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager) {
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
 
       if (enemy.type === 'ship') {
-        enemy.updateShip(dt, playerPos, projectileManager, camera, torpedoManager);
+        enemy.updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager);
         continue;
       }
 
@@ -544,11 +556,19 @@ export class EnemyManager {
       const dist = Math.sqrt(dx * dx + dz * dz);
 
       if (dist < ENEMY_DETECT_RANGE) {
-        const targetYaw = Math.atan2(dx, dz);
+        // Lead prediction
+        const flightTime = dist / ENEMY_FIRE_SPEED;
+        const leadX = playerPos.x + Math.sin(playerHeading) * playerSpeed * flightTime;
+        const leadZ = playerPos.z + Math.cos(playerHeading) * playerSpeed * flightTime;
+        const leadDx = leadX - enemy.mesh.position.x;
+        const leadDz = leadZ - enemy.mesh.position.z;
+        const leadDist = Math.sqrt(leadDx * leadDx + leadDz * leadDz);
+
+        const targetYaw = Math.atan2(leadDx, leadDz);
         enemy.body.rotation.y = targetYaw;
 
         const fireOriginY = enemy.mesh.position.y + size / 2 + 2;
-        const horizDist = dist;
+        const horizDist = leadDist;
         const dy = playerPos.y - fireOriginY;
 
         let pitch;
@@ -566,6 +586,8 @@ export class EnemyManager {
           pitch = Math.max(-20 * Math.PI / 180, Math.min(80 * Math.PI / 180, pitch));
         }
 
+        pitch = compensateDragPitch(pitch, horizDist, ENEMY_FIRE_SPEED);
+
         enemy.barrel.rotation.x = Math.PI / 2 - pitch;
 
         if (enemy.cooldown <= 0) {
@@ -577,7 +599,8 @@ export class EnemyManager {
           const dirX = Math.sin(targetYaw) * Math.cos(pitch);
           const dirY = Math.sin(pitch);
           const dirZ = Math.cos(targetYaw) * Math.cos(pitch);
-          projectileManager.fire(firePos, { x: dirX, y: dirY, z: dirZ }, enemy.damage, 'enemy');
+          const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist);
+          projectileManager.fire(firePos, dir, enemy.damage, 'enemy');
           enemy.cooldown = ENEMY_FIRE_COOLDOWN;
         }
       }

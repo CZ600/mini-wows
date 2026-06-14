@@ -7,7 +7,7 @@ from game.config import (
 )
 from game.ship import ServerShip
 from game.terrain import Terrain
-from game.projectile import ProjectileManager
+from game.projectile import ProjectileManager, apply_cannon_spread, compensate_drag_pitch
 from game.torpedo import TorpedoManager
 from game.enemy import EnemyManager
 
@@ -233,11 +233,15 @@ class GameState:
             pitch = max(0, min(math.radians(60), pitch))
             yaw = math.atan2(dx, dz)
 
+        pitch = compensate_drag_pitch(pitch, horiz_dist, PROJECTILE_INITIAL_SPEED)
+
         direction = (
             math.sin(yaw) * math.cos(pitch),
             math.sin(pitch),
             math.cos(yaw) * math.cos(pitch),
         )
+
+        direction = apply_cannon_spread(direction, horiz_dist, ship.ship_class)
 
         local_aim_yaw = yaw - ship.heading
         turret_caps = self._get_turret_yaw_caps(ship)

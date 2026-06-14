@@ -3,7 +3,7 @@ import { createScene, createRenderer, createCamera } from './scene.js';
 import { createWater } from './water.js';
 import { Terrain } from './terrain.js';
 import { Ship, LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
-import { updateTurrets, getTurretFireData, calcBallisticAngles, turretCanAim } from './turret.js';
+import { updateTurrets, getTurretFireData, calcBallisticAngles, turretCanAim, applyCannonSpread } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { EnemyManager, ENEMY_SCALE } from './enemy.js';
@@ -183,7 +183,7 @@ export class GameEngine {
     if (!this.ship.alive) {
       this.audio.updateEngineBySpeed(0, this.ship.maxSpeed);
       this.projectileManager.update(dt, this.ship, this.enemyManager.enemies);
-      this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera, this.torpedoManager);
+      this.enemyManager.update(dt, this.ship.position, this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
       this.renderer.render(this.scene, this.camera);
       if (!this._gameOverFired && this.onGameOver) {
         this._gameOverFired = true;
@@ -254,7 +254,10 @@ export class GameEngine {
         for (const turret of this.ship.turrets) {
           if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
             const { origin, direction } = getTurretFireData(turret, this.ship.heading);
-            this.projectileManager.fire(origin, direction, this.ship.damage, 'player');
+            const dx = aimTarget.x - this.ship.mesh.position.x;
+            const dz = aimTarget.z - this.ship.mesh.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            this.projectileManager.fire(origin, applyCannonSpread(direction, dist, this.shipClass), this.ship.damage, 'player');
             turret.cooldown = this.ship.fireCooldown;
             anyFired = true;
           }
@@ -283,7 +286,7 @@ export class GameEngine {
       );
     }
     this._updateTorpedoCooldowns(dt);
-    this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera, this.torpedoManager);
+    this.enemyManager.update(dt, this.ship.position, this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
 
     for (const enemy of this.enemyManager.enemies) {
       if (enemy.alive && enemy.hp <= 0) {
@@ -341,6 +344,7 @@ export class GameEngine {
         })),
         torpedoMaxCooldown: this._getTorpedoCooldown(),
         shipClass: this.shipClass,
+        availableTorpedoTiers: this.controls.availableTorpedoTiers,
       });
     }
 

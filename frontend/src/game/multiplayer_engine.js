@@ -10,7 +10,7 @@ import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED } from './config.js';
 import { Ship, CLASS_CONFIG } from './ship.js';
-import { updateTurrets, calcBallisticAngles, turretCanAim } from './turret.js';
+import { updateTurrets, calcBallisticAngles, turretCanAim, applyCannonSpread } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 
@@ -979,6 +979,7 @@ export class MultiplayerEngine {
           ready: (this._torpedoCooldowns[i] || 0) <= 0,
         })),
         torpedoMaxCooldown: this._getTorpedoCooldown(),
+        availableTorpedoTiers: this.controls.availableTorpedoTiers,
       });
     }
 
@@ -1039,7 +1040,11 @@ export class MultiplayerEngine {
         turretWorldPos.y = 3.0; // turret height
 
         if (this._localProjMgr) {
-          this._localProjMgr.fire(turretWorldPos, { x: dirX, y: dirY, z: dirZ }, ship.damage, 'player');
+          const tdx = aimTarget.x - turretWorldPos.x;
+          const tdz = aimTarget.z - turretWorldPos.z;
+          const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+          const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, tdist, this.localShip.shipClass);
+          this._localProjMgr.fire(turretWorldPos, dir, ship.damage, 'player');
         }
         turret.cooldown = ship.fireCooldown;
         anyFired = true;

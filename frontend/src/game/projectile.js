@@ -3,6 +3,7 @@ import * as THREE from 'three';
 const GRAVITY = 9.8;
 const INITIAL_SPEED = 200;
 const MAX_LIFETIME = 10;
+const DRAG = 0.06;
 const TRAIL_LENGTH = 30;
 
 export class ProjectileManager {
@@ -53,6 +54,8 @@ export class ProjectileManager {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.lifetime += dt;
+      const drag = 1.0 - DRAG * dt;
+      p.velocity.multiplyScalar(drag);
       p.velocity.y -= GRAVITY * dt;
       p.mesh.position.addScaledVector(p.velocity, dt);
 

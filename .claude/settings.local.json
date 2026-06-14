@@ -121,7 +121,8 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5175/firecracker-explosion-underwater.mp3)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5175/splashing-sound-a-man-fell-into-the-water.mp3)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5175/Riptide%20Armada.mp3\")",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5175/Riptide%20Armada%202.mp3\")"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5175/Riptide%20Armada%202.mp3\")",
+      "Bash(npm --prefix \"D:/project/pythonProject/homework/wow/frontend\" run build)"
     ]
   }
 }

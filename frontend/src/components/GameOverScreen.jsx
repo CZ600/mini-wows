@@ -10,17 +10,17 @@ export default function GameOverScreen({ score, enemies, level, multiplayerResul
               <div key={r.id} style={{
                 padding: '8px 12px',
                 margin: '4px 0',
-                background: r.alive ? 'rgba(100,200,100,0.2)' : 'rgba(200,100,100,0.2)',
-                borderRadius: '6px',
+                background: r.alive ? 'rgba(106,255,164,0.14)' : 'rgba(255,122,122,0.14)',
+                borderRadius: 'var(--radius)',
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
               }}>
                 <span>
                   <strong>#{i + 1}</strong> {r.name}
-                  {r.team && <span style={{ marginLeft: 8, fontSize: 12, color: r.team === 'red' ? '#ff6666' : '#6688ff' }}>{r.team === 'red' ? '红队' : '蓝队'}</span>}
+                  {r.team && <span style={{ marginLeft: 8, fontSize: 12, color: r.team === 'red' ? 'var(--danger)' : 'var(--accent)' }}>{r.team === 'red' ? '红队' : '蓝队'}</span>}
                 </span>
-                <span style={{ fontSize: 14, color: r.alive ? '#88ff88' : '#ff8888' }}>
+                <span style={{ fontSize: 14, color: r.alive ? 'var(--success)' : 'var(--danger)' }}>
                   {r.alive ? '存活' : '击沉'}
                 </span>
               </div>

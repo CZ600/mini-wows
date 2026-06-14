@@ -1,6 +1,11 @@
 import math
+import random
 import numpy as np
-from game.config import GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME
+from game.config import (
+    GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG,
+    CANNON_SPREAD_BASE, CANNON_SPREAD_VERTICAL_MULT, CANNON_SPREAD_MAX_SIGMA,
+    CANNON_SPREAD_CLASS,
+)
 
 
 class ServerProjectile:
@@ -26,6 +31,13 @@ class ServerProjectile:
     def update(self, dt):
         self.lifetime += dt
         self.px, self.py, self.pz = self.x, self.y, self.z
+
+        # Drag: speed decays over time (non-ideal trajectory)
+        drag = 1.0 - PROJECTILE_DRAG * dt
+        self.vx *= drag
+        self.vy *= drag
+        self.vz *= drag
+
         self.vy -= GRAVITY * dt
         self.x += self.vx * dt
         self.y += self.vy * dt
@@ -45,6 +57,57 @@ class ServerProjectile:
             "z": round(self.z, 2),
             "owner": self.owner,
         }
+
+
+def apply_cannon_spread(direction, distance, ship_class=None):
+    """Perturb direction with angular spread centered on the original aim.
+
+    Spread model: sigma_h = class_base + distance * SPREAD_BASE * class_growth
+    - destroyer: tiny base, high growth → best close, worst far
+    - cruiser: medium base, medium growth → balanced
+    - battleship: larger base, low growth → best at range
+    Vertical sigma = horizontal * VERT_MULT.
+    Random values clamped at ±MAX_SIGMA sigma to avoid wild outliers.
+    """
+    class_cfg = CANNON_SPREAD_CLASS.get(ship_class, {"base": 0.0008, "growth": 0.4})
+    sigma_h = class_cfg["base"] + distance * CANNON_SPREAD_BASE * class_cfg["growth"]
+    sigma_v = sigma_h * CANNON_SPREAD_VERTICAL_MULT
+
+    max_h = CANNON_SPREAD_MAX_SIGMA * sigma_h
+    max_v = CANNON_SPREAD_MAX_SIGMA * sigma_v
+    delta_yaw = max(-max_h, min(max_h, random.gauss(0, sigma_h)))
+    delta_pitch = max(-max_v, min(max_v, random.gauss(0, sigma_v)))
+
+    if abs(delta_yaw) < 1e-9 and abs(delta_pitch) < 1e-9:
+        return direction
+
+    dx, dy, dz = direction
+    pitch = math.asin(max(-1.0, min(1.0, dy)))
+    yaw = math.atan2(dx, dz)
+
+    new_pitch = pitch + delta_pitch
+    new_pitch = max(-math.pi / 2 + 0.01, min(math.pi / 2 - 0.01, new_pitch))
+    new_yaw = yaw + delta_yaw
+
+    cos_p = math.cos(new_pitch)
+    return (
+        math.sin(new_yaw) * cos_p,
+        math.sin(new_pitch),
+        math.cos(new_yaw) * cos_p,
+    )
+
+
+def compensate_drag_pitch(pitch, horiz_dist, muzzle_speed):
+    """Adjust pitch to compensate for drag-induced range loss.
+
+    Without compensation, drag shortens the trajectory at longer ranges.
+    This adds a small empirical bump proportional to estimated flight time.
+    """
+    if horiz_dist < 1 or muzzle_speed <= 0:
+        return pitch
+    flight_time_est = horiz_dist / muzzle_speed
+    drag_loss = PROJECTILE_DRAG * flight_time_est * 0.5
+    return pitch + drag_loss * 0.4
 
 
 class ProjectileManager:

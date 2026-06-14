@@ -350,3 +350,233 @@ class TestProtocol:
         data = encode(msg)
         result = decode(data)
         assert result["data"] == [1, 2, 3]
+
+
+class TestCannonSpread:
+    """Cannon projectile spread: angular perturbation with class-based tuning."""
+
+    @staticmethod
+    def _make_dir(yaw, pitch):
+        return (
+            math.sin(yaw) * math.cos(pitch),
+            math.sin(pitch),
+            math.cos(yaw) * math.cos(pitch),
+        )
+
+    def test_spread_changes_direction(self):
+        """Spread should perturb the original direction (non-zero distance)."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+        result = apply_cannon_spread(original, 500)
+        assert result != original
+
+    def test_minimal_spread_at_zero_distance(self):
+        """At zero distance, only class base offset applies (small inherent inaccuracy)."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+        max_dev = 0.0
+        for _ in range(50):
+            r = apply_cannon_spread(original, 0, "destroyer")
+            dev = math.acos(max(-1, min(1,
+                original[0]*r[0] + original[1]*r[1] + original[2]*r[2])))
+            max_dev = max(max_dev, dev)
+        # At 0m with destroyer (base=0.0002), angular deviation should be tiny
+        # sigma_h=0.0002, sigma_v=0.0008, 3σ clamp → max ~0.0025 rad combined
+        assert max_dev < 0.005  # generous bound, covers 3σ outliers
+
+    def test_spread_increases_with_distance(self):
+        """Longer distance should produce larger angular deviation on average."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+
+        def avg_deviation(dist, n=200):
+            total = 0.0
+            for _ in range(n):
+                r = apply_cannon_spread(original, dist)
+                total += math.acos(max(-1, min(1,
+                    original[0]*r[0] + original[1]*r[1] + original[2]*r[2])))
+            return total / n
+
+        dev_200 = avg_deviation(200)
+        dev_800 = avg_deviation(800)
+        assert dev_800 > dev_200 * 1.5
+
+    def test_vertical_spread_larger_than_horizontal(self):
+        """Vertical (pitch) perturbation should exceed horizontal (yaw) on average."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+        orig_pitch = math.asin(max(-1, min(1, original[1])))
+        orig_yaw = math.atan2(original[0], original[2])
+
+        delta_pitches = []
+        delta_yaws = []
+        for _ in range(200):
+            r = apply_cannon_spread(original, 500)
+            dp = abs(math.asin(max(-1, min(1, r[1]))) - orig_pitch)
+            dy = abs(math.atan2(r[0], r[2]) - orig_yaw)
+            delta_pitches.append(dp)
+            delta_yaws.append(dy)
+
+        avg_dp = sum(delta_pitches) / len(delta_pitches)
+        avg_dy = sum(delta_yaws) / len(delta_yaws)
+        assert avg_dp > avg_dy * 2.0
+
+    def test_destroyer_best_at_close_range(self):
+        """At close range (100m), destroyer should have the tightest spread."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+
+        def avg_deviation(ship_class, n=200):
+            total = 0.0
+            for _ in range(n):
+                r = apply_cannon_spread(original, 100, ship_class)
+                total += math.acos(max(-1, min(1,
+                    original[0]*r[0] + original[1]*r[1] + original[2]*r[2])))
+            return total / n
+
+        dd_dev = avg_deviation("destroyer")
+        cl_dev = avg_deviation("cruiser")
+        bb_dev = avg_deviation("battleship")
+        assert dd_dev < cl_dev, f"destroyer({dd_dev:.6f}) should be < cruiser({cl_dev:.6f})"
+        assert cl_dev < bb_dev, f"cruiser({cl_dev:.6f}) should be < battleship({bb_dev:.6f})"
+
+    def test_battleship_best_at_long_range(self):
+        """At long range (800m), battleship should have the tightest spread."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+
+        def avg_deviation(ship_class, n=200):
+            total = 0.0
+            for _ in range(n):
+                r = apply_cannon_spread(original, 800, ship_class)
+                total += math.acos(max(-1, min(1,
+                    original[0]*r[0] + original[1]*r[1] + original[2]*r[2])))
+            return total / n
+
+        dd_dev = avg_deviation("destroyer")
+        cl_dev = avg_deviation("cruiser")
+        bb_dev = avg_deviation("battleship")
+        assert bb_dev < cl_dev, f"battleship({bb_dev:.6f}) should be < cruiser({cl_dev:.6f})"
+        assert cl_dev < dd_dev, f"cruiser({cl_dev:.6f}) should be < destroyer({dd_dev:.6f})"
+
+    def test_spread_ranks_cross_over(self):
+        """At medium range (300m), the order should have changed from close range,
+        with BB already overtaking DD in accuracy."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+
+        def avg_deviation(ship_class, n=200):
+            total = 0.0
+            for _ in range(n):
+                r = apply_cannon_spread(original, 300, ship_class)
+                total += math.acos(max(-1, min(1,
+                    original[0]*r[0] + original[1]*r[1] + original[2]*r[2])))
+            return total / n
+
+        dd_dev = avg_deviation("destroyer")
+        bb_dev = avg_deviation("battleship")
+        assert bb_dev < dd_dev, (
+            f"At 300m battleship({bb_dev:.6f}) should be better than destroyer({dd_dev:.6f})"
+        )
+
+    def test_unknown_class_defaults_to_cruiser(self):
+        """Unknown ship_class should use default (same as cruiser)."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+        r1 = apply_cannon_spread(original, 500, "cruiser")
+        r2 = apply_cannon_spread(original, 500, None)
+        for r in [r1, r2]:
+            mag = math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2])
+            assert abs(mag - 1.0) < 1e-9
+
+    def test_result_is_unit_vector(self):
+        """Spread must not change direction magnitude (still unit length)."""
+        from game.projectile import apply_cannon_spread
+        original = self._make_dir(0.5, 0.3)
+        for _ in range(50):
+            r = apply_cannon_spread(original, 500)
+            mag = math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2])
+            assert abs(mag - 1.0) < 1e-9
+
+    def test_spread_clamped_no_wild_outliers(self):
+        """Spread should never exceed ±3 sigma; check max deviation is bounded."""
+        from game.projectile import apply_cannon_spread
+        from game.config import CANNON_SPREAD_BASE, CANNON_SPREAD_VERTICAL_MULT, CANNON_SPREAD_MAX_SIGMA, CANNON_SPREAD_CLASS
+        original = self._make_dir(0.5, 0.3)
+        dist = 500
+        cc = CANNON_SPREAD_CLASS["cruiser"]
+        max_sigma_h = cc["base"] + CANNON_SPREAD_BASE * dist * cc["growth"]
+        max_sigma_v = max_sigma_h * CANNON_SPREAD_VERTICAL_MULT
+        max_h = CANNON_SPREAD_MAX_SIGMA * max_sigma_h
+        max_v = CANNON_SPREAD_MAX_SIGMA * max_sigma_v
+
+        for _ in range(100):
+            r = apply_cannon_spread(original, dist, "cruiser")
+            dp = abs(math.asin(max(-1, min(1, r[1]))) - math.asin(max(-1, min(1, original[1]))))
+            dy = abs(math.atan2(r[0], r[2]) - math.atan2(original[0], original[2]))
+            # Normalize yaw diff to [0, pi]
+            dy = min(dy, 2*math.pi - dy)
+            assert dp <= max_v + 1e-9
+            assert dy <= max_h + 1e-9
+
+
+class TestEnemyLeadPrediction:
+    """AI enemies predict player movement for lead targeting."""
+
+    def test_lead_ahead_of_stationary(self):
+        """Lead prediction should aim ahead of a moving target, not at current position."""
+        from game.config import ENEMY_FIRE_SPEED
+
+        px, pz = 500, 0
+        heading = math.pi / 2   # moving +X
+        speed = 10
+        enemy_x, enemy_z = 0, 0
+
+        dx = px - enemy_x
+        dz = pz - enemy_z
+        dist = math.sqrt(dx * dx + dz * dz)
+        flight_time = dist / ENEMY_FIRE_SPEED
+
+        lead_x = px + math.sin(heading) * speed * flight_time
+        lead_z = pz + math.cos(heading) * speed * flight_time
+
+        # Lead target should be ahead in +X direction (heading = pi/2 → sin=1, cos=0)
+        assert lead_x > px
+        assert abs(lead_z - pz) < 1e-6
+
+    def test_lead_behind_reversing_target(self):
+        """Lead prediction should handle reversing (negative speed) correctly."""
+        from game.config import ENEMY_FIRE_SPEED
+
+        px, pz = 500, 0
+        heading = 0          # pointing +Z
+        speed = -8           # reversing (moving -Z)
+
+        dx = px - 0
+        dz = pz - 0
+        dist = math.sqrt(dx * dx + dz * dz)
+        flight_time = dist / ENEMY_FIRE_SPEED
+
+        lead_x = px + math.sin(heading) * speed * flight_time
+        lead_z = pz + math.cos(heading) * speed * flight_time
+
+        # cos(0)=1, so lead_z < pz (moved backward)
+        assert lead_z < pz
+
+    def test_no_lead_when_target_stationary(self):
+        """Stationary target: lead position equals current position."""
+        from game.config import ENEMY_FIRE_SPEED
+
+        px, pz = 500, 0
+        heading, speed = 0.5, 0   # no speed
+
+        dx = px - 0
+        dz = pz - 0
+        dist = math.sqrt(dx * dx + dz * dz)
+        flight_time = dist / ENEMY_FIRE_SPEED
+
+        lead_x = px + math.sin(heading) * speed * flight_time
+        lead_z = pz + math.cos(heading) * speed * flight_time
+
+        assert abs(lead_x - px) < 1e-6
+        assert abs(lead_z - pz) < 1e-6

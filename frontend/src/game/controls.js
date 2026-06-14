@@ -104,6 +104,10 @@ export class Controls {
     this._availableTiers = availableTiers;
   }
 
+  get availableTorpedoTiers() {
+    return this._availableTiers;
+  }
+
   consumeFire() {
     if (this.wantsFire) {
       this.wantsFire = false;

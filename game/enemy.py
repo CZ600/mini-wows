@@ -4,6 +4,7 @@ from game.config import (
     GRAVITY, ENEMY_FIRE_COOLDOWN, ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED,
     ENEMY_SCALE, ENEMY_SHIP_SCALE, AI_DT, get_ship_config,
 )
+from game.projectile import apply_cannon_spread, compensate_drag_pitch
 
 
 class ServerTurret:
@@ -60,8 +61,16 @@ class ServerTurret:
         return closest
 
     def _fire(self, target_ship, game_state):
-        dx = target_ship.pos_x - self.x
-        dz = target_ship.pos_z - self.z
+        # Lead prediction: aim at where the target will be when the projectile arrives
+        raw_dx = target_ship.pos_x - self.x
+        raw_dz = target_ship.pos_z - self.z
+        raw_dist = math.sqrt(raw_dx * raw_dx + raw_dz * raw_dz)
+        flight_time = raw_dist / ENEMY_FIRE_SPEED if ENEMY_FIRE_SPEED > 0 else 0
+        lead_x = target_ship.pos_x + math.sin(target_ship.heading) * target_ship.speed * flight_time
+        lead_z = target_ship.pos_z + math.cos(target_ship.heading) * target_ship.speed * flight_time
+
+        dx = lead_x - self.x
+        dz = lead_z - self.z
         dist = math.sqrt(dx * dx + dz * dz)
         fire_origin_y = self.size / 2 + 2
 
@@ -78,12 +87,16 @@ class ServerTurret:
                 pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * dist))
             pitch = max(math.radians(-20), min(math.radians(80), pitch))
 
+        pitch = compensate_drag_pitch(pitch, dist, ENEMY_FIRE_SPEED)
+
         yaw = math.atan2(dx, dz)
         direction = (
             math.sin(yaw) * math.cos(pitch),
             math.sin(pitch),
             math.cos(yaw) * math.cos(pitch),
         )
+
+        direction = apply_cannon_spread(direction, dist)
 
         game_state.projectile_mgr.fire(
             f"e_{self.enemy_id}", self.damage,
@@ -266,28 +279,39 @@ class ServerEnemyShip:
 
     def _fire_at(self, target, dist, game_state):
         fire_origin_y = 3.0
+
+        # Lead prediction
+        flight_time = dist / ENEMY_FIRE_SPEED if ENEMY_FIRE_SPEED > 0 else 0
+        lead_x = target.pos_x + math.sin(target.heading) * target.speed * flight_time
+        lead_z = target.pos_z + math.cos(target.heading) * target.speed * flight_time
+        lead_dx = lead_x - self.x
+        lead_dz = lead_z - self.z
+        lead_dist = math.sqrt(lead_dx * lead_dx + lead_dz * lead_dz)
+
         dy = 0 - fire_origin_y
 
-        if dist < 1:
+        if lead_dist < 1:
             pitch = math.pi / 6
         else:
             v2 = ENEMY_FIRE_SPEED * ENEMY_FIRE_SPEED
             v4 = v2 * v2
-            disc = v4 - GRAVITY * (GRAVITY * dist * dist + 2 * dy * v2)
+            disc = v4 - GRAVITY * (GRAVITY * lead_dist * lead_dist + 2 * dy * v2)
             if disc < 0:
                 pitch = math.pi / 6
             else:
-                pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * dist))
+                pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * lead_dist))
             pitch = max(math.radians(-20), min(math.radians(80), pitch))
 
-        dx = target.pos_x - self.x
-        dz = target.pos_z - self.z
-        yaw = math.atan2(dx, dz)
+        pitch = compensate_drag_pitch(pitch, lead_dist, ENEMY_FIRE_SPEED)
+
+        yaw = math.atan2(lead_dx, lead_dz)
         direction = (
             math.sin(yaw) * math.cos(pitch),
             math.sin(pitch),
             math.cos(yaw) * math.cos(pitch),
         )
+
+        direction = apply_cannon_spread(direction, lead_dist)
 
         game_state.projectile_mgr.fire(
             f"e_{self.enemy_id}", self.damage,

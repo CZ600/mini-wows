@@ -1,10 +1,8 @@
-import { useState, useEffect } from 'react';
-
 export default function MultiplayerHUD({ data, events }) {
   if (!data) return null;
 
   const hpPercent = Math.max(0, (data.hp / data.maxHp) * 100);
-  const hpColor = hpPercent > 60 ? '#4dff88' : hpPercent > 30 ? '#ff9800' : '#ff4d4d';
+  const hpColor = hpPercent > 60 ? 'var(--success)' : hpPercent > 30 ? 'var(--warning)' : 'var(--danger)';
   const speed = data.speed || 0;
   const ping = data.ping || 0;
   const level = data.level || 1;
@@ -17,11 +15,24 @@ export default function MultiplayerHUD({ data, events }) {
 
   const weaponMode = data.weaponMode || 'gun';
   const torpedoTier = data.torpedoTier || 1;
-  const torpedoSpread = data.torpedoSpread || 'narrow';
   const torpedoTubes = data.torpedoTubes || [];
+  const torpedoMaxCooldown = data.torpedoMaxCooldown || 0;
+  const availableTorpedoTiers = data.availableTorpedoTiers || [];
 
   const tierLabels = { 1: '短/快', 2: '中程', 3: '远/慢' };
+  const tierKeys = { 1: '2', 2: '3', 3: '4' };
   const classNames = { destroyer: '驱逐舰', cruiser: '巡洋舰', battleship: '战列舰' };
+
+  const hasTorpedoes = torpedoTubes.length > 0 && availableTorpedoTiers.length > 0;
+  const sortedTiers = [...availableTorpedoTiers].sort((a, b) => a - b);
+
+  const allTubesReady = hasTorpedoes && torpedoTubes.every(t => t.ready);
+  const torpedoMaxRemaining = hasTorpedoes
+    ? (allTubesReady ? 0 : Math.max(...torpedoTubes.map(t => t.cooldown)))
+    : 0;
+  const torpedoFillPct = torpedoMaxCooldown > 0
+    ? Math.max(0, Math.min(100, ((torpedoMaxCooldown - torpedoMaxRemaining) / torpedoMaxCooldown) * 100))
+    : 100;
 
   return (
     <>
@@ -57,14 +68,14 @@ export default function MultiplayerHUD({ data, events }) {
           {respawns !== null && (
             <div className="hud-row hud-row-boxed">
               <span className="hud-label">重生</span>
-              <span className="hud-value" style={{ color: respawns > 0 ? '#4dff88' : '#ff4d4d' }}>
+              <span className="hud-value" style={{ color: respawns > 0 ? 'var(--success)' : 'var(--danger)' }}>
                 {respawns}
               </span>
             </div>
           )}
           <div className="hud-row hud-row-boxed">
             <span className="hud-label">延迟</span>
-            <span className="hud-value" style={{ color: ping < 50 ? '#4dff88' : ping < 100 ? '#ff9800' : '#ff4d4d' }}>
+            <span className="hud-value" style={{ color: ping < 50 ? 'var(--success)' : ping < 100 ? 'var(--warning)' : 'var(--danger)' }}>
               {ping}ms
             </span>
           </div>
@@ -97,60 +108,68 @@ export default function MultiplayerHUD({ data, events }) {
           </div>
         </div>
 
-        {/* Middle - Weapon info */}
-        <div className="hud-bottom-middle">
-          {weaponMode === 'gun' ? (
-            <div className="weapon-box selected">
-              <div className="weapon-name">火炮</div>
-              <div className="weapon-ammo">{frontTurrets.length + backTurrets.length} 门</div>
-              <div className="weapon-cooldown">
+        {/* Middle - Reload bars + Weapon slots */}
+        <div className="hud-bottom-middle hud-weapon-stack">
+          <div className="reload-bar-container">
+            {weaponMode === 'gun' ? (
+              <>
                 {frontTurrets.map((t, i) => {
                   const ready = t.cooldown <= 0;
+                  const pct = t.maxCooldown > 0
+                    ? Math.max(0, Math.min(100, ((t.maxCooldown - t.cooldown) / t.maxCooldown) * 100))
+                    : 100;
                   return (
-                    <div key={`f${i}`} className="cooldown-item">
-                      <span className="cooldown-label">前{i + 1}</span>
-                      <span className={`cooldown-time ${ready ? 'ready' : ''}`}>
-                        {ready ? '就绪' : t.cooldown.toFixed(1) + 's'}
-                      </span>
+                    <div key={`f${i}`} className="reload-bar">
+                      <span className="reload-bar-label">前{i + 1}</span>
+                      <div className="reload-bar-track">
+                        <div className={`reload-bar-fill ${ready ? 'ready' : ''}`} style={{ width: pct + '%' }} />
+                      </div>
                     </div>
                   );
                 })}
                 {backTurrets.map((t, i) => {
                   const ready = t.cooldown <= 0;
+                  const pct = t.maxCooldown > 0
+                    ? Math.max(0, Math.min(100, ((t.maxCooldown - t.cooldown) / t.maxCooldown) * 100))
+                    : 100;
                   return (
-                    <div key={`b${i}`} className="cooldown-item">
-                      <span className="cooldown-label">后{i + 1}</span>
-                      <span className={`cooldown-time ${ready ? 'ready' : ''}`}>
-                        {ready ? '就绪' : t.cooldown.toFixed(1) + 's'}
-                      </span>
+                    <div key={`b${i}`} className="reload-bar">
+                      <span className="reload-bar-label">后{i + 1}</span>
+                      <div className="reload-bar-track">
+                        <div className={`reload-bar-fill ${ready ? 'ready' : ''}`} style={{ width: pct + '%' }} />
+                      </div>
                     </div>
                   );
                 })}
+              </>
+            ) : (
+              <div className="reload-bar">
+                <span className="reload-bar-label">装填</span>
+                <div className="reload-bar-track">
+                  <div className={`reload-bar-fill ${allTubesReady ? 'ready' : ''}`} style={{ width: torpedoFillPct + '%' }} />
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="weapon-box selected">
-              <div className="weapon-name">鱼雷 {tierLabels[torpedoTier] || ''}</div>
-              <div className="weapon-ammo">{torpedoSpread === 'narrow' ? '窄扇' : '宽扇'}</div>
-              <div className="weapon-cooldown">
-                {(() => {
-                  const allReady = torpedoTubes.every(t => t.ready);
-                  const maxCooldown = allReady ? 0 : Math.max(...torpedoTubes.map(t => t.cooldown));
-                  return (
-                    <div className="cooldown-item">
-                      <span className="cooldown-label">装填</span>
-                      <span className={`cooldown-time ${allReady ? 'ready' : ''}`}>
-                        {allReady ? '就绪' : maxCooldown.toFixed(1) + 's'}
-                      </span>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        <div className="hud-bottom-right" />
+          <div className="weapon-bar">
+            <div className={`weapon-slot ${weaponMode === 'gun' ? 'selected' : ''}`}>
+              <span className="weapon-slot-key">1</span>
+              <div className="weapon-slot-name">火炮</div>
+              <div className="weapon-slot-desc">{frontTurrets.length + backTurrets.length} 门</div>
+            </div>
+            {hasTorpedoes && sortedTiers.map(tier => (
+              <div
+                key={tier}
+                className={`weapon-slot torpedo ${weaponMode === 'torpedo' && torpedoTier === tier ? 'selected' : ''}`}
+              >
+                <span className="weapon-slot-key">{tierKeys[tier]}</span>
+                <div className="weapon-slot-name">鱼雷</div>
+                <div className="weapon-slot-desc">{tierLabels[tier] || ''}{torpedoTubes.length}管</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </>
   );

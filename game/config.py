@@ -26,6 +26,25 @@ DECEL_FRICTION = 0.98
 GRAVITY = 9.8
 PROJECTILE_INITIAL_SPEED = 200
 PROJECTILE_MAX_LIFETIME = 10
+PROJECTILE_DRAG = 0.06        # speed decay per second (6%/s)
+
+# Cannon spread: elliptical scatter centered on aim point.
+# Long axis (sigma_v) is along the aim direction (pitch perturbation → range error).
+# Short axis (sigma_h) is perpendicular (yaw perturbation → lateral error).
+# sigma_v = sigma_h * VERT_MULT  (long axis = perpendicular * mult)
+CANNON_SPREAD_BASE = 0.00001     # radians per meter (horizontal sigma)
+CANNON_SPREAD_VERTICAL_MULT = 3.0
+CANNON_SPREAD_MAX_SIGMA = 3.0    # clamp random at ±N sigma
+
+# Per-class params: sigma_h = base + distance * SPREAD_BASE * growth
+# Destroyer: tightest at close range, degrades fastest with distance
+# Cruiser: balanced
+# Battleship: looser up close, flattest curve (best at long range)
+CANNON_SPREAD_CLASS = {
+    "destroyer":   {"base": 0.00005, "growth": 0.8},
+    "cruiser":     {"base": 0.0008,  "growth": 0.4},
+    "battleship":  {"base": 0.0015,  "growth": 0.15},
+}
 
 # Enemy
 ENEMY_FIRE_COOLDOWN = 8.0

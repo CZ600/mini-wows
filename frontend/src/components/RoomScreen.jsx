@@ -33,16 +33,16 @@ export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelec
     <div id="menu-screen">
       <div className="menu-container">
         <h1 className="game-title">房间</h1>
-        <p style={{ color: '#aaa', marginBottom: '8px' }}>
-          模式: {modeNames[mode] || mode} | 等级: <strong style={{ color: '#ffaa00' }}>Lv.{roomLevel}</strong> | 房间号: <strong style={{ color: '#fff', fontSize: '18px' }}>{roomId}</strong>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '8px' }}>
+          模式: {modeNames[mode] || mode} | 等级: <strong style={{ color: 'var(--gold)' }}>Lv.{roomLevel}</strong> | 房间号: <strong style={{ color: 'var(--text-primary)', fontSize: '18px' }}>{roomId}</strong>
           {mode === 'ffa' && (
-            <> | 重生: <strong style={{ color: respawnLimit > 0 ? '#4dff88' : '#ff4d4d' }}>{respawnLimit}次</strong></>
+            <> | 重生: <strong style={{ color: respawnLimit > 0 ? 'var(--success)' : 'var(--danger)' }}>{respawnLimit}次</strong></>
           )}
         </p>
 
         {countdown != null && (
           <div style={{
-            fontSize: '48px', color: '#ffaa00', fontWeight: 'bold',
+            fontSize: '48px', color: 'var(--gold)', fontWeight: 'bold',
             textAlign: 'center', margin: '16px 0', animation: 'pulse 1s infinite',
           }}>
             {countdown}
@@ -50,23 +50,23 @@ export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelec
         )}
 
         <div style={{
-          background: '#1a1a2e', borderRadius: '8px', padding: '12px',
-          marginBottom: '16px', minHeight: '120px',
+          background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: '12px',
+          marginBottom: '16px', minHeight: '120px', boxShadow: 'var(--card-shadow)',
         }}>
-          <p style={{ color: '#aaa', marginBottom: '8px' }}>玩家列表 ({players.length})</p>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '8px' }}>玩家列表 ({players.length})</p>
           {players.map(p => (
             <div key={p.id} style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '6px 8px', borderBottom: '1px solid #333',
+              padding: '6px 8px', borderBottom: '1px solid var(--border)',
             }}>
-              <span style={{ color: p.connected ? '#fff' : '#666' }}>
+              <span style={{ color: p.connected ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
                 {p.name} {p.id === userId ? '(你)' : ''} {!p.connected ? '(断线)' : ''}
-                {p.shipClass && <span style={{ color: '#aaa', marginLeft: 8 }}>[{SHIP_CLASSES.find(c => c.id === p.shipClass)?.name || p.shipClass}]</span>}
+                {p.shipClass && <span style={{ color: 'var(--text-secondary)', marginLeft: 8 }}>[{SHIP_CLASSES.find(c => c.id === p.shipClass)?.name || p.shipClass}]</span>}
               </span>
               <span style={{
-                padding: '2px 8px', borderRadius: '4px', fontSize: '12px',
-                background: p.ready ? '#2e7d32' : '#555',
-                color: p.ready ? '#fff' : '#aaa',
+                padding: '2px 8px', borderRadius: 'var(--radius)', fontSize: '12px',
+                background: p.ready ? 'rgba(106,255,164,0.18)' : 'rgba(255,255,255,0.08)',
+                color: p.ready ? 'var(--success)' : 'var(--text-tertiary)',
               }}>
                 {p.ready ? '已准备' : '未准备'}
               </span>
@@ -77,7 +77,7 @@ export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelec
         {/* Ship class selection for level 4+ rooms */}
         {needsClassSelect && !readied && (
           <div style={{ marginBottom: '16px' }}>
-            <p style={{ color: '#ffaa00', marginBottom: '8px' }}>等级4+房间，请选择舰船类型：</p>
+            <p style={{ color: 'var(--gold)', marginBottom: '8px' }}>等级4+房间，请选择舰船类型：</p>
             <div style={{ display: 'flex', gap: '12px' }}>
               {SHIP_CLASSES.map(cls => (
                 <div
@@ -94,7 +94,7 @@ export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelec
           </div>
         )}
 
-        <p style={{ color: '#888', fontSize: '12px', marginBottom: '16px' }}>
+        <p style={{ color: 'var(--text-tertiary)', fontSize: '12px', marginBottom: '16px' }}>
           分享房间号 <strong>{roomId}</strong> 给好友即可加入
         </p>
 
