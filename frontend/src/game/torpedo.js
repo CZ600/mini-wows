@@ -69,9 +69,10 @@ export class TorpedoManager {
       triShape.lineTo(1.3, 1);
       triShape.lineTo(-1.3, 1);
       triShape.closePath();
+      const markerColor = owner === 'player' ? 0x00ffff : 0xff0000;
       const marker = new THREE.Mesh(
         new THREE.ShapeGeometry(triShape),
-        new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
+        new THREE.MeshBasicMaterial({ color: markerColor, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
       );
       marker.position.y = 3.0;
       mesh.add(marker);

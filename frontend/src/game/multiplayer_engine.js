@@ -535,7 +535,7 @@ export class MultiplayerEngine {
         triShape.closePath();
         const marker = new THREE.Mesh(
           new THREE.ShapeGeometry(triShape),
-          new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, transparent: true, opacity: 0.8 })
+          new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, transparent: true, opacity: 0.85 })
         );
         marker.position.y = 3.0;
         mesh.add(marker);
@@ -550,12 +550,28 @@ export class MultiplayerEngine {
         this.scene.add(mesh);
 
         this._torpedoVisuals[torp.id] = {
-          mesh, trail, trailData: [],
+          mesh, marker, trail, trailData: [],
           prevX: torp.x, prevZ: torp.z,
         };
       }
 
       const entry = this._torpedoVisuals[torp.id];
+
+      const ownerKey = String(torp.owner);
+      const myIdStr = String(this._myId ?? '');
+      let isFriendly = ownerKey === myIdStr;
+      if (!isFriendly && this._localTeam != null) {
+        const otherEntry = this.otherShips[ownerKey];
+        const otherTeam = otherEntry?.lastSnap?.team ?? null;
+        if (otherTeam != null && otherTeam === this._localTeam) {
+          isFriendly = true;
+        }
+      }
+      const targetColor = isFriendly ? 0x00ffff : 0xff0000;
+      if (entry.marker.material.color.getHex() !== targetColor) {
+        entry.marker.material.color.setHex(targetColor);
+      }
+
       entry.mesh.position.set(torp.x, -0.5, torp.z);
 
       // Calculate heading from movement direction

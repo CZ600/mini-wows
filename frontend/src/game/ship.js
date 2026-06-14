@@ -330,7 +330,7 @@ export class Ship {
   }
 
   _initWake() {
-    const max = 200;
+    const max = 280;
     this._wakeMax = max;
     this._wakeData = new Array(max);
     this._wakeEmitAccum = 0;
@@ -388,22 +388,22 @@ export class Ship {
     const p = this._wakeData[idx];
     p.active = true;
     p.life = 0;
-    p.maxLife = 1.0 + Math.random() * 0.8;
+    p.maxLife = 1.2 + Math.random() * 0.8;
 
     const halfLen = this.shipLength / 2;
-    const halfW = this.shipWidth * 0.2;
+    const halfW = this.shipWidth * 0.25;
     const sinH = Math.sin(this.heading);
     const cosH = Math.cos(this.heading);
 
     const side = (Math.random() - 0.5) * 2 * halfW;
     p.x = this.position.x - sinH * halfLen + cosH * side;
-    p.y = 0.3 + Math.random() * 0.4;
+    p.y = 1.6 + Math.random() * 1.0;
     p.z = this.position.z - cosH * halfLen - sinH * side;
 
-    const backSpeed = Math.abs(this.speed) * 0.2 + Math.random() * 1.5;
-    const spread = (Math.random() - 0.5) * 2;
+    const backSpeed = Math.abs(this.speed) * 0.25 + Math.random() * 2.0;
+    const spread = (Math.random() - 0.5) * 2.5;
     p.vx = -sinH * backSpeed + cosH * spread;
-    p.vy = Math.random() * 1.2;
+    p.vy = 2.2 + Math.random() * 2.3;
     p.vz = -cosH * backSpeed - sinH * spread;
   }
 
@@ -425,14 +425,14 @@ export class Ship {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;
-        p.vy -= 3.0 * dt;
-        if (p.y < 0) { p.y = 0; p.vy = 0; }
+        p.vy -= 4.0 * dt;
+        if (p.y < 0.3) { p.y = 0.3; p.vy = 0; }
         positions[i * 3] = p.x;
         positions[i * 3 + 1] = p.y;
         positions[i * 3 + 2] = p.z;
         const t = p.life / p.maxLife;
-        opacities[i] = (1 - t) * 0.7;
-        sizes[i] = (0.5 + t * 1.5) * (1 + this.shipWidth * 0.1);
+        opacities[i] = (1 - t) * 0.85;
+        sizes[i] = (0.9 + t * 2.0) * (1 + this.shipWidth * 0.12);
       }
     }
 
@@ -538,7 +538,7 @@ export class Ship {
     this.mesh.rotation.y = this.heading;
 
     if (Math.abs(this.speed) > 1) {
-      this._wakeEmitAccum += Math.abs(this.speed) * 5 * dt;
+      this._wakeEmitAccum += Math.abs(this.speed) * 7 * dt;
       while (this._wakeEmitAccum >= 1) {
         this._emitWake();
         this._wakeEmitAccum -= 1;
