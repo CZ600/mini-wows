@@ -71,7 +71,7 @@ export class ProjectileManager {
         const th = this.terrain.getHeightAt(p.mesh.position.x, p.mesh.position.z);
         if (th > 0 && p.mesh.position.y <= th) {
           this._explode(p.mesh.position.clone(), 0xff6622, 5);
-          if (this.audio) this.audio.playExplosion();
+          if (p.owner === 'player' && this.audio) this.audio.playExplosion();
           hit = true;
         }
       }

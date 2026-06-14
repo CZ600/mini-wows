@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Routes, Route, Navigate, useNavigate, Outlet } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { Routes, Route, Navigate, useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { useGame, NavigationHelper } from './context/GameContext.jsx';
 import { AuthRoute, AdminRoute } from './components/AuthRoute.jsx';
 import { GameProvider } from './context/GameContext.jsx';
@@ -19,6 +19,10 @@ import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
 import './App.css';
+
+const MENU_BGM_SOUND = '/Riptide%20Armada%202.mp3';
+const MENU_BGM_VOLUME = 0.1;
+const PREP_PATHS = new Set(['/', '/single', '/multi', '/multi/room', '/class-select', '/gameover']);
 
 function ScopeOverlay() {
   return (
@@ -172,7 +176,7 @@ function RoomPage() {
 }
 
 function SinglePlayPage() {
-  const { engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized, pendingStartRef } = useGame();
+  const { engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized, pendingStartRef, spStartedRef } = useGame();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -180,12 +184,12 @@ function SinglePlayPage() {
       navigate('/single', { replace: true });
       return;
     }
-    if (spInitialized && pendingStartRef.current) {
+    if (spInitialized && pendingStartRef.current && !spStartedRef.current) {
       const { level, shipClass } = pendingStartRef.current;
-      pendingStartRef.current = null;
+      spStartedRef.current = true;
       engine.start(level, shipClass);
     }
-  }, [spInitialized, engine, pendingStartRef, navigate]);
+  }, [spInitialized, engine, pendingStartRef, spStartedRef, navigate]);
 
   if (!pendingStartRef.current) return null;
 
@@ -271,6 +275,31 @@ export default function App() {
 
 function AppRoutes() {
   const { authState } = useGame();
+  const location = useLocation();
+  const menuBgmRef = useRef(null);
+
+  useEffect(() => {
+    if (authState !== 'AUTHENTICATED') return;
+    if (!menuBgmRef.current) {
+      const a = new Audio(MENU_BGM_SOUND);
+      a.loop = true;
+      a.volume = MENU_BGM_VOLUME;
+      menuBgmRef.current = a;
+    }
+    const a = menuBgmRef.current;
+    if (PREP_PATHS.has(location.pathname)) {
+      if (a.paused) a.play().catch(() => {});
+    } else if (!a.paused) {
+      a.pause();
+    }
+  }, [authState, location.pathname]);
+
+  useEffect(() => () => {
+    if (menuBgmRef.current) {
+      menuBgmRef.current.pause();
+      menuBgmRef.current = null;
+    }
+  }, []);
 
   if (authState === 'CHECKING') {
     return (

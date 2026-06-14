@@ -37,9 +37,10 @@ export function calcSpreadAngles(tubeCount, spread) {
 }
 
 export class TorpedoManager {
-  constructor(scene, terrain) {
+  constructor(scene, terrain, audio) {
     this.scene = scene;
     this.terrain = terrain;
+    this.audio = audio;
     this.torpedoes = [];
     this.fanArcs = [];
     this._aimFan = null;
@@ -146,6 +147,7 @@ export class TorpedoManager {
           const dist = Math.sqrt(dx * dx + dz * dz);
           if (dist < HIT_RADIUS + enemy.size / 2) {
             enemy.takeDamage((50 + t.tier * 20) * 2);
+            if (this.audio) this.audio.playTorpedoHit();
             hit = true;
             break;
           }
@@ -160,6 +162,7 @@ export class TorpedoManager {
         const hitRadius = Math.max(ship.shipLength, ship.shipWidth) / 2;
         if (dist < hitRadius + HIT_RADIUS) {
           ship.takeDamage((30 + t.tier * 15) * 2);
+          if (this.audio) this.audio.playTorpedoHit();
           hit = true;
         }
       }

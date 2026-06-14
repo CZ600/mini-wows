@@ -213,7 +213,7 @@ export class MultiplayerEngine {
   _startGame(msg) {
     this._cleanupGame();
 
-    try { this.audio.init(); } catch (e) { /* audio unavailable */ }
+    try { this.audio.init(); this.audio.startAmbient(); this.audio.startBGM(); } catch (e) { /* audio unavailable */ }
 
     // Create terrain from server seed/islands
     this.terrain = new Terrain(this.scene, msg.terrainSeed, msg.islands);
@@ -221,7 +221,7 @@ export class MultiplayerEngine {
     this._minimapTerrain = this.terrain.generateMinimapImage?.() || null;
 
     // Create torpedo manager for rendering
-    this.torpedoManager = new TorpedoManager(this.scene, this.terrain);
+    this.torpedoManager = new TorpedoManager(this.scene, this.terrain, this.audio);
     this._localProjMgr = new ProjectileManager(this.scene, this.terrain, this.audio);
 
     // Find my player data
@@ -422,14 +422,20 @@ export class MultiplayerEngine {
       this._updateTorpedoVisuals(msg.torps);
     }
 
-    // Process events
+    // Process events — only play explosion for events involving the local player
     if (msg.evts) {
+      const me = String(this._myId ?? '');
       for (const evt of msg.evts) {
-        if (evt.type === 'hit') {
-          this.audio.playExplosion();
-        }
-        if (evt.type === 'kill') {
-          this.audio.playExplosion();
+        if (evt.type === 'hit' || evt.type === 'kill') {
+          const target = String(evt.target ?? '');
+          const attacker = String(evt.attacker ?? evt.destroyed_by ?? '');
+          if (target === me || attacker === me) {
+            if (evt.weapon === 'torpedo') {
+              this.audio.playTorpedoHit();
+            } else {
+              this.audio.playExplosion();
+            }
+          }
         }
       }
     }
@@ -805,6 +811,10 @@ export class MultiplayerEngine {
       // Send input to server
       this.inputSender.update(keys, this.controls.orbitYaw, this.controls.orbitPitch);
       this.inputSender.sendInput();
+
+      this.audio.updateEngineBySpeed(this.localShip.speed, this.localShip.max_speed);
+    } else {
+      this.audio.updateEngineBySpeed(0, this.localShip.max_speed || 1);
     }
 
     // Update local ship mesh
@@ -1021,7 +1031,7 @@ export class MultiplayerEngine {
     }
     if (anyFired) {
       this.inputSender.sendFire({ x: aimTarget.x, y: aimTarget.y, z: aimTarget.z });
-      this.audio.playFire();
+      this.audio.playFire(this.localShip.shipClass);
     }
   }
 
@@ -1046,7 +1056,7 @@ export class MultiplayerEngine {
     for (const idx of readyTubes) {
       this._torpedoCooldowns[idx] = cd;
     }
-    this.audio.playFire();
+    this.audio.playTorpedoLaunch();
   }
 
   _updateTorpedoCooldowns(dt) {
@@ -1065,6 +1075,7 @@ export class MultiplayerEngine {
   }
 
   _cleanupGame() {
+    if (this.audio) this.audio.stopAll();
     if (this.terrain) {
       this.terrain.destroy?.();
       this.terrain = null;
@@ -1125,6 +1136,7 @@ export class MultiplayerEngine {
     this._initDone = false;
     this.running = false;
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
+    if (this.audio) this.audio.stopAll();
     this.ws.disconnect();
     if (this.controls) this.controls.destroy();
     this._cleanupGame();

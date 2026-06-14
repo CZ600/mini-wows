@@ -31,6 +31,7 @@ export function GameProvider({ children }) {
   const mpInitializedRef = useRef(false);
   const spInitializedRef = useRef(false);
   const pendingStartRef = useRef(null);
+  const spStartedRef = useRef(false);
   const pendingRoomRef = useRef(false);
 
   // Single player state
@@ -175,6 +176,7 @@ export function GameProvider({ children }) {
       setPlayerClass(playerIdRef.current, initialClass).catch(() => {});
     }
     pendingStartRef.current = { level: initialLevel, shipClass: initialClass };
+    spStartedRef.current = false;
     setSpInitialized(false);
     nav('/play');
   };
@@ -190,6 +192,7 @@ export function GameProvider({ children }) {
       } catch { /* offline */ }
     }
     pendingStartRef.current = { level: startLevel, shipClass };
+    spStartedRef.current = false;
     setSpInitialized(false);
     nav('/play');
     if (playerIdRef.current) {
@@ -206,6 +209,7 @@ export function GameProvider({ children }) {
       resetPlayerProgress(playerIdRef.current).catch(() => {});
     }
     pendingStartRef.current = { level: 1, shipClass: null };
+    spStartedRef.current = false;
     setSpInitialized(false);
     nav('/play');
     if (playerIdRef.current) {
@@ -218,6 +222,8 @@ export function GameProvider({ children }) {
 
   const handleClassSelect = async (shipClass) => {
     engine.selectClass(shipClass);
+    pendingStartRef.current = { level: engine.level || 4, shipClass };
+    spStartedRef.current = true;
     if (playerIdRef.current) {
       setPlayerClass(playerIdRef.current, shipClass).catch(() => {});
       savePlayerProgress(playerIdRef.current, 4).catch(() => {});
@@ -299,7 +305,7 @@ export function GameProvider({ children }) {
     // Engine refs
     engine, mpEngine,
     playerIdRef, gameIdRef,
-    mpCanvasRef, mpInitializedRef, spInitializedRef, pendingStartRef, pendingRoomRef,
+    mpCanvasRef, mpInitializedRef, spInitializedRef, pendingStartRef, spStartedRef, pendingRoomRef,
 
     // Single player state
     hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,

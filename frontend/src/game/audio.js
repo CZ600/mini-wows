@@ -1,77 +1,166 @@
+const FIRE_SOUND = {
+  destroyer: '/artillery-shot.mp3',
+  cruiser: '/artillery-shot.mp3',
+  battleship: '/single-explosion.mp3',
+};
+const DEFAULT_FIRE_SOUND = '/artillery-shot.mp3';
+const EXPLOSION_SOUND = '/bomb-explosion-with-flying-fragments.mp3';
+const AMBIENT_SOUND = '/waves-splash-sea-ocean-coast.mp3';
+const ENGINE_SOUND = '/auto-volkswagen-engine-at-low-speed-entry-outside.mp3';
+const TORPEDO_HIT_SOUND = '/firecracker-explosion-underwater.mp3';
+const TORPEDO_LAUNCH_SOUND = '/splashing-sound-a-man-fell-into-the-water.mp3';
+const BGM_SOUND = '/Riptide%20Armada.mp3';
+
+const AMBIENT_VOLUME = 0.12;
+const BGM_VOLUME = 0.1;
+const ENGINE_MIN_VOLUME = 0.2;
+const ENGINE_MAX_VOLUME = 0.6;
+const FIRE_VOLUME = 0.7;
+const EXPLOSION_VOLUME = 0.25;
+const TORPEDO_HIT_VOLUME = 0.6;
+const TORPEDO_LAUNCH_VOLUME = 0.4;
+const EXPLOSION_THROTTLE_MS = 250;
+const ENGINE_START_SPEED = 0.5;
+const TORPEDO_HIT_START = 1;
+const TORPEDO_HIT_END = 3;
+const TORPEDO_LAUNCH_END = 1.5;
+
 export class AudioManager {
   constructor() {
-    this.ctx = null;
+    this.initialized = false;
+    this._ambient = null;
+    this._bgm = null;
+    this._engine = null;
+    this._ambientPlaying = false;
+    this._bgmPlaying = false;
+    this._enginePlaying = false;
+    this._lastExplosionTime = 0;
   }
 
   init() {
-    if (!this.ctx) {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.initialized) return;
+    this.initialized = true;
+
+    this._ambient = new Audio(AMBIENT_SOUND);
+    this._ambient.loop = true;
+    this._ambient.volume = AMBIENT_VOLUME;
+
+    this._bgm = new Audio(BGM_SOUND);
+    this._bgm.loop = true;
+    this._bgm.volume = BGM_VOLUME;
+
+    this._engine = new Audio(ENGINE_SOUND);
+    this._engine.loop = true;
+    this._engine.volume = ENGINE_MIN_VOLUME;
+  }
+
+  startAmbient() {
+    if (!this.initialized || !this._ambient) return;
+    if (this._ambientPlaying) return;
+    this._ambient.currentTime = 0;
+    this._ambient.volume = AMBIENT_VOLUME;
+    this._ambient.play().catch(() => {});
+    this._ambientPlaying = true;
+  }
+
+  stopAmbient() {
+    if (!this._ambient) return;
+    this._ambient.pause();
+    this._ambient.currentTime = 0;
+    this._ambientPlaying = false;
+  }
+
+  startBGM() {
+    if (!this.initialized || !this._bgm) return;
+    if (this._bgmPlaying) return;
+    this._bgm.currentTime = 0;
+    this._bgm.volume = BGM_VOLUME;
+    this._bgm.play().catch(() => {});
+    this._bgmPlaying = true;
+  }
+
+  stopBGM() {
+    if (!this._bgm) return;
+    this._bgm.pause();
+    this._bgm.currentTime = 0;
+    this._bgmPlaying = false;
+  }
+
+  updateEngineBySpeed(speed, maxSpeed) {
+    if (!this.initialized) return;
+    const absSpeed = Math.abs(speed);
+    const shouldPlay = absSpeed >= ENGINE_START_SPEED && maxSpeed > 0;
+    if (shouldPlay) {
+      const ratio = Math.max(0, Math.min(1, absSpeed / maxSpeed));
+      if (!this._enginePlaying) {
+        this._engine.volume = ENGINE_MIN_VOLUME;
+        this._engine.play().catch(() => {});
+        this._enginePlaying = true;
+      }
+      this._engine.volume = ENGINE_MIN_VOLUME + (ENGINE_MAX_VOLUME - ENGINE_MIN_VOLUME) * ratio;
+    } else if (this._enginePlaying) {
+      this._engine.pause();
+      this._engine.currentTime = 0;
+      this._enginePlaying = false;
     }
   }
 
-  _noise(duration, volume) {
-    const ctx = this.ctx;
-    const size = ctx.sampleRate * duration;
-    const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < size; i++) data[i] = (Math.random() * 2 - 1) * volume;
-    return buffer;
-  }
-
-  playFire() {
-    if (!this.ctx) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    const ns = ctx.createBufferSource();
-    ns.buffer = this._noise(0.15, 0.5);
-    const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.6, now);
-    ng.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 1000;
-    ns.connect(hp).connect(ng).connect(ctx.destination);
-    ns.start(now);
-    ns.stop(now + 0.15);
-
-    const osc = ctx.createOscillator();
-    osc.frequency.setValueAtTime(150, now);
-    osc.frequency.exponentialRampToValueAtTime(40, now + 0.3);
-    const og = ctx.createGain();
-    og.gain.setValueAtTime(0.5, now);
-    og.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-    osc.connect(og).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.3);
+  playFire(shipClass) {
+    if (!this.initialized) return;
+    const src = FIRE_SOUND[shipClass] || DEFAULT_FIRE_SOUND;
+    const a = new Audio(src);
+    a.volume = FIRE_VOLUME;
+    a.play().catch(() => {});
   }
 
   playExplosion() {
-    if (!this.ctx) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
+    if (!this.initialized) return;
+    const now = performance.now();
+    if (now - this._lastExplosionTime < EXPLOSION_THROTTLE_MS) return;
+    this._lastExplosionTime = now;
+    const a = new Audio(EXPLOSION_SOUND);
+    a.volume = EXPLOSION_VOLUME;
+    a.play().catch(() => {});
+  }
 
-    const ns = ctx.createBufferSource();
-    ns.buffer = this._noise(0.6, 0.4);
-    const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.5, now);
-    ng.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
-    const lp = ctx.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(3000, now);
-    lp.frequency.exponentialRampToValueAtTime(200, now + 0.6);
-    ns.connect(lp).connect(ng).connect(ctx.destination);
-    ns.start(now);
-    ns.stop(now + 0.6);
+  playTorpedoHit() {
+    if (!this.initialized) return;
+    const now = performance.now();
+    if (now - this._lastExplosionTime < EXPLOSION_THROTTLE_MS) return;
+    this._lastExplosionTime = now;
+    this._playClip(TORPEDO_HIT_SOUND, TORPEDO_HIT_START, TORPEDO_HIT_END, TORPEDO_HIT_VOLUME);
+  }
 
-    const osc = ctx.createOscillator();
-    osc.frequency.setValueAtTime(80, now);
-    osc.frequency.exponentialRampToValueAtTime(20, now + 0.8);
-    const og = ctx.createGain();
-    og.gain.setValueAtTime(0.6, now);
-    og.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
-    osc.connect(og).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.8);
+  playTorpedoLaunch() {
+    if (!this.initialized) return;
+    this._playClip(TORPEDO_LAUNCH_SOUND, 0, TORPEDO_LAUNCH_END, TORPEDO_LAUNCH_VOLUME);
+  }
+
+  _playClip(src, startTime, endTime, volume) {
+    const a = new Audio(src);
+    a.volume = volume;
+    const startClip = () => {
+      try { a.currentTime = startTime; } catch (_) {}
+      a.play().catch(() => {});
+    };
+    const onTime = () => {
+      if (a.currentTime >= endTime) {
+        a.pause();
+        a.removeEventListener('timeupdate', onTime);
+      }
+    };
+    a.addEventListener('loadedmetadata', startClip, { once: true });
+    a.addEventListener('timeupdate', onTime);
+    if (a.readyState >= 1) startClip();
+  }
+
+  stopAll() {
+    this.stopAmbient();
+    this.stopBGM();
+    if (this._engine) {
+      this._engine.pause();
+      this._engine.currentTime = 0;
+      this._enginePlaying = false;
+    }
   }
 }

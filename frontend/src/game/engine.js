@@ -85,12 +85,14 @@ export class GameEngine {
     if (this.enemyManager) this.enemyManager.clear();
 
     this.audio.init();
+    this.audio.startAmbient();
+    this.audio.startBGM();
 
     this.ship = new Ship(this.scene, initialLevel, shipClass);
     const spawn = this._findSafeSpawn();
     this.ship.position.copy(spawn);
     this.projectileManager = new ProjectileManager(this.scene, this.terrain, this.audio);
-    this.torpedoManager = new TorpedoManager(this.scene, this.terrain);
+    this.torpedoManager = new TorpedoManager(this.scene, this.terrain, this.audio);
     this.enemyManager = new EnemyManager(this.scene, this.terrain);
     this.enemyManager.spawn(this.ship.position, initialLevel);
 
@@ -179,6 +181,7 @@ export class GameEngine {
     this.ship.update(dt, this.controls.keys, this.terrain);
 
     if (!this.ship.alive) {
+      this.audio.updateEngineBySpeed(0, this.ship.maxSpeed);
       this.projectileManager.update(dt, this.ship, this.enemyManager.enemies);
       this.enemyManager.update(dt, this.ship.position, this.projectileManager, this.camera, this.torpedoManager);
       this.renderer.render(this.scene, this.camera);
@@ -188,6 +191,8 @@ export class GameEngine {
       }
       return;
     }
+
+    this.audio.updateEngineBySpeed(this.ship.speed, this.ship.maxSpeed);
 
     const worldYaw = this.ship.heading + this.controls.orbitYaw;
     const scoped = this.controls.scoped;
@@ -255,7 +260,7 @@ export class GameEngine {
           }
         }
         if (anyFired) {
-          this.audio.playFire();
+          this.audio.playFire(this.shipClass);
         }
       }
     }
@@ -427,7 +432,7 @@ export class GameEngine {
     for (const idx of readyTubes) {
       this._torpedoCooldowns[idx] = cd;
     }
-    this.audio.playFire();
+    this.audio.playTorpedoLaunch();
   }
 
   _updateTorpedoCooldowns(dt) {
@@ -449,6 +454,7 @@ export class GameEngine {
   destroy() {
     this.running = false;
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
+    if (this.audio) this.audio.stopAll();
     if (this.controls) this.controls.destroy();
     if (this._rCleanup) this._rCleanup();
     if (this._cCleanup) this._cCleanup();

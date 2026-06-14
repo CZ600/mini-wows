@@ -123,6 +123,7 @@ class TorpedoManager:
                         "target": pid,
                         "damage": t.damage,
                         "attacker": t.owner,
+                        "weapon": "torpedo",
                     })
                     if not ship.alive:
                         events.append({
