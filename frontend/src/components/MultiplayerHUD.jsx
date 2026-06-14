@@ -26,12 +26,12 @@ export default function MultiplayerHUD({ data, events }) {
   const hasTorpedoes = torpedoTubes.length > 0 && availableTorpedoTiers.length > 0;
   const sortedTiers = [...availableTorpedoTiers].sort((a, b) => a - b);
 
-  const allTubesReady = hasTorpedoes && torpedoTubes.every(t => t.ready);
   const torpedoMaxRemaining = hasTorpedoes
-    ? (allTubesReady ? 0 : Math.max(...torpedoTubes.map(t => t.cooldown)))
+    ? Math.max(0, Math.min(torpedoMaxCooldown, Math.max(...torpedoTubes.map(t => t.cooldown))))
     : 0;
+  const allTubesReady = hasTorpedoes && torpedoTubes.every(t => t.ready);
   const torpedoFillPct = torpedoMaxCooldown > 0
-    ? Math.max(0, Math.min(100, ((torpedoMaxCooldown - torpedoMaxRemaining) / torpedoMaxCooldown) * 100))
+    ? ((torpedoMaxCooldown - torpedoMaxRemaining) / torpedoMaxCooldown) * 100
     : 100;
 
   return (
@@ -114,9 +114,10 @@ export default function MultiplayerHUD({ data, events }) {
             {weaponMode === 'gun' ? (
               <>
                 {frontTurrets.map((t, i) => {
-                  const ready = t.cooldown <= 0;
+                  const cd = Math.max(0, Math.min(t.maxCooldown, t.cooldown));
+                  const ready = cd <= 0;
                   const pct = t.maxCooldown > 0
-                    ? Math.max(0, Math.min(100, ((t.maxCooldown - t.cooldown) / t.maxCooldown) * 100))
+                    ? ((t.maxCooldown - cd) / t.maxCooldown) * 100
                     : 100;
                   return (
                     <div key={`f${i}`} className="reload-bar">
@@ -128,9 +129,10 @@ export default function MultiplayerHUD({ data, events }) {
                   );
                 })}
                 {backTurrets.map((t, i) => {
-                  const ready = t.cooldown <= 0;
+                  const cd = Math.max(0, Math.min(t.maxCooldown, t.cooldown));
+                  const ready = cd <= 0;
                   const pct = t.maxCooldown > 0
-                    ? Math.max(0, Math.min(100, ((t.maxCooldown - t.cooldown) / t.maxCooldown) * 100))
+                    ? ((t.maxCooldown - cd) / t.maxCooldown) * 100
                     : 100;
                   return (
                     <div key={`b${i}`} className="reload-bar">

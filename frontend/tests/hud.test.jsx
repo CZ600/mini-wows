@@ -91,6 +91,66 @@ describe('HUD torpedo display', () => {
     expect(widths[1]).toBeCloseTo(60, 1);
   });
 
+  it('shows 0% fill right after firing (cooldown == maxCooldown)', () => {
+    const justFired = {
+      ...baseData,
+      weaponMode: 'gun',
+      turrets: [
+        { cooldown: 5, maxCooldown: 5, isFront: true },
+        { cooldown: 4.5, maxCooldown: 5, isFront: false },
+      ],
+    };
+    const { container } = render(<HUD data={justFired} />);
+    const widths = fillWidths(container);
+    expect(widths[0]).toBeCloseTo(0, 1);       // just fired → 0%
+    expect(widths[1]).toBeCloseTo(10, 1);      // 0.5s elapsed of 5s → 10%
+    expect(container.querySelectorAll('.reload-bar-fill.ready').length).toBe(0);
+  });
+
+  it('clamps cooldown above maxCooldown to 0% (defensive)', () => {
+    const overflow = {
+      ...baseData,
+      weaponMode: 'gun',
+      turrets: [
+        { cooldown: 8, maxCooldown: 5, isFront: true },  // cd > maxCd → 0%
+      ],
+    };
+    const { container } = render(<HUD data={overflow} />);
+    const widths = fillWidths(container);
+    expect(widths[0]).toBeCloseTo(0, 1);
+  });
+
+  it('clamps negative cooldown to 100% (defensive)', () => {
+    const negative = {
+      ...baseData,
+      weaponMode: 'gun',
+      turrets: [
+        { cooldown: -0.4, maxCooldown: 5, isFront: true },  // cd < 0 → ready, 100%
+      ],
+    };
+    const { container } = render(<HUD data={negative} />);
+    const widths = fillWidths(container);
+    expect(widths[0]).toBeCloseTo(100, 1);
+    expect(container.querySelectorAll('.reload-bar-fill.ready').length).toBe(1);
+  });
+
+  it('shows full reload 0→100 progression across frames', () => {
+    const maxCd = 5;
+    const samples = [5, 4, 3, 2, 1, 0];
+    const expected = [0, 20, 40, 60, 80, 100];
+    samples.forEach((cd, i) => {
+      const data = {
+        ...baseData,
+        weaponMode: 'gun',
+        turrets: [{ cooldown: cd, maxCooldown: maxCd, isFront: true }],
+      };
+      const { container, unmount } = render(<HUD data={data} />);
+      const widths = fillWidths(container);
+      expect(widths[0]).toBeCloseTo(expected[i], 1);
+      unmount();
+    });
+  });
+
   it('shows weapon slot key hints (1 for gun, 2/3/4 for torpedo tiers)', () => {
     const { container } = render(<HUD data={baseData} />);
     expect(slotKeys(container)).toEqual(['1', '2', '3', '4']);
