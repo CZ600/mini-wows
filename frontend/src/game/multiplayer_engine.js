@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createScene, createRenderer, createCamera } from './scene.js';
+import { createScene, createRenderer, createCamera, applyHalfLambert } from './scene.js';
 import { createWater } from './water.js';
 import { Terrain } from './terrain.js';
 import { Controls } from './controls.js';
@@ -521,9 +521,11 @@ export class MultiplayerEngine {
       if (!this._torpedoVisuals[torp.id]) {
         const mesh = new THREE.Group();
 
+        const mpTorpedoMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+        applyHalfLambert(mpTorpedoMat);
         const body = new THREE.Mesh(
           new THREE.CylinderGeometry(0.2, 0.2, 2.5, 8),
-          new THREE.MeshPhongMaterial({ color: 0x444444 })
+          mpTorpedoMat
         );
         body.rotation.x = Math.PI / 2;
         mesh.add(body);

@@ -99,7 +99,7 @@ export function createWater(scene) {
 
       vec3 viewDir = normalize(cameraPosition - vWorldPos);
 
-      float diff = max(dot(normal, uSunDir), 0.0);
+      float diff = dot(normal, uSunDir) * 0.5 + 0.5;
       color *= 0.62 + 0.38 * diff;
 
       vec3 halfDir = normalize(viewDir + uSunDir);

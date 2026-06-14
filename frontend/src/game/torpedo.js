@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyHalfLambert } from './scene.js';
 
 export const TORPEDO_TIERS = {
   1: { speed: 22.2, range: 400, baseCooldown: 8 },
@@ -57,9 +58,11 @@ export class TorpedoManager {
 
       const mesh = new THREE.Group();
 
+      const torpedoBodyMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+      applyHalfLambert(torpedoBodyMat);
       const body = new THREE.Mesh(
         new THREE.CylinderGeometry(TORPEDO_RADIUS, TORPEDO_RADIUS, TORPEDO_LENGTH, 8),
-        new THREE.MeshPhongMaterial({ color: 0x444444 })
+        torpedoBodyMat
       );
       body.rotation.x = Math.PI / 2;
       mesh.add(body);

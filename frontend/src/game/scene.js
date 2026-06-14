@@ -82,6 +82,19 @@ function createSkyDome() {
   return sky;
 }
 
+/**
+ * 为 MeshPhongMaterial / MeshLambertMaterial 注入 Half Lambert 漫反射。
+ * Half Lambert = dotNL * 0.5 + 0.5，比标准 Lambert 更柔和，暗部不会完全黑。
+ */
+export function applyHalfLambert(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'float dotNL = saturate( dot( geometryNormal, directLight.direction ) );\n\tvec3 irradiance = dotNL * directLight.color;',
+      'float dotNL = saturate( dot( geometryNormal, directLight.direction ) );\n\tdotNL = dotNL * 0.5 + 0.5;\n\tvec3 irradiance = dotNL * directLight.color;'
+    );
+  };
+}
+
 export function createRenderer(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);

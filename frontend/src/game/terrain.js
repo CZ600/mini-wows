@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PerlinNoise } from './noise.js';
+import { applyHalfLambert } from './scene.js';
 
 const MAP_SIZE = 10000;
 const SEGMENTS = 256;
@@ -77,6 +78,7 @@ export class Terrain {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    applyHalfLambert(mat);
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.position.y = -1;
     scene.add(this.mesh);

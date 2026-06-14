@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyHalfLambert } from './scene.js';
 
 export const LEVEL_CONFIG = {
   1:  { length: 7,  width: 2,  height: 1.5, hp: 300,  turnRadius: 20, fireCooldown: 5.0, damage: 30, frontTurrets: 1, backTurrets: 0, hasBridge: false },
@@ -221,6 +222,7 @@ export class Ship {
     const deckY = cfg.height + 1.0;
     const hullY = cfg.height / 2 + 1.0;
     const hullMat = new THREE.MeshPhongMaterial({ color: 0xb0b0b0 });
+    applyHalfLambert(hullMat);
 
     const hullGeo = new THREE.CylinderGeometry(1, 1, cfg.height, 32);
     hullGeo.scale(cfg.width * 0.65, 1, cfg.length * 0.65);
@@ -246,9 +248,11 @@ export class Ship {
       bridge.position.set(0, deckY + bh / 2 + 0.1, 0);
       this.mesh.add(bridge);
 
+      const windowMat = new THREE.MeshPhongMaterial({ color: 0xaaddff });
+      applyHalfLambert(windowMat);
       const windows = new THREE.Mesh(
         new THREE.BoxGeometry(bw * 0.85, bh * 0.25, bl + 0.1),
-        new THREE.MeshPhongMaterial({ color: 0xaaddff })
+        windowMat
       );
       windows.position.y = bh * 0.1;
       bridge.add(windows);
@@ -282,18 +286,23 @@ export class Ship {
     const turretDefs = buildTurretDefs(cfg);
     this.turrets = [];
 
+    const turretMat = new THREE.MeshPhongMaterial({ color: 0x808080 });
+    applyHalfLambert(turretMat);
+    const barrelMat = new THREE.MeshPhongMaterial({ color: 0x505050 });
+    applyHalfLambert(barrelMat);
+
     for (const def of turretDefs) {
       const turretGroup = new THREE.Group();
 
       const base = new THREE.Mesh(
         new THREE.CylinderGeometry(turretSize * 0.5, turretSize * 0.6, turretSize * 0.3, 8),
-        new THREE.MeshPhongMaterial({ color: 0x808080 })
+        turretMat
       );
       turretGroup.add(base);
 
       const body = new THREE.Mesh(
         new THREE.BoxGeometry(turretSize, turretSize, turretSize),
-        new THREE.MeshPhongMaterial({ color: 0x808080 })
+        turretMat
       );
       body.position.y = turretSize * 0.4;
       turretGroup.add(body);
@@ -304,7 +313,7 @@ export class Ship {
 
       const barrel = new THREE.Mesh(
         new THREE.CylinderGeometry(0.15, 0.15, barrelLen, 8),
-        new THREE.MeshPhongMaterial({ color: 0x505050 })
+        barrelMat
       );
       barrel.rotation.x = Math.PI / 2;
       barrel.position.set(0, 0, barrelLen / 2);

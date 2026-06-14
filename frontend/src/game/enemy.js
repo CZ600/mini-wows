@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch } from './turret.js';
+import { applyHalfLambert } from './scene.js';
 
 export const ENEMY_SCALE = {
   1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
@@ -76,8 +77,11 @@ class EnemyShip {
     const deckY = cfg.height + 1.0;
     const hullY = cfg.height / 2 + 1.0;
     const hullMat = new THREE.MeshPhongMaterial({ color: 0x8b2020 });
+    applyHalfLambert(hullMat);
     const turretMat = new THREE.MeshPhongMaterial({ color: 0x666666 });
+    applyHalfLambert(turretMat);
     const barrelMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+    applyHalfLambert(barrelMat);
 
     const hullGeo = new THREE.CylinderGeometry(1, 1, cfg.height, 32);
     hullGeo.scale(cfg.width * 0.65, 1, cfg.length * 0.65);
@@ -103,9 +107,11 @@ class EnemyShip {
       bridge.position.set(0, deckY + bh / 2 + 0.1, 0);
       this.mesh.add(bridge);
 
+      const windowMat = new THREE.MeshPhongMaterial({ color: 0x886644 });
+      applyHalfLambert(windowMat);
       const windows = new THREE.Mesh(
         new THREE.BoxGeometry(bw * 0.85, bh * 0.25, bl + 0.1),
-        new THREE.MeshPhongMaterial({ color: 0x886644 })
+        windowMat
       );
       windows.position.y = bh * 0.1;
       bridge.add(windows);
@@ -462,30 +468,38 @@ export class EnemyManager {
     const g = Math.max(0.3, 0.53 - scale.size * 0.02);
     const b = Math.max(0.3, 0.44 - scale.size * 0.015);
 
+    const baseMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(r * 0.8, g * 0.8, b * 0.8) });
+    applyHalfLambert(baseMat);
     const base = new THREE.Mesh(
       new THREE.BoxGeometry(size, 2, size),
-      new THREE.MeshPhongMaterial({ color: new THREE.Color(r * 0.8, g * 0.8, b * 0.8) })
+      baseMat
     );
     base.position.y = 1;
     group.add(base);
 
+    const underwaterMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(r * 0.4, g * 0.4, b * 0.4) });
+    applyHalfLambert(underwaterMat);
     const underwaterHull = new THREE.Mesh(
       new THREE.BoxGeometry(size * 1.1, 3, size * 1.1),
-      new THREE.MeshPhongMaterial({ color: new THREE.Color(r * 0.4, g * 0.4, b * 0.4) })
+      underwaterMat
     );
     underwaterHull.position.y = -1.5;
     group.add(underwaterHull);
 
+    const bodyMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(r, g, b) });
+    applyHalfLambert(bodyMat);
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(size, size, size),
-      new THREE.MeshPhongMaterial({ color: new THREE.Color(r, g, b) })
+      bodyMat
     );
     body.position.y = size / 2 + 2;
     group.add(body);
 
+    const turretBarrelMat = new THREE.MeshPhongMaterial({ color: 0x553333 });
+    applyHalfLambert(turretBarrelMat);
     const barrel = new THREE.Mesh(
       new THREE.CylinderGeometry(0.4, 0.4, size * 0.8, 8),
-      new THREE.MeshPhongMaterial({ color: 0x553333 })
+      turretBarrelMat
     );
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, 0, size * 0.6);

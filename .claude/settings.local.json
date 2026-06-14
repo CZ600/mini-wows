@@ -123,8 +123,11 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5175/Riptide%20Armada.mp3\")",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:5175/Riptide%20Armada%202.mp3\")",
       "Bash(npm --prefix \"D:/project/pythonProject/homework/wow/frontend\" run build)",
-      "Bash(cat vite.config.js)",
-      "Bash(cat vite.config.ts)"
+      "Bash(kill %1)",
+      "Bash(curl -s http://localhost:5174/src/game/scene.js)",
+      "Bash(curl -s http://localhost:5174/src/game/water.js)",
+      "Bash(curl -s http://localhost:5174/src/game/ship.js)",
+      "Bash(curl -s http://localhost:5174/src/game/enemy.js)"
     ]
   }
 }
