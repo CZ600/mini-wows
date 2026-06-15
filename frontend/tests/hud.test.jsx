@@ -176,3 +176,60 @@ describe('HUD torpedo display', () => {
     expect(slotKeys(container)).toEqual(['1']);
   });
 });
+
+describe('HUD gear display', () => {
+  const baseData = {
+    hp: 100,
+    maxHp: 100,
+    speed: 30,
+    level: 5,
+    score: 200,
+    enemyCount: 5,
+    wave: 3,
+    turrets: [{ cooldown: 0, maxCooldown: 5, isFront: true }],
+    currentThreshold: 150,
+    nextThreshold: 250,
+    weaponMode: 'gun',
+    torpedoTubes: [],
+    torpedoMaxCooldown: 8,
+    shipClass: 'destroyer',
+    availableTorpedoTiers: [],
+    gear: 3,
+  };
+
+  it('renders 6 gear rows in fixed top-to-bottom order', () => {
+    const { container } = render(<HUD data={baseData} />);
+    const names = Array.from(container.querySelectorAll('.gear-name')).map(el => el.textContent);
+    expect(names).toEqual(['前进4', '前进3', '前进2', '前进1', '停车', '倒退']);
+  });
+
+  it('highlights exactly one gear row matching data.gear', () => {
+    const { container } = render(<HUD data={{ ...baseData, gear: 4 }} />);
+    const active = container.querySelectorAll('.gear-row.active');
+    expect(active.length).toBe(1);
+    expect(active[0].querySelector('.gear-name').textContent).toBe('前进3');
+  });
+
+  it('shows current speed only on the active gear row', () => {
+    const { container } = render(<HUD data={{ ...baseData, gear: 2, speed: 42 }} />);
+    const speeds = Array.from(container.querySelectorAll('.gear-speed')).map(el => el.textContent);
+    expect(speeds.length).toBe(1);
+    // 42 km/h, rounded
+    expect(speeds[0]).toContain('42');
+    // on the 前进1 row
+    const active = container.querySelector('.gear-row.active');
+    expect(active.querySelector('.gear-name').textContent).toBe('前进1');
+    expect(active.querySelector('.gear-speed').textContent).toContain('42');
+  });
+
+  it('speed text moves with active gear', () => {
+    const r1 = render(<HUD data={{ ...baseData, gear: 0, speed: 5 }} />);
+    const active1 = r1.container.querySelector('.gear-row.active');
+    expect(active1.querySelector('.gear-name').textContent).toBe('倒退');
+    r1.unmount();
+
+    const r2 = render(<HUD data={{ ...baseData, gear: 5, speed: 60 }} />);
+    const active2 = r2.container.querySelector('.gear-row.active');
+    expect(active2.querySelector('.gear-name').textContent).toBe('前进4');
+  });
+});

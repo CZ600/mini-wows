@@ -84,6 +84,10 @@ export class MultiplayerEngine {
       this.renderer = renderer;
       this._rCleanup = rCleanup;
       this.canvas = canvas;
+      // Rebind Controls to the new canvas — without this, click/pointerlock
+      // listeners stay attached to the (now-detached) old canvas, so the user
+      // can never lock the pointer and mouse input / number keys stop working.
+      if (this.controls) this.controls.attachCanvas(canvas);
       return;
     }
 
@@ -269,6 +273,7 @@ export class MultiplayerEngine {
     this.controls.orbitYaw = 0;
     this.controls.orbitPitch = -0.18;
     this.controls.keys = { w: false, a: false, s: false, d: false };
+    this.controls.gear = 1;
 
     // Notify App that game has started
     if (this.onGameStart) this.onGameStart();
@@ -800,6 +805,7 @@ export class MultiplayerEngine {
 
     // Local prediction
     if (this.localShip.alive) {
+      this.controls.updateMotionKeys(this.localShip.speed, this.localShip.max_speed);
       const keys = this.controls.keys;
       this.localShip.pos_x += Math.sin(this.localShip.heading) * this.localShip.speed * dt;
       this.localShip.pos_z += Math.cos(this.localShip.heading) * this.localShip.speed * dt;
@@ -982,6 +988,7 @@ export class MultiplayerEngine {
         })),
         torpedoMaxCooldown: this._getTorpedoCooldown(),
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
+        gear: this.controls.gear,
       });
     }
 

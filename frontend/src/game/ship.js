@@ -339,7 +339,7 @@ export class Ship {
   }
 
   _initWake() {
-    const max = 280;
+    const max = 480;
     this._wakeMax = max;
     this._wakeData = new Array(max);
     this._wakeEmitAccum = 0;
@@ -380,13 +380,16 @@ export class Ship {
         void main() {
           float d = length(gl_PointCoord - vec2(0.5));
           if (d > 0.5) discard;
-          float a = smoothstep(0.5, 0.1, d) * vOpacity;
-          gl_FragColor = vec4(1.0, 1.0, 1.0, a);
+          float a = (1.0 - smoothstep(0.45, 0.5, d)) * vOpacity;
+          float ring = smoothstep(0.28, 0.45, d);
+          vec3 color = mix(vec3(1.0, 1.0, 1.0), vec3(0.18, 0.26, 0.34), ring);
+          gl_FragColor = vec4(color, a);
         }
       `,
     });
 
     this._wakeMesh = new THREE.Points(geo, mat);
+    this._wakeMesh.frustumCulled = false;
     this.scene.add(this._wakeMesh);
   }
 
@@ -404,16 +407,32 @@ export class Ship {
     const sinH = Math.sin(this.heading);
     const cosH = Math.cos(this.heading);
 
-    const side = (Math.random() - 0.5) * 2 * halfW;
-    p.x = this.position.x - sinH * halfLen + cosH * side;
-    p.y = 1.6 + Math.random() * 1.0;
-    p.z = this.position.z - cosH * halfLen - sinH * side;
+    const isBow = Math.random() < 0.20;
+    const sign = Math.random() < 0.5 ? -1 : 1;
 
-    const backSpeed = Math.abs(this.speed) * 0.25 + Math.random() * 2.0;
-    const spread = (Math.random() - 0.5) * 2.5;
-    p.vx = -sinH * backSpeed + cosH * spread;
-    p.vy = 2.2 + Math.random() * 2.3;
-    p.vz = -cosH * backSpeed - sinH * spread;
+    if (isBow) {
+      const bowZ = halfLen * 0.7;
+      const bowSide = sign * halfW;
+      p.x = this.position.x + sinH * bowZ + cosH * bowSide;
+      p.y = 1.6 + Math.random() * 1.0;
+      p.z = this.position.z + cosH * bowZ - sinH * bowSide;
+
+      const sideSpeed = Math.abs(this.speed) * 0.35 + Math.random() * 2.0;
+      p.vx = cosH * sign * sideSpeed - sinH * Math.abs(this.speed) * 0.15;
+      p.vy = 1.8 + Math.random() * 2.0;
+      p.vz = -sinH * sign * sideSpeed - cosH * Math.abs(this.speed) * 0.15;
+    } else {
+      const side = (Math.random() - 0.5) * 2 * halfW;
+      p.x = this.position.x - sinH * halfLen + cosH * side;
+      p.y = 1.6 + Math.random() * 1.0;
+      p.z = this.position.z - cosH * halfLen - sinH * side;
+
+      const backSpeed = Math.abs(this.speed) * 0.25 + Math.random() * 2.0;
+      const spread = (Math.random() - 0.5) * 3.5;
+      p.vx = -sinH * backSpeed + cosH * spread;
+      p.vy = 2.2 + Math.random() * 2.3;
+      p.vz = -cosH * backSpeed - sinH * spread;
+    }
   }
 
   _updateWake(dt) {
@@ -440,8 +459,8 @@ export class Ship {
         positions[i * 3 + 1] = p.y;
         positions[i * 3 + 2] = p.z;
         const t = p.life / p.maxLife;
-        opacities[i] = (1 - t) * 0.85;
-        sizes[i] = (0.9 + t * 2.0) * (1 + this.shipWidth * 0.12);
+        opacities[i] = (1 - t) * 1.0;
+        sizes[i] = (1.4 + t * 2.6) * (1 + this.shipWidth * 0.12);
       }
     }
 
@@ -547,7 +566,7 @@ export class Ship {
     this.mesh.rotation.y = this.heading;
 
     if (Math.abs(this.speed) > 1) {
-      this._wakeEmitAccum += Math.abs(this.speed) * 7 * dt;
+      this._wakeEmitAccum += Math.abs(this.speed) * 15 * dt;
       while (this._wakeEmitAccum >= 1) {
         this._emitWake();
         this._wakeEmitAccum -= 1;

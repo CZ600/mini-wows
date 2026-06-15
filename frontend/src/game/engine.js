@@ -102,6 +102,7 @@ export class GameEngine {
     this.controls.orbitYaw = 0;
     this.controls.orbitPitch = -0.18;
     this.controls.keys = { w: false, a: false, s: false, d: false };
+    this.controls.gear = 1;
     this._gameOverFired = false;
 
     this.camera.position.set(spawn.x, CAM_HEIGHT, spawn.z - CAM_DIST);
@@ -178,6 +179,7 @@ export class GameEngine {
       return;
     }
 
+    this.controls.updateMotionKeys(this.ship.speed, this.ship.maxSpeed);
     this.ship.update(dt, this.controls.keys, this.terrain);
 
     if (!this.ship.alive) {
@@ -345,6 +347,7 @@ export class GameEngine {
         torpedoMaxCooldown: this._getTorpedoCooldown(),
         shipClass: this.shipClass,
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
+        gear: this.controls.gear,
       });
     }
 

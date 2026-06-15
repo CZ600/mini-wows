@@ -106,3 +106,95 @@ class TestSpawnPositions:
             dz = positions[i][1] - positions[i - 1][1]
             dist = math.sqrt(dx * dx + dz * dz)
             assert 200 < dist < 500, f"PvE players {i-1},{i} spacing wrong: {dist:.1f}m"
+
+
+class TestSpawnSafeFromLand:
+    """Spawn must clear the ship's bounding box, not just its center.
+
+    Regression: previously _find_water only checked the center point, so when
+    the center sat in water near a shoreline one or more of the ship's four
+    corners could overlap land. ServerShip.update() runs a strict corner
+    check that instantly sinks the ship. With respawns, the ship kept
+    respawning at the same bad spot until respawns ran out, causing the
+    match to end immediately — even with respawns remaining.
+    """
+
+    def _make_ship(self, level, ship_class=None):
+        ship = ServerShip("p", "Test", level=level, ship_class=ship_class)
+        ship.heading = 0.0
+        return ship
+
+    def test_corners_water_at_safe_spawn(self):
+        """Every ship corner must be water at the chosen spawn position."""
+        islands = [{
+            "x": 550.0, "z": 0.0,
+            "radius": 200.0, "height": 50.0,
+        }]
+        terrain = Terrain(42, islands)
+        gs = GameState(terrain, mode="ffa", respawn_limit=0)
+
+        # The first FFA spawn angle is 0 → (550, 0) — inside the island.
+        # _find_water must move the ship fully off land including corners.
+        ship = gs.add_ship("p1", "Alice", level=4, ship_class="battleship")
+        corners = ship._get_corners_at(ship.pos_x, ship.pos_z)
+        for cx, cz in corners:
+            assert not terrain.is_land(cx, cz), (
+                f"corner ({cx:.1f},{cz:.1f}) on land at spawn "
+                f"({ship.pos_x:.1f},{ship.pos_z:.1f})"
+            )
+
+    def test_find_water_returns_position_with_all_corners_water(self):
+        """_find_water(ship, level, ship_class) should clear all 4 corners."""
+        islands = [{
+            "x": 0.0, "z": 0.0,
+            "radius": 300.0, "height": 60.0,
+        }]
+        terrain = Terrain(42, islands)
+        gs = GameState(terrain, mode="ffa")
+
+        # Force a position right at the island center
+        x, z = gs._find_water(0.0, 0.0, ship_length=53.0, ship_width=11.0)
+        # Simulate the corners check
+        cos_h, sin_h = 1.0, 0.0
+        half_l, half_w = 53.0 / 2, 11.0 / 2
+        corners = [
+            (x + sin_h * half_l + cos_h * half_w, z + cos_h * half_l - sin_h * half_w),
+            (x + sin_h * half_l - cos_h * half_w, z + cos_h * half_l + sin_h * half_w),
+            (x - sin_h * half_l + cos_h * half_w, z - cos_h * half_l - sin_h * half_w),
+            (x - sin_h * half_l - cos_h * half_w, z - cos_h * half_l + sin_h * half_w),
+        ]
+        for cx, cz in corners:
+            assert not terrain.is_land(cx, cz), (
+                f"corner ({cx:.1f},{cz:.1f}) on land after _find_water"
+            )
+
+    def test_ship_does_not_die_on_first_update(self):
+        """A freshly-spawned ship must survive its first update() call."""
+        islands = [{
+            "x": 550.0, "z": 0.0,
+            "radius": 200.0, "height": 50.0,
+        }]
+        terrain = Terrain(42, islands)
+        gs = GameState(terrain, mode="ffa")
+        ship = gs.add_ship("p1", "Alice", level=4, ship_class="battleship")
+
+        # No keys pressed → ship doesn't move, just corner-checks its own
+        # current position. Pre-fix this killed the ship immediately.
+        ship.update(0.05, {}, terrain)
+        assert ship.alive, (
+            f"ship died at spawn ({ship.pos_x:.1f},{ship.pos_z:.1f})"
+        )
+
+    def test_spawn_safe_across_many_random_terrains(self):
+        """Stress test: 30 random terrains must never spawn a ship on land edges."""
+        for seed in range(30):
+            terrain = Terrain(seed, generate_islands(seed))
+            gs = GameState(terrain, mode="ffa")
+            for i in range(8):
+                ship = gs.add_ship(f"p{i}", f"P{i}", level=i + 1)
+                corners = ship._get_corners_at(ship.pos_x, ship.pos_z)
+                for cx, cz in corners:
+                    assert not terrain.is_land(cx, cz), (
+                        f"seed={seed} player={i} corner ({cx:.1f},{cz:.1f}) on land "
+                        f"at spawn ({ship.pos_x:.1f},{ship.pos_z:.1f})"
+                    )

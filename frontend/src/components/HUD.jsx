@@ -1,9 +1,19 @@
+const GEAR_ROWS = [
+  { name: '前进4', gear: 5 },
+  { name: '前进3', gear: 4 },
+  { name: '前进2', gear: 3 },
+  { name: '前进1', gear: 2 },
+  { name: '停车', gear: 1 },
+  { name: '倒退', gear: 0 },
+];
+
 export default function HUD({ data }) {
   if (!data) return null;
 
   const { hp, maxHp, speed, level, score, enemyCount, wave, turrets, currentThreshold, nextThreshold,
           weaponMode, torpedoTier, torpedoTubes, torpedoMaxCooldown, shipClass,
-          availableTorpedoTiers } = data;
+          availableTorpedoTiers, gear } = data;
+  const gearIdx = gear == null ? 1 : gear;
   const hpPercent = (hp / maxHp) * 100;
   const hpColor = hpPercent > 60 ? 'var(--success)' : hpPercent > 30 ? 'var(--warning)' : 'var(--danger)';
 
@@ -76,12 +86,20 @@ export default function HUD({ data }) {
 
       {/* Bottom Bar - Three Column Layout */}
       <div id="hud-bottom-bar">
-        {/* Left Column - Speed */}
+        {/* Left Column - Gear Lever + Speed */}
         <div className="hud-bottom-left">
-          <div className="speed-display">
-            <span className="hud-label">速度</span>
-            <span className="speed-value">{Math.round(speed)}</span>
-            <span className="speed-unit">km/h</span>
+          <div className="gear-display">
+            {GEAR_ROWS.map((row, idx) => (
+              <div key={idx} className={`gear-row${row.gear === gearIdx ? ' active' : ''}`}>
+                <span className="gear-name">{row.name}</span>
+                {row.gear === gearIdx && (
+                  <span className="gear-speed">
+                    <span className="gear-speed-value">{Math.round(speed)}</span>
+                    <span className="gear-speed-unit">km/h</span>
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         </div>
 

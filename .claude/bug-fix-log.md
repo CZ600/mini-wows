@@ -312,3 +312,96 @@ type: project
 
 全量 165 个测试全部通过。
 
+### Bug 24: 联机重开局鼠标点击/滑动/数字键失效（WASD 仍可用）
+
+**问题**: 第一局打完返回大厅再开第二局时，画面正常、WASD 可移动，但鼠标点击不开火、滑动不转视角、数字键 1/2/3/4 不切换武器。
+
+**原因**: `MultiplayerEngine.init(canvas)` 的"重新初始化"分支（canvas 变化时触发，例如 `MultiCanvasLayout` 重新挂载）只重建了 WebGL renderer，没有更新 `Controls` 实例：
+- `Controls` 构造时把 `click`/`contextmenu` 监听器绑在旧 canvas 上 → 新 canvas 点击事件无人响应 → 永远不会调用 `requestPointerLock`
+- `_onClick` 和 `_onLockChange` 闭包直接引用构造时的 `canvas` 参数，即使后续改了 `this.canvas`，闭包仍用旧值 → `document.pointerLockElement === canvas` 永远为 `false` → `this.locked` 永远为 `false`
+- 鼠标移动/开火/数字键的回调都有 `if (this.locked)` 守卫 → 全部失效；但 WASD 不依赖 `locked`，所以仍能移动
+
+**修复**:
+- `controls.js`: 新增 `attachCanvas(newCanvas)` 方法，从旧 canvas 移除监听器后改绑到新 canvas；`_onClick` / `_onLockChange` 闭包内把 `canvas` 改为 `this.canvas`，使其响应动态切换
+- `multiplayer_engine.js` `init()`: 重新初始化分支中调用 `this.controls.attachCanvas(canvas)` 把输入通道切到新 canvas
+- `tests/controls.test.js`: 新增 4 个测试覆盖 `attachCanvas` 的监听器重绑、`requestPointerLock` 走新 canvas、`pointerLockElement` 比较走新 canvas、`destroy` 从新 canvas 移除
+
+### Bug 25: 联机有时直接判游戏结束（即使有重生次数）
+
+**问题**: 偶发场景下联机一开局立即结算，HUD 显示剩余重生次数 > 0 也无效。
+
+**原因**: `_find_water` 只校验船体中心点是否水域，未校验四角。FFA 出生点在距原点 550m 的圆周上，靠近岛屿边缘时极易出现"中心在水、某角压陆地"。`ServerShip.update()` 用严格四角陆地检测，任意一角压陆地立即 `alive=False`。`_process_respawns` 在同一坏点重生 → 同 tick 又死 → 直到重生次数耗尽 → `_check_game_end` 判负。从用户视角就是"有重生也直接结束"。
+
+**修复**:
+- `game/config.py`: 新增 `RAMMING_DAMAGE = 50`（顺手为 Bug 26 引入）
+- `game_state.py`: `_find_water` 签名扩展为 `_find_water(start_x, start_z, ship_length, ship_width)`；新增 `_is_safe_for_ship` 用方形缓冲（`max(ship_length, ship_width)/2`）校验四角都在水域；螺旋搜索半径从 2000 扩到 4000、角度细分从 12 提到 24，避免在密集岛屿图找不到合法点
+- 三个 spawn 方法（`_spawn_ffa` / `_spawn_team` / `_spawn_pve`）传入船体尺寸
+- `tests/test_spawn.py` 新增 `TestSpawnSafeFromLand`，覆盖：岛屿压制下的角点安全、`_find_water` 显式调用四角校验、首帧 `update()` 不死亡、30 个随机种子 × 8 个出生点的压力测试
+
+### Bug 26: 联机模式舰船碰撞无伤害
+
+**问题**: 两舰船对撞不会扣血。
+
+**原因**: 服务端从未实现 ship-ship 碰撞。`ServerShip.update()` 只测地形，`GameState.update()` 也没有调用任何舰船间碰撞逻辑。
+
+**修复（采用方案 B：单次固定伤害 + 推开）**:
+- `game_state.py` 新增 `_process_ship_collisions()`：
+  - 圆形近似：`radius = max(ship_length, ship_width) / 2`，两船距离 < 半径和即判定碰撞
+  - 敌我双方各受 `RAMMING_DAMAGE`（50 点）固定伤害；同队只推开不扣血
+  - 沿中心连线把两船推开到正好不重叠（+1m 缓冲），防止下一 tick 再判中
+  - 触发 `hit` 事件（`weapon: "ram"`），击沉触发 `entity_destroyed`
+  - 三角碰撞逐对处理，每对都独立判定
+- `GameState.update()` 在鱼雷更新之后调用 `_process_ship_collisions()`，在 `_process_respawns()` 之前
+- `tests/test_respawn.py` 新增 `TestShipShipCollision`，9 个测试覆盖：双向伤害、推开、远距离无伤、单次伤害（非连续）、事件、击沉、队友无伤、敌队有伤、三角碰撞
+
+**测试结果**: 全量后端 193 个测试 + 前端 84 个测试全部通过。
+
+### Feature 5: 船只档位系统（替换按住 W/S 加减速）
+
+**需求**: 把"持续按住 W 加速、按住 S 后退、松开摩擦减速"改为 6 档切换（倒退/停车/前进1-4），W 升档、S 降档，每次按下切一档；当前档位的目标速度通过原有加速度物理自然过渡。后退上限维持 `0.3 * max_speed`（用户最终决定不改为 1/2）。
+
+**档位与目标速度**:
+- 0 倒退 → `-0.3 * max_speed`
+- 1 停车 → `0`
+- 2 前进1 → `0.25 * max_speed`
+- 3 前进2 → `0.50 * max_speed`
+- 4 前进3 → `0.75 * max_speed`
+- 5 前进4 → `1.00 * max_speed`
+
+**协议策略**：客户端把档位在本地映射为虚拟 `keys.w/keys.s` 布尔（当前速度 < 目标速度 → w=true；> 目标速度 → s=true；相等 ±0.05 epsilon → 都 false），**服务器物理代码、`input_sender.js`、`reconciliation.js` 全部不动**。
+
+**变更**:
+- `frontend/src/game/controls.js`:
+  - 新增 `export const GEAR_RATIOS = [-0.3, 0, 0.25, 0.5, 0.75, 1.0]`
+  - 新增 `this.gear = 1`（默认停车）
+  - `_onKeyDown`: W/S 在 `this.locked && !e.repeat` 时升降档（`e.repeat` 防按住抖动），A/D 仍维护 `keys.a/keys.d` 持续按住状态；W/S 不再直接写 `keys.w/keys.s`
+  - 新增 `updateMotionKeys(currentSpeed, maxSpeed)`：根据档位目标速度和当前速度推导 `keys.w/keys.s`，epsilon=0.05 防止在目标速度处抖动
+- `frontend/src/game/engine.js`:
+  - `start()` 重置时增加 `this.controls.gear = 1`
+  - `ship.update` 前调用 `this.controls.updateMotionKeys(...)`
+  - `onHudUpdate` payload 增加 `gear: this.controls.gear`
+- `frontend/src/game/multiplayer_engine.js`:
+  - `_startGame` 重置时增加 `this.controls.gear = 1`
+  - 本地预测物理前调用 `this.controls.updateMotionKeys(...)`
+  - `onHudUpdate` payload 增加 `gear: this.controls.gear`
+- `frontend/src/components/HUD.jsx` & `MultiplayerHUD.jsx`:
+  - 左下角 `.speed-display` 替换为 `.gear-display`（六行档位列：倒退/停车/前进1-4）
+  - 当前档位行高亮（`.active`），仅在当前档位行显示速度（位置随档位变化）
+- `frontend/src/App.css`: 新增 `.gear-display / .gear-row / .gear-row.active / .gear-speed` 样式
+
+**约束**:
+- 档位每次按下只切 1 档，按住不会持续切换（`e.repeat` 过滤）
+- 档位 0-5 严格 clamp，超出不再变化
+- `keys.w/keys.s` 完全由 `updateMotionKeys` 推导，用户输入不直接修改
+- `keys.a/keys.d` 仍是用户按住状态（转向不变）
+- 后退上限保持 `-max_speed * 0.3`（不变）
+- 服务器物理代码、协议、reconciliation 完全不变
+- 多人模式：客户端把档位翻译成 w/s 后通过 `InputSender` 发送，服务器感知的仍是 w/s 布尔
+- 档位与目标速度比例的关系是数据驱动的（`GEAR_RATIOS` 数组），加/减档只需改数组
+- UI 显示顺序：从上到下为「前进4 → 前进3 → 前进2 → 前进1 → 停车 → 倒退」（与档位数字索引相反，反映"上=加速、下=减速"的视觉直觉）。`GEAR_ROWS` 改为 `{name, gear}` 对象数组，渲染时按 `row.gear === gearIdx` 匹配高亮
+
+**测试**:
+- `frontend/tests/controls.test.js` 新增 22 个测试覆盖：`GEAR_RATIOS` 形状、默认 gear=1、W/S 升降档（含边界 clamp）、`locked=false` 不切换、`e.repeat=true` 不切换、W/S 不写 keys、A/D 仍工作、`updateMotionKeys` 在 6 档位 × 多种当前速度下的 w/s 推导
+- `frontend/tests/hud.test.jsx` 新增 4 个测试覆盖：六行档位渲染顺序、唯一 active 行、速度仅在 active 行、速度随档位移动
+- 全部前端测试 109 个通过
+

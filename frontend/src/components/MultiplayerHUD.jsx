@@ -1,3 +1,12 @@
+const GEAR_ROWS = [
+  { name: '前进4', gear: 5 },
+  { name: '前进3', gear: 4 },
+  { name: '前进2', gear: 3 },
+  { name: '前进1', gear: 2 },
+  { name: '停车', gear: 1 },
+  { name: '倒退', gear: 0 },
+];
+
 export default function MultiplayerHUD({ data, events }) {
   if (!data) return null;
 
@@ -8,6 +17,7 @@ export default function MultiplayerHUD({ data, events }) {
   const level = data.level || 1;
   const shipClass = data.shipClass;
   const respawns = data.respawns ?? null;
+  const gearIdx = data.gear == null ? 1 : data.gear;
 
   const turrets = data.turrets || [];
   const frontTurrets = turrets.filter(t => t.isFront);
@@ -101,10 +111,18 @@ export default function MultiplayerHUD({ data, events }) {
       {/* Bottom Bar */}
       <div id="hud-bottom-bar">
         <div className="hud-bottom-left">
-          <div className="speed-display">
-            <span className="hud-label">速度</span>
-            <span className="speed-value">{speed.toFixed(1)}</span>
-            <span className="speed-unit">km/h</span>
+          <div className="gear-display">
+            {GEAR_ROWS.map((row, idx) => (
+              <div key={idx} className={`gear-row${row.gear === gearIdx ? ' active' : ''}`}>
+                <span className="gear-name">{row.name}</span>
+                {row.gear === gearIdx && (
+                  <span className="gear-speed">
+                    <span className="gear-speed-value">{speed.toFixed(1)}</span>
+                    <span className="gear-speed-unit">km/h</span>
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         </div>
 

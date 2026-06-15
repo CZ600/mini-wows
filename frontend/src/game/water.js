@@ -11,6 +11,34 @@ export function createWater(scene) {
     varying vec3 vNormal;
     varying float vHeight;
 
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+
+    float valueNoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      float a = hash(i);
+      float b = hash(i + vec2(1.0, 0.0));
+      float c = hash(i + vec2(0.0, 1.0));
+      float d = hash(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+    }
+
+    float fbm(vec2 p) {
+      float sum = 0.0;
+      float amp = 0.5;
+      for (int i = 0; i < 2; i++) {
+        sum += valueNoise(p) * amp;
+        p *= 2.0;
+        amp *= 0.5;
+      }
+      return sum;
+    }
+
     void addWave(vec2 p, float amp, vec2 dir, float freq, float spd,
                  inout float h, inout float dhx, inout float dhz) {
       float phase = dot(dir, p) * freq + time * spd;
@@ -25,13 +53,28 @@ export function createWater(scene) {
       float h = 0.0, dhx = 0.0, dhz = 0.0;
       vec2 p = position.xz;
 
-      addWave(p, 0.85, vec2(0.857, 0.514), 0.015, 0.8, h, dhx, dhz);
+      float amp1 = 0.85 * (0.88 + 0.12 * sin(time * 0.35));
+      addWave(p, amp1, vec2(0.857, 0.514), 0.015, 0.8, h, dhx, dhz);
       addWave(p, 0.55, vec2(0.287, 0.958), 0.025, 1.0, h, dhx, dhz);
-      addWave(p, 0.38, vec2(-0.530, 0.848), 0.035, 0.7, h, dhx, dhz);
-      addWave(p, 0.24, vec2(0.936, -0.351), 0.05, 1.3, h, dhx, dhz);
+      float freq3 = 0.035 + 0.006 * sin(time * 0.27);
+      addWave(p, 0.38, vec2(-0.530, 0.848), freq3, 0.7, h, dhx, dhz);
+      float amp4 = 0.24 * (0.82 + 0.18 * sin(time * 0.43 + 1.5));
+      addWave(p, amp4, vec2(0.936, -0.351), 0.05, 1.3, h, dhx, dhz);
       addWave(p, 0.16, vec2(0.216, 0.976), 0.065, 1.8, h, dhx, dhz);
-      addWave(p, 0.15, vec2(0.6, 0.8), 0.04, 1.5, h, dhx, dhz);
+      float spd6 = 1.5 + 0.25 * sin(time * 0.31);
+      addWave(p, 0.15, vec2(0.6, 0.8), 0.04, spd6, h, dhx, dhz);
       addWave(p, 0.10, vec2(-0.7, 0.714), 0.055, 1.7, h, dhx, dhz);
+
+      float nScale = 0.10;
+      vec2 nCoord = p * nScale + vec2(time * 0.18, time * 0.13);
+      float eps = 1.2;
+      float n0 = fbm(nCoord);
+      float nx = fbm(nCoord + vec2(eps, 0.0));
+      float nz = fbm(nCoord + vec2(0.0, eps));
+      float nAmp = 0.45;
+      h += nAmp * n0;
+      dhx += nAmp * (nx - n0) / eps;
+      dhz += nAmp * (nz - n0) / eps;
 
       vec3 pos = position;
       pos.y += h;

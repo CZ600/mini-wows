@@ -4,6 +4,7 @@ from collections import deque
 from game.config import (
     DT, SNAPSHOT_HISTORY_SIZE, GRAVITY, PROJECTILE_INITIAL_SPEED,
     ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED, ENEMY_FIRE_COOLDOWN,
+    RAMMING_DAMAGE,
 )
 from game.ship import ServerShip
 from game.terrain import Terrain
@@ -62,7 +63,7 @@ class GameState:
         dist = 550
         x = math.cos(angle) * dist
         z = math.sin(angle) * dist
-        x, z = self._find_water(x, z)
+        x, z = self._find_water(x, z, ship.ship_length, ship.ship_width)
         ship.pos_x = x
         ship.pos_z = z
 
@@ -81,7 +82,7 @@ class GameState:
         offset_dist = min(teammates_so_far * 100, 250)
         x = base_x + math.cos(angle) * offset_dist
         z = base_z + math.sin(angle) * offset_dist
-        x, z = self._find_water(x, z)
+        x, z = self._find_water(x, z, ship.ship_length, ship.ship_width)
         ship.pos_x = x
         ship.pos_z = z
 
@@ -89,20 +90,43 @@ class GameState:
         """PvE: humans in a line, 300m spacing."""
         x = (idx - 1.5) * 300
         z = 0.0
-        x, z = self._find_water(x, z)
+        x, z = self._find_water(x, z, ship.ship_length, ship.ship_width)
         ship.pos_x = x
         ship.pos_z = z
 
-    def _find_water(self, start_x, start_z):
-        """Find nearest water position from start point."""
-        if self.terrain and not self.terrain.is_land(start_x, start_z):
+    def _is_safe_for_ship(self, x, z, ship_length, ship_width):
+        """Return True if the ship's bounding box is all water at (x, z).
+
+        Uses the max of half_length / half_width as a square buffer so the
+        check is correct regardless of the ship's heading at spawn.
+        """
+        if not self.terrain:
+            return True
+        buffer = max(ship_length, ship_width) / 2
+        corners = [
+            (x + buffer, z + buffer),
+            (x + buffer, z - buffer),
+            (x - buffer, z + buffer),
+            (x - buffer, z - buffer),
+        ]
+        return all(not self.terrain.is_land(cx, cz) for cx, cz in corners)
+
+    def _find_water(self, start_x, start_z, ship_length=1.0, ship_width=1.0):
+        """Find a water position whose ship bounding box (4 corners) is clear.
+
+        Previous implementation only checked the center point; ships spawned
+        with center in water but a corner on land would die on the first
+        ServerShip.update() call, eventually exhausting respawns and ending
+        the match instantly.
+        """
+        if self._is_safe_for_ship(start_x, start_z, ship_length, ship_width):
             return start_x, start_z
-        for r in range(50, 2001, 50):
-            for a_idx in range(12):
-                angle = a_idx * math.pi / 6
+        for r in range(50, 4001, 50):
+            for a_idx in range(24):
+                angle = a_idx * math.pi / 12
                 x = start_x + math.cos(angle) * r
                 z = start_z + math.sin(angle) * r
-                if self.terrain and not self.terrain.is_land(x, z):
+                if self._is_safe_for_ship(x, z, ship_length, ship_width):
                     return x, z
         return start_x, start_z
 
@@ -316,6 +340,9 @@ class GameState:
         torp_events = self.torpedo_mgr.update(dt, self.ships)
         self.events.extend(torp_events)
 
+        # Ship-to-ship ramming damage (single-shot per contact + push apart)
+        self._process_ship_collisions()
+
         # Update enemies (AI tick at 5Hz for performance)
         if self.tick % 4 == 0:
             for enemy in self.enemy_mgr.enemies:
@@ -346,6 +373,90 @@ class GameState:
                 self.wave += 1
                 positions = [(s.pos_x, s.pos_z) for s in alive_players]
                 self.enemy_mgr.spawn(self.level, positions, self.terrain)
+
+    def _process_ship_collisions(self):
+        """Detect ship-to-ship overlap, deal flat ramming damage, push apart.
+
+        Damage model (option B from the design discussion):
+        - Each contact deals a single fixed RAMMING_DAMAGE to both ships.
+        - Both ships are then separated so subsequent ticks don't re-trigger
+          damage (prevents "stick and melt" gameplay).
+        - In team mode, teammates push each other but take no damage.
+        - Returns the list of events appended (also extends self.events).
+        """
+        events = []
+        alive_ships = [(pid, s) for pid, s in self.ships.items() if s.alive]
+        if len(alive_ships) < 2:
+            return events
+
+        for i in range(len(alive_ships)):
+            pid_a, ship_a = alive_ships[i]
+            radius_a = max(ship_a.ship_length, ship_a.ship_width) / 2
+            for j in range(i + 1, len(alive_ships)):
+                pid_b, ship_b = alive_ships[j]
+                if not ship_b.alive or not ship_a.alive:
+                    continue
+
+                radius_b = max(ship_b.ship_length, ship_b.ship_width) / 2
+                min_dist = radius_a + radius_b
+
+                dx = ship_b.pos_x - ship_a.pos_x
+                dz = ship_b.pos_z - ship_a.pos_z
+                dist = math.hypot(dx, dz)
+
+                if dist >= min_dist:
+                    continue
+
+                # Teammates don't damage each other but still push apart
+                same_team = (
+                    ship_a.team is not None and ship_a.team == ship_b.team
+                )
+                if not same_team:
+                    ship_a.take_damage(RAMMING_DAMAGE)
+                    ship_b.take_damage(RAMMING_DAMAGE)
+                    events.append({
+                        "type": "hit",
+                        "target": pid_a,
+                        "damage": RAMMING_DAMAGE,
+                        "attacker": pid_b,
+                        "weapon": "ram",
+                    })
+                    events.append({
+                        "type": "hit",
+                        "target": pid_b,
+                        "damage": RAMMING_DAMAGE,
+                        "attacker": pid_a,
+                        "weapon": "ram",
+                    })
+                    for pid, ship, attacker_id in (
+                        (pid_a, ship_a, pid_b),
+                        (pid_b, ship_b, pid_a),
+                    ):
+                        if not ship.alive:
+                            events.append({
+                                "type": "entity_destroyed",
+                                "target": pid,
+                                "destroyed_by": attacker_id,
+                                "weapon": "ram",
+                            })
+
+                # Push both ships apart along the line between their centers
+                # so they end up exactly at non-overlapping distance. This
+                # prevents damage from re-triggering on the next tick.
+                if dist > 1e-6:
+                    nx, nz = dx / dist, dz / dist
+                else:
+                    # Exactly overlapping — pick an arbitrary axis
+                    nx, nz = 1.0, 0.0
+                overlap = min_dist - dist + 1.0  # +1m clearance buffer
+                push = overlap / 2
+                ship_a.pos_x -= nx * push
+                ship_a.pos_z -= nz * push
+                ship_b.pos_x += nx * push
+                ship_b.pos_z += nz * push
+
+        self.events.extend(events)
+        return events
 
     def get_snapshot(self, player_id=None):
         you = None

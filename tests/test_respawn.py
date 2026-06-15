@@ -14,6 +14,140 @@ def _make_terrain():
     return Terrain(42, [])
 
 
+class TestShipShipCollision:
+    """Ramming damage: two ships touching each other take fixed damage and
+    are pushed apart to prevent continuous damage on subsequent ticks.
+    """
+
+    def test_collision_deals_damage_to_both(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "Alice", level=1)
+        b = gs.add_ship(2, "Bob", level=1)
+        # The second ship's FFA spawn is ~421m away. Move them to touching.
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        hp_a_before = a.hp
+        hp_b_before = b.hp
+        gs._process_ship_collisions()
+        assert a.hp < hp_a_before, "ship A took no ramming damage"
+        assert b.hp < hp_b_before, "ship B took no ramming damage"
+
+    def test_collision_pushes_ships_apart(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "Alice", level=1)
+        b = gs.add_ship(2, "Bob", level=1)
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        dist_before = math.hypot(a.pos_x - b.pos_x, a.pos_z - b.pos_z)
+        gs._process_ship_collisions()
+        dist_after = math.hypot(a.pos_x - b.pos_x, a.pos_z - b.pos_z)
+        assert dist_after > dist_before, "ships were not pushed apart"
+
+    def test_no_collision_damage_when_far_apart(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "Alice", level=1)
+        b = gs.add_ship(2, "Bob", level=1)
+        # FFA spawns are already hundreds of meters apart
+        hp_a_before = a.hp
+        hp_b_before = b.hp
+        gs._process_ship_collisions()
+        assert a.hp == hp_a_before
+        assert b.hp == hp_b_before
+
+    def test_collision_uses_single_tick_damage_not_continuous(self):
+        """Two ships touching should take ONE shot of damage, not every tick."""
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "Alice", level=1)
+        b = gs.add_ship(2, "Bob", level=1)
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        gs._process_ship_collisions()
+        hp_a_after_first = a.hp
+        hp_b_after_first = b.hp
+        # Second tick: ships were pushed apart, no further damage
+        gs._process_ship_collisions()
+        assert a.hp == hp_a_after_first, "ship A took damage on consecutive tick"
+        assert b.hp == hp_b_after_first, "ship B took damage on consecutive tick"
+
+    def test_collision_emits_hit_event(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "Alice", level=1)
+        b = gs.add_ship(2, "Bob", level=1)
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        gs.events = []
+        gs._process_ship_collisions()
+        types = [e.get("type") for e in gs.events]
+        assert "hit" in types
+        attackers = {e.get("attacker") for e in gs.events if e.get("type") == "hit"}
+        targets = {e.get("target") for e in gs.events if e.get("type") == "hit"}
+        assert attackers == {1, 2}, "both ships should be recorded as attacker"
+        assert targets == {1, 2}, "both ships should be recorded as target"
+
+    def test_collision_kills_low_hp_ship_and_emits_destroyed_event(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "Alice", level=1)
+        b = gs.add_ship(2, "Bob", level=1)
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        # Bring ship A to near-death so a single ram kills it
+        a.hp = 1
+        gs.events = []
+        gs._process_ship_collisions()
+        assert not a.alive
+        destroyed = [
+            e for e in gs.events
+            if e.get("type") == "entity_destroyed" and e.get("target") == 1
+        ]
+        assert destroyed, "ship A destruction not emitted"
+
+    def test_team_mode_no_damage_between_teammates(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="team")
+        a = gs.add_ship(1, "Alice", level=1, team="red")
+        b = gs.add_ship(2, "Bob", level=1, team="red")
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        hp_a_before = a.hp
+        hp_b_before = b.hp
+        gs._process_ship_collisions()
+        assert a.hp == hp_a_before, "teammate A took ramming damage"
+        assert b.hp == hp_b_before, "teammate B took ramming damage"
+
+    def test_team_mode_damage_between_enemies(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="team")
+        a = gs.add_ship(1, "Alice", level=1, team="red")
+        b = gs.add_ship(2, "Bob", level=1, team="blue")
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 0.0, 5.0
+        hp_a_before = a.hp
+        hp_b_before = b.hp
+        gs._process_ship_collisions()
+        assert a.hp < hp_a_before
+        assert b.hp < hp_b_before
+
+    def test_three_way_collision_all_take_damage(self):
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        a = gs.add_ship(1, "A", level=1)
+        b = gs.add_ship(2, "B", level=1)
+        c = gs.add_ship(3, "C", level=1)
+        a.pos_x, a.pos_z = 0.0, 0.0
+        b.pos_x, b.pos_z = 3.0, 0.0
+        c.pos_x, c.pos_z = 6.0, 0.0
+        hp_before = {1: a.hp, 2: b.hp, 3: c.hp}
+        gs._process_ship_collisions()
+        for pid, ship in [(1, a), (2, b), (3, c)]:
+            assert ship.hp < hp_before[pid], f"ship {pid} took no damage"
+
+
 class TestRespawnMechanism:
     """Test FFA respawn mechanism."""
 

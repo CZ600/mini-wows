@@ -1,7 +1,10 @@
+export const GEAR_RATIOS = [-0.3, 0, 0.25, 0.5, 0.75, 1.0];
+
 export class Controls {
   constructor(canvas) {
     this.canvas = canvas;
     this.keys = { w: false, a: false, s: false, d: false };
+    this.gear = 1;
     this.orbitYaw = 0;
     this.orbitPitch = -0.35;
     this.wantsFire = false;
@@ -19,10 +22,16 @@ export class Controls {
     this._onKeyDown = (e) => {
       if (e.key == null) return;
       const k = e.key.toLowerCase();
-      if (k in this.keys) this.keys[k] = true;
+      if (k === 'a' || k === 'd') this.keys[k] = true;
 
       if (this.locked) {
-        if (k === '1') {
+        if (k === 'w' && !e.repeat) {
+          this.gear = Math.min(GEAR_RATIOS.length - 1, this.gear + 1);
+          e.preventDefault();
+        } else if (k === 's' && !e.repeat) {
+          this.gear = Math.max(0, this.gear - 1);
+          e.preventDefault();
+        } else if (k === '1') {
           this.weaponMode = 'gun';
           e.preventDefault();
         } else if (k === '2') {
@@ -61,13 +70,14 @@ export class Controls {
     this._onKeyUp = (e) => {
       if (e.key == null) return;
       const k = e.key.toLowerCase();
-      if (k in this.keys) this.keys[k] = false;
+      if (k === 'a' || k === 'd') this.keys[k] = false;
     };
+
     this._onClick = () => {
-      if (!this.locked) canvas.requestPointerLock();
+      if (!this.locked) this.canvas.requestPointerLock();
     };
     this._onLockChange = () => {
-      this.locked = document.pointerLockElement === canvas;
+      this.locked = document.pointerLockElement === this.canvas;
       if (!this.locked) {
         this.scoped = false;
         this._scopePressed = false;
@@ -100,12 +110,39 @@ export class Controls {
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
   }
 
+  updateMotionKeys(currentSpeed, maxSpeed) {
+    const target = GEAR_RATIOS[this.gear] * maxSpeed;
+    const epsilon = 0.05;
+    if (currentSpeed < target - epsilon) {
+      this.keys.w = true;
+      this.keys.s = false;
+    } else if (currentSpeed > target + epsilon) {
+      this.keys.w = false;
+      this.keys.s = true;
+    } else {
+      this.keys.w = false;
+      this.keys.s = false;
+    }
+  }
+
   setTorpedoCapabilities({ availableTiers }) {
     this._availableTiers = availableTiers;
   }
 
   get availableTorpedoTiers() {
     return this._availableTiers;
+  }
+
+  attachCanvas(newCanvas) {
+    if (newCanvas === this.canvas) return;
+    this.canvas.removeEventListener('click', this._onClick);
+    this.canvas.removeEventListener('contextmenu', this._onContextMenu);
+    this.canvas = newCanvas;
+    newCanvas.addEventListener('click', this._onClick);
+    newCanvas.addEventListener('contextmenu', this._onContextMenu);
+    this.locked = false;
+    this.scoped = false;
+    this._scopePressed = false;
   }
 
   consumeFire() {
