@@ -131,7 +131,8 @@
       "Bash(PYTHONIOENCODING=utf-8 conda run --no-capture-output -n agent python -m pytest tests/test_spawn.py)",
       "Bash(PYTHONIOENCODING=utf-8 conda run --no-capture-output -n agent python -m pytest tests/test_spawn.py::TestSpawnSafeFromLand::test_corners_water_at_safe_spawn -v)",
       "Bash(PYTHONIOENCODING=utf-8 conda run --no-capture-output -n agent python -m pytest tests/test_respawn.py::TestShipShipCollision -v)",
-      "Bash(PYTHONIOENCODING=utf-8 conda run --no-capture-output -n agent python -m pytest)"
+      "Bash(PYTHONIOENCODING=utf-8 conda run --no-capture-output -n agent python -m pytest)",
+      "Bash(git rebase *)"
     ]
   }
 }

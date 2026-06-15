@@ -1,4 +1,4 @@
-export default function MenuScreen({ user, onSinglePlayer, onMultiplayer, onShowLeaderboard, onShowAdmin, onLogout }) {
+export default function MenuScreen({ user, onSinglePlayer, onMultiplayer, onShowLeaderboard, onShowAdmin, onLogout, onShowTutorial }) {
   return (
     <div id="menu-screen">
       <div className="menu-container">
@@ -18,6 +18,7 @@ export default function MenuScreen({ user, onSinglePlayer, onMultiplayer, onShow
           </div>
         </div>
 
+        <button className="menu-btn secondary" onClick={onShowTutorial}>游戏教程</button>
         <button className="menu-btn secondary" onClick={onShowLeaderboard}>排行榜</button>
         {user.role === 'admin' && (
           <button className="menu-btn secondary" onClick={onShowAdmin}>管理后台</button>
