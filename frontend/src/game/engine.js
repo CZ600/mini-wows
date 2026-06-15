@@ -270,13 +270,18 @@ export class GameEngine {
         let anyFired = false;
         const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
         const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
+        const barrels = this.ship.barrels || 1;
         for (const turret of this.ship.turrets) {
           if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
-            const { origin, direction } = getTurretFireData(turret, this.ship.heading);
             const dx = aimTarget.x - this.ship.mesh.position.x;
             const dz = aimTarget.z - this.ship.mesh.position.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
-            this.projectileManager.fire(origin, applyCannonSpread(direction, dist, this.shipClass, spreadMult), this.ship.damage, 'player');
+            // One shell per barrel: each fires from its own muzzle position
+            // with its own spread.
+            for (let b = 0; b < barrels; b++) {
+              const { origin, direction } = getTurretFireData(turret, this.ship.heading, b);
+              this.projectileManager.fire(origin, applyCannonSpread(direction, dist, this.shipClass, spreadMult), this.ship.damage, 'player');
+            }
             turret.cooldown = this.ship.fireCooldown * cdMult;
             anyFired = true;
           }

@@ -302,10 +302,11 @@ class TestTurretAimFilter:
         assert len(gs.projectile_mgr.projectiles) == 3
 
     def test_level10_battleship_forward(self):
-        """等级10战列舰朝前射击：只有3门前炮塔开火。"""
+        """等级10战列舰朝前射击：2门前炮塔×3管(三联装)=6发炮弹。"""
         gs, ship = self._setup(level=10, ship_class="battleship")
         gs.process_fire(1, {"aim": {"x": 0, "y": 2, "z": 500}})
-        assert len(gs.projectile_mgr.projectiles) == 3
+        # A-B-X layout: 2 front turrets, each triple-barrel → 6 projectiles
+        assert len(gs.projectile_mgr.projectiles) == 6
 
     def test_side_aim_on_bridge_ship_fires_none_directly(self):
         """等级4船(有桥楼)朝正侧面(yawRange=2.2≈126°)射击：

@@ -4,7 +4,7 @@ from collections import deque
 from game.config import (
     DT, SNAPSHOT_HISTORY_SIZE, GRAVITY, PROJECTILE_INITIAL_SPEED,
     ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED, ENEMY_FIRE_COOLDOWN,
-    RAMMING_DAMAGE,
+    RAMMING_DAMAGE, get_ship_config,
 )
 from game.ship import ServerShip
 from game.terrain import Terrain
@@ -167,24 +167,49 @@ class GameState:
         ship.update(DT, keys, self.terrain)
 
     def _get_turret_offsets(self, ship):
-        """Return list of (dx, dz) offsets for each turret relative to ship center."""
-        from game.config import get_ship_config
+        """Return list of (dx, dz, y_step) offsets for each turret relative to
+        ship center. y_step is the superfiring height raise. Mirrors the client's
+        buildTurretDefs() so muzzle origins line up."""
         cfg = get_ship_config(ship.level, ship.ship_class)
         n_front = cfg["front_turrets"]
         n_back = cfg["back_turrets"]
+        has_bridge = cfg.get("has_bridge", False)
+        barrels = cfg.get("barrels", 1)
         length = ship.ship_length
-        spacing = max(1.5, ship.ship_width * 0.85)
+        turret_size = (0.8 + ship.ship_width * 0.10) * cfg.get("turret_mul", 1.0)
+        # Spacing tracks the widened multi-barrel housing so turrets pack tightly.
+        housing_width = turret_size * (1 + (barrels - 1) * 0.45)
+        spacing = max(1.2, housing_width * 1.4)
+        step_h = turret_size * 0.55
+
+        front_center = length * 0.2
+        back_center = -length * 0.2
+
+        if has_bridge:
+            bridge_z = 0.0
+            bridge_half = length * 0.14
+            front_gap = housing_width * 0.35
+            back_gap = housing_width * 0.55
+            if n_front > 0:
+                front_edge = bridge_z + bridge_half
+                closest_offset = (n_front - 1) / 2 * spacing
+                front_center = max(front_center, front_edge + front_gap + closest_offset)
+            if n_back > 0:
+                back_edge = bridge_z - bridge_half
+                closest_offset = (n_back - 1) / 2 * spacing
+                back_center = min(back_center, back_edge - back_gap - closest_offset)
 
         offsets = []
-        front_center = length * 0.2
         for i in range(n_front):
+            # Front group fires forward: turret nearest the bridge (lowest i,
+            # furthest aft in the group) sits highest to fire over the ones ahead.
             offset = (i - (n_front - 1) / 2) * spacing
-            offsets.append((0, front_center + offset))
-
-        back_center = -length * 0.2
+            offsets.append((0, front_center + offset, (n_front - 1 - i) * step_h))
         for i in range(n_back):
+            # Rear group fires aft: turret nearest the bridge (highest i, furthest
+            # forward in the group) sits highest to fire over the ones behind.
             offset = (i - (n_back - 1) / 2) * spacing
-            offsets.append((0, back_center + offset))
+            offsets.append((0, back_center + offset, i * step_h))
 
         return offsets
 
@@ -201,7 +226,6 @@ class GameState:
 
     def _get_turret_yaw_caps(self, ship):
         """Return list of (yaw_center, yaw_range) per turret, mirroring client buildTurretDefs."""
-        from game.config import get_ship_config
         cfg = get_ship_config(ship.level, ship.ship_class)
         n_front = cfg["front_turrets"]
         n_back = cfg["back_turrets"]
@@ -266,11 +290,8 @@ class GameState:
             math.sin(pitch),
             math.cos(yaw) * math.cos(pitch),
         )
-
-        direction = apply_cannon_spread(
-            direction, horiz_dist, ship.ship_class,
-            spread_mult=0.7 if ship.skills.is_active("precision") else 1.0,
-        )
+        # Note: per-barrel spread is applied inside the fire loop below so each
+        # barrel of a multi-barrel turret scatters independently.
 
         local_aim_yaw = yaw - ship.heading
         turret_caps = self._get_turret_yaw_caps(ship)
@@ -284,18 +305,35 @@ class GameState:
             return
 
         turret_offsets = self._get_turret_offsets(ship)
+        cfg = get_ship_config(ship.level, ship.ship_class)
+        barrels = cfg.get("barrels", 1)
+        # Lateral spacing between barrels within a turret (mirrors the client's
+        # barrelGap = turretSize * 0.35), used to give each barrel its own muzzle.
+        turret_size = (0.8 + ship.ship_width * 0.10) * cfg.get("turret_mul", 1.0)
+        barrel_gap = turret_size * 0.35
 
         for i in fireable:
             if i < len(turret_offsets):
-                ldx, ldz = turret_offsets[i]
-                ox, oz = self._turret_world_pos(ship, ldx, ldz)
+                ldx, ldz, y_step = turret_offsets[i]
             else:
-                ox, oz = ship.pos_x, ship.pos_z
-            self.projectile_mgr.fire(
-                player_id, ship.damage,
-                (ox, origin_y, oz),
-                direction,
-            )
+                ldx, ldz, y_step = 0.0, 0.0, 0.0
+            # Multi-barrel turrets fire one projectile per barrel. Each barrel
+            # fires from its own muzzle (lateral offset on the turret's local x),
+            # and each projectile gets its own spread so a double/triple turret
+            # scatters like a salvo rather than a single shot.
+            muzzle_y = origin_y + y_step
+            for b in range(barrels):
+                barrel_ldx = ldx + (b - (barrels - 1) / 2) * barrel_gap
+                ox, oz = self._turret_world_pos(ship, barrel_ldx, ldz)
+                spread_dir = apply_cannon_spread(
+                    direction, horiz_dist, ship.ship_class,
+                    spread_mult=0.7 if ship.skills.is_active("precision") else 1.0,
+                )
+                self.projectile_mgr.fire(
+                    player_id, ship.damage,
+                    (ox, muzzle_y, oz),
+                    spread_dir,
+                )
             cd = ship.fire_cooldown
             if ship.skills.is_active("rapid_fire"):
                 cd *= 0.7

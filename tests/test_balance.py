@@ -60,13 +60,28 @@ class TestBattleshipGunDamage:
             assert mul == 3.075, \
                 f"Battleship Lv{lv}: expected damage_mul 3.075, got {mul}"
 
-    def test_battleship_computed_damage(self):
+    def test_battleship_per_shot_damage(self):
+        """每发伤害 = base * damage_mul * (原塔数 / (新塔数 * 炮管数))"""
         for lv in range(4, 11):
             cfg = get_class_config("battleship", lv)
             base = LEVEL_CONFIG[lv]
-            expected = round(base["damage"] * 3.075)
+            cc = CLASS_CONFIG["battleship"][lv]
+            new_turrets = cfg["front_turrets"] + cfg["back_turrets"]
+            base_shots = base["front_turrets"] + base["back_turrets"]
+            dmg_scale = base_shots / (new_turrets * cfg["barrels"])
+            expected = round(base["damage"] * cc["damage_mul"] * dmg_scale)
             assert cfg["damage"] == expected, \
-                f"Battleship Lv{lv}: expected damage {expected}, got {cfg['damage']}"
+                f"Battleship Lv{lv}: expected per-shot damage {expected}, got {cfg['damage']}"
+
+    def test_battleship_salvo_dpm_preserved(self):
+        """改炮管/布局后齐射总伤害应近似不变 (DPM 恒定)"""
+        for lv in range(4, 11):
+            cfg = get_class_config("battleship", lv)
+            base = LEVEL_CONFIG[lv]
+            new_salvo = (cfg["front_turrets"] + cfg["back_turrets"]) * cfg["barrels"] * cfg["damage"]
+            old_salvo = (base["front_turrets"] + base["back_turrets"]) * round(base["damage"] * 3.075)
+            assert abs(new_salvo - old_salvo) <= 6, \
+                f"Battleship Lv{lv}: salvo drifted old={old_salvo} new={new_salvo}"
 
 
 class TestCruiserGunDamage:
@@ -78,13 +93,78 @@ class TestCruiserGunDamage:
             assert mul == 1.3, \
                 f"Cruiser Lv{lv}: expected damage_mul 1.3, got {mul}"
 
-    def test_cruiser_computed_damage(self):
+    def test_cruiser_per_shot_damage(self):
+        """每发伤害 = base * damage_mul * (原塔数 / (新塔数 * 炮管数))"""
         for lv in range(4, 11):
             cfg = get_class_config("cruiser", lv)
             base = LEVEL_CONFIG[lv]
-            expected = round(base["damage"] * 1.3)
+            cc = CLASS_CONFIG["cruiser"][lv]
+            new_turrets = cfg["front_turrets"] + cfg["back_turrets"]
+            base_shots = base["front_turrets"] + base["back_turrets"]
+            dmg_scale = base_shots / (new_turrets * cfg["barrels"])
+            expected = round(base["damage"] * cc["damage_mul"] * dmg_scale)
             assert cfg["damage"] == expected, \
-                f"Cruiser Lv{lv}: expected damage {expected}, got {cfg['damage']}"
+                f"Cruiser Lv{lv}: expected per-shot damage {expected}, got {cfg['damage']}"
+
+    def test_cruiser_salvo_dpm_preserved(self):
+        """改炮管后齐射总伤害应近似不变 (DPM 恒定)"""
+        for lv in range(4, 11):
+            cfg = get_class_config("cruiser", lv)
+            base = LEVEL_CONFIG[lv]
+            new_salvo = (cfg["front_turrets"] + cfg["back_turrets"]) * cfg["barrels"] * cfg["damage"]
+            old_salvo = (base["front_turrets"] + base["back_turrets"]) * round(base["damage"] * 1.3)
+            assert abs(new_salvo - old_salvo) <= 6, \
+                f"Cruiser Lv{lv}: salvo drifted old={old_salvo} new={new_salvo}"
+
+
+class TestDestroyerGunDamage:
+    """驱逐舰火炮伤害*0.7 — damage_mul 0.7"""
+
+    def test_destroyer_per_shot_damage(self):
+        for lv in range(4, 11):
+            cfg = get_class_config("destroyer", lv)
+            base = LEVEL_CONFIG[lv]
+            cc = CLASS_CONFIG["destroyer"][lv]
+            new_turrets = cfg["front_turrets"] + cfg["back_turrets"]
+            base_shots = base["front_turrets"] + base["back_turrets"]
+            dmg_scale = base_shots / (new_turrets * cfg["barrels"])
+            expected = round(base["damage"] * cc["damage_mul"] * dmg_scale)
+            assert cfg["damage"] == expected, \
+                f"Destroyer Lv{lv}: expected per-shot damage {expected}, got {cfg['damage']}"
+
+
+class TestMultiBarrelConfig:
+    """多管炮塔配置规则 (6级起双联装；BB 8-10级三联装 + A-B-X)"""
+
+    def test_double_turret_from_level_6(self):
+        for cls in ["destroyer", "cruiser", "battleship"]:
+            for lv in range(4, 6):
+                assert get_class_config(cls, lv)["barrels"] == 1, \
+                    f"{cls} Lv{lv} should have single barrel"
+            for lv in range(6, 8):
+                assert get_class_config(cls, lv)["barrels"] == 2, \
+                    f"{cls} Lv{lv} should have double barrels"
+
+    def test_battleship_triple_turret_and_abx_layout(self):
+        # Lv8-9: triple barrels in A-B-X layout (2 front + 1 back).
+        for lv in range(8, 10):
+            cfg = get_class_config("battleship", lv)
+            assert cfg["barrels"] == 3, f"BB Lv{lv} should have triple barrels"
+            assert cfg["front_turrets"] == 2, f"BB Lv{lv} A-B-X layout: 2 front"
+            assert cfg["back_turrets"] == 1, f"BB Lv{lv} A-B-X layout: 1 back"
+
+    def test_battleship_level10_four_triple_turrets(self):
+        """BB Lv10: 4 triple-barrel turrets (2 front + 2 back), DPM unchanged."""
+        cfg = get_class_config("battleship", 10)
+        assert cfg["barrels"] == 3, "BB Lv10 should have triple barrels"
+        assert cfg["front_turrets"] == 2, "BB Lv10 layout: 2 front"
+        assert cfg["back_turrets"] == 2, "BB Lv10 layout: 2 back"
+
+    def test_cruiser_destroyer_stay_double_at_high_level(self):
+        for cls in ["destroyer", "cruiser"]:
+            for lv in range(8, 11):
+                assert get_class_config(cls, lv)["barrels"] == 2, \
+                    f"{cls} Lv{lv} should remain double barrels"
 
 
 class TestEnemyTurretDamage:

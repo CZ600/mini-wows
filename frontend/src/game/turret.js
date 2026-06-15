@@ -128,14 +128,20 @@ export function applyCannonSpread(direction, distance, shipClass, spreadMult = 1
   };
 }
 
-export function getTurretFireData(turret, shipHeading) {
+export function getTurretFireData(turret, shipHeading, barrelIndex = 0) {
   const totalYaw = shipHeading + turret.currentYaw;
   const pitch = turret.currentPitch;
   const dirX = Math.sin(totalYaw) * Math.cos(pitch);
   const dirY = Math.sin(pitch);
   const dirZ = Math.cos(totalYaw) * Math.cos(pitch);
 
-  const muzzle = new THREE.Vector3(0, 0, turret.barrelLen);
+  // Muzzle sits at the end of its barrel. Each barrel is offset sideways on x
+  // within the barrelPivot's local space, so the muzzle origin differs per
+  // barrel (multi-barrel turrets fire from distinct points, not one).
+  const gap = turret.barrelGap || 0;
+  const total = turret.barrels ? turret.barrels.length : 1;
+  const offsetX = (barrelIndex - (total - 1) / 2) * gap;
+  const muzzle = new THREE.Vector3(offsetX, 0, turret.barrelLen);
   turret.barrelPivot.localToWorld(muzzle);
 
   return { origin: muzzle, direction: { x: dirX, y: dirY, z: dirZ } };

@@ -10,7 +10,7 @@ import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED } from './config.js';
 import { Ship, CLASS_CONFIG, getDriftConfig } from './ship.js';
-import { updateTurrets, calcBallisticAngles, turretCanAim, applyCannonSpread } from './turret.js';
+import { updateTurrets, calcBallisticAngles, turretCanAim, applyCannonSpread, getTurretFireData } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 
@@ -1082,19 +1082,24 @@ export class MultiplayerEngine {
     const rapidFireActive = (skl.rf && skl.rf.a > 0) || false;
     const spreadMult = precisionActive ? 0.7 : 1.0;
     const cdMult = rapidFireActive ? 0.7 : 1.0;
+    const barrels = ship.barrels || 1;
 
     for (const turret of ship.turrets) {
       if (turret.cooldown <= 0 && turretCanAim(turret, aimYaw)) {
-        const turretWorldPos = new THREE.Vector3();
-        turret.body.getWorldPosition(turretWorldPos);
-        turretWorldPos.y = 3.0;
-
         if (this._localProjMgr) {
-          const tdx = aimTarget.x - turretWorldPos.x;
-          const tdz = aimTarget.z - turretWorldPos.z;
-          const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
-          const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, tdist, this.localShip.shipClass, spreadMult);
-          this._localProjMgr.fire(turretWorldPos, dir, ship.damage, 'player');
+          // Per-barrel muzzle positions: each barrel fires from its own point
+          // (mirrors server + single-player engine behaviour).
+          for (let b = 0; b < barrels; b++) {
+            // getTurretFireData folds in the superfiring step height via
+            // barrelPivot.localToWorld, so elevated turrets fire from their
+            // raised muzzle (mirrors server's muzzle_y = origin_y + y_step).
+            const { origin } = getTurretFireData(turret, this.localShip.heading, b);
+            const tdx = aimTarget.x - origin.x;
+            const tdz = aimTarget.z - origin.z;
+            const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+            const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, tdist, this.localShip.shipClass, spreadMult);
+            this._localProjMgr.fire(origin, dir, ship.damage, 'player');
+          }
         }
         turret.cooldown = ship.fireCooldown * cdMult;
         anyFired = true;

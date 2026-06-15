@@ -121,46 +121,59 @@ MODE_CONFIG = {
 }
 
 LEVEL_CONFIG = {
-    1:  {"length": 7,  "width": 2,  "height": 1.5, "hp": 300,  "turn_radius": 20, "fire_cooldown": 5.0, "damage": 30, "front_turrets": 1, "back_turrets": 0, "has_bridge": False},
-    2:  {"length": 13, "width": 3,  "height": 2.0, "hp": 450,  "turn_radius": 30, "fire_cooldown": 4.5, "damage": 35, "front_turrets": 1, "back_turrets": 1, "has_bridge": False},
-    3:  {"length": 18, "width": 4,  "height": 2.5, "hp": 660,  "turn_radius": 35, "fire_cooldown": 4.0, "damage": 40, "front_turrets": 2, "back_turrets": 1, "has_bridge": False},
-    4:  {"length": 23, "width": 5,  "height": 3.0, "hp": 900,  "turn_radius": 40, "fire_cooldown": 3.5, "damage": 45, "front_turrets": 2, "back_turrets": 2, "has_bridge": True},
-    5:  {"length": 28, "width": 6,  "height": 3.5, "hp": 1200, "turn_radius": 45, "fire_cooldown": 3.2, "damage": 50, "front_turrets": 2, "back_turrets": 2, "has_bridge": True},
-    6:  {"length": 33, "width": 7,  "height": 4.0, "hp": 1560, "turn_radius": 50, "fire_cooldown": 2.8, "damage": 55, "front_turrets": 3, "back_turrets": 2, "has_bridge": True},
-    7:  {"length": 38, "width": 8,  "height": 4.5, "hp": 1950, "turn_radius": 55, "fire_cooldown": 2.5, "damage": 60, "front_turrets": 3, "back_turrets": 2, "has_bridge": True},
-    8:  {"length": 43, "width": 9,  "height": 5.0, "hp": 2400, "turn_radius": 60, "fire_cooldown": 2.2, "damage": 65, "front_turrets": 3, "back_turrets": 3, "has_bridge": True},
-    9:  {"length": 48, "width": 10, "height": 5.5, "hp": 2850, "turn_radius": 65, "fire_cooldown": 2.0, "damage": 70, "front_turrets": 3, "back_turrets": 3, "has_bridge": True},
-    10: {"length": 53, "width": 11, "height": 6.0, "hp": 3300, "turn_radius": 70, "fire_cooldown": 1.8, "damage": 80, "front_turrets": 3, "back_turrets": 3, "has_bridge": True},
+    # Hull height scaled to ~60% of the original freeboard so ships sit lower
+    # in the water; the projectile collision upper bound derives from this
+    # (ship_height + 3.0 in projectile.py).
+    1:  {"length": 7,  "width": 2,  "height": 0.9, "hp": 300,  "turn_radius": 20, "fire_cooldown": 5.0, "damage": 30, "front_turrets": 1, "back_turrets": 0, "has_bridge": False},
+    2:  {"length": 13, "width": 3,  "height": 1.2, "hp": 450,  "turn_radius": 30, "fire_cooldown": 4.5, "damage": 35, "front_turrets": 1, "back_turrets": 1, "has_bridge": False},
+    3:  {"length": 18, "width": 4,  "height": 1.5, "hp": 660,  "turn_radius": 35, "fire_cooldown": 4.0, "damage": 40, "front_turrets": 2, "back_turrets": 1, "has_bridge": False},
+    4:  {"length": 23, "width": 5,  "height": 1.8, "hp": 900,  "turn_radius": 40, "fire_cooldown": 3.5, "damage": 45, "front_turrets": 2, "back_turrets": 2, "has_bridge": True},
+    5:  {"length": 28, "width": 6,  "height": 2.1, "hp": 1200, "turn_radius": 45, "fire_cooldown": 3.2, "damage": 50, "front_turrets": 2, "back_turrets": 2, "has_bridge": True},
+    6:  {"length": 33, "width": 7,  "height": 2.4, "hp": 1560, "turn_radius": 50, "fire_cooldown": 2.8, "damage": 55, "front_turrets": 3, "back_turrets": 2, "has_bridge": True},
+    7:  {"length": 38, "width": 8,  "height": 2.7, "hp": 1950, "turn_radius": 55, "fire_cooldown": 2.5, "damage": 60, "front_turrets": 3, "back_turrets": 2, "has_bridge": True},
+    8:  {"length": 43, "width": 9,  "height": 3.0, "hp": 2400, "turn_radius": 60, "fire_cooldown": 2.2, "damage": 65, "front_turrets": 3, "back_turrets": 3, "has_bridge": True},
+    9:  {"length": 48, "width": 10, "height": 3.3, "hp": 2850, "turn_radius": 65, "fire_cooldown": 2.0, "damage": 70, "front_turrets": 3, "back_turrets": 3, "has_bridge": True},
+    10: {"length": 53, "width": 11, "height": 3.6, "hp": 3300, "turn_radius": 70, "fire_cooldown": 1.8, "damage": 80, "front_turrets": 3, "back_turrets": 3, "has_bridge": True},
 }
 
 CLASS_CONFIG = {
     "destroyer": {
-        4:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
-        5:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
-        6:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
-        7:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
-        8:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
-        9:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
-        10: {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 8, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7},
+        4:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 1},
+        5:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 1},
+        6:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        7:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        8:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        9:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        10: {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 8, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
     },
     "cruiser": {
-        4:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
-        5:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
-        6:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
-        7:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
-        8:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
-        9:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
-        10: {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85},
+        4:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 1},
+        5:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 1},
+        6:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        7:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        8:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        9:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        10: {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
     },
+    # Battleship: Lv6-7 double turrets; Lv8-10 triple turrets in A-B-X layout
+    # (2 front + 1 back). The layout override keeps total DPM constant via the
+    # equivalent-barrels factor applied in get_class_config().
     "battleship": {
-        4:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
-        5:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
-        6:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
-        7:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
-        8:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
-        9:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
-        10: {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0},
+        4:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 1},
+        5:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 1},
+        6:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 2},
+        7:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 2},
+        8:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 1},
+        9:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 1},
+        10: {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 2},
     },
+}
+
+# Reference turret layout before per-class multi-barrel / A-B-X overrides.
+# Used by get_class_config() to hold DPM constant when a battleship's turret
+# count changes (6 single-barrel turrets -> 3 triple-barrel turrets).
+BASE_TURRET_COUNT = {
+    4: 4, 5: 4, 6: 5, 7: 5, 8: 6, 9: 6, 10: 6,
 }
 
 ENEMY_SCALE = {
@@ -198,14 +211,30 @@ def get_class_config(ship_class, level):
         return None
     base = LEVEL_CONFIG[level]
     sm = cc.get("size_mul", 1.0)
+    barrels = cc.get("barrels", 1)
+
+    # Optional per-class turret layout override (e.g. battleship A-B-X),
+    # otherwise fall back to the shared LEVEL_CONFIG layout.
+    front_turrets = cc.get("front_turrets", base["front_turrets"])
+    back_turrets = cc.get("back_turrets", base["back_turrets"])
+    new_turrets = front_turrets + back_turrets
+
+    # Hold DPM constant: the original layout (BASE_TURRET_COUNT single-barrel
+    # turrets) had a fixed per-shot damage. The new layout fires more shots
+    # (new_turrets * barrels), so each shot's damage scales down so that the
+    # total damage per salvo is preserved.
+    base_salvo_shots = BASE_TURRET_COUNT.get(level, base["front_turrets"] + base["back_turrets"])
+    new_salvo_shots = new_turrets * barrels
+    dmg_scale = base_salvo_shots / new_salvo_shots
+
     return {
         "hp": round(base["hp"] * cc["hp_mul"]),
         "max_speed": BASE_MAX_SPEED * cc["speed_mul"],
         "turn_radius": round(base["turn_radius"] * cc["turn_mul"]),
-        "damage": round(base["damage"] * cc["damage_mul"]),
+        "damage": round(base["damage"] * cc["damage_mul"] * dmg_scale),
         "fire_cooldown": round(base["fire_cooldown"] * cc["cooldown_mul"], 2),
-        "front_turrets": base["front_turrets"],
-        "back_turrets": base["back_turrets"],
+        "front_turrets": front_turrets,
+        "back_turrets": back_turrets,
         "has_bridge": base["has_bridge"],
         "length": round(base["length"] * sm),
         "width": round(base["width"] * sm, 1),
@@ -213,6 +242,7 @@ def get_class_config(ship_class, level):
         "torpedo_tiers": cc["torpedo_tiers"],
         "torpedo_tubes": cc["torpedo_tubes"],
         "turret_mul": cc.get("turret_mul", 1.0),
+        "barrels": barrels,
     }
 
 

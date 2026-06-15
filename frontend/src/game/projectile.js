@@ -64,10 +64,9 @@ export class ProjectileManager {
 
       let hit = false;
 
-      // Water
+      // Water — splash only, no explosion sound (a miss into the sea is silent).
       if (p.mesh.position.y <= 0) {
         this._createSplash(p.mesh.position.clone());
-        if (p.owner === 'player' && this.audio) this.audio.playExplosion();
         hit = true;
       }
 

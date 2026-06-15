@@ -624,16 +624,16 @@ class TestShipCollisionDetection:
         gs.add_ship(1, "Alice", level=1)
         gs.add_ship(2, "Bob", level=10)
 
-        assert gs.ships[1].ship_height == 1.5  # Level 1
-        assert gs.ships[2].ship_height == 6.0  # Level 10
+        assert gs.ships[1].ship_height == 0.9  # Level 1 (60% of 1.5)
+        assert gs.ships[2].ship_height == 3.6  # Level 10 (60% of 6.0)
 
     def test_collision_uses_actual_ship_height(self):
-        """Projectile at y=3.0 should hit a level 10 ship (height=6.0)."""
+        """Projectile at y=3.0 should hit a level 10 ship (height=3.6)."""
         from game.projectile import ProjectileManager
 
         terrain = _make_terrain()
         gs = GameState(terrain, mode="ffa")
-        gs.add_ship(1, "Alice", level=10)  # height=6.0
+        gs.add_ship(1, "Alice", level=10)  # height=3.6
         gs.add_ship(2, "Attacker", level=1)
 
         # Place Alice's large ship at origin
@@ -641,8 +641,9 @@ class TestShipCollisionDetection:
         gs.ships[1].pos_z = 0
         gs.ships[1].heading = 0
 
-        # Fire projectile that passes through y=4.0 directly above Alice
-        # Old hardcoded 2.5 height would miss; real 6.0 height should hit
+        # Fire projectile that passes through y=4.0 directly above Alice.
+        # Old hardcoded 2.5 height would miss; real height (3.6 → upper bound
+        # 6.6) still catches a projectile at y=4.0.
         pm = ProjectileManager()
         pm.fire(2, 50, (0, 4.0, 0), (0, 0.1, 1.0))
 
@@ -726,8 +727,8 @@ class TestShipCollisionDetection:
     def test_projectile_at_deck_level_hits(self):
         """Projectile at y=2 should hit a level-1 ship (deck area).
 
-        Hull spans y in [1.0, 2.5] for level 1 (height=1.5). Old code
-        used ship_height=1.5 as upper bound and missed deck-level hits;
+        Hull spans y in [1.0, 1.9] for level 1 (height=0.9). Old code
+        used ship_height as upper bound and missed deck-level hits;
         the new upper bound includes the deck region.
         """
         from game.projectile import ProjectileManager
@@ -910,8 +911,8 @@ class TestShipCollisionDetection:
     def test_height_upper_bound_includes_deck(self):
         """Height upper bound = ship_height + 3.0 must still cover deck region.
 
-        Level-1 ship height=1.5 → upper bound = 4.5. Projectile at y=4.0 hits;
-        at y=5.0 misses.
+        Level-1 ship height=0.9 → upper bound = 3.9. Projectile at y=3.5 hits;
+        at y=4.5 misses.
         """
         from game.projectile import ProjectileManager
 
@@ -925,14 +926,14 @@ class TestShipCollisionDetection:
         gs.ships[1].heading = 0
 
         pm1 = ProjectileManager()
-        pm1.fire(2, 50, (0, 4.0, 0), (0, 0, 0))  # zero velocity, stays at y=4.0
+        pm1.fire(2, 50, (0, 3.5, 0), (0, 0, 0))  # zero velocity, stays at y=3.5
         e1 = pm1.update(0.05, terrain, gs.ships)
-        assert any(ev["type"] == "hit" for ev in e1), "y=4.0 must hit (below height+3=4.5)"
+        assert any(ev["type"] == "hit" for ev in e1), "y=3.5 must hit (below height+3=3.9)"
 
         pm2 = ProjectileManager()
-        pm2.fire(2, 50, (0, 5.0, 0), (0, 0, 0))
+        pm2.fire(2, 50, (0, 4.5, 0), (0, 0, 0))
         e2 = pm2.update(0.05, terrain, gs.ships)
-        assert not any(ev["type"] == "hit" for ev in e2), "y=5.0 must miss (above height+3=4.5)"
+        assert not any(ev["type"] == "hit" for ev in e2), "y=4.5 must miss (above height+3=3.9)"
 
     def test_battleship_easier_to_hit_than_destroyer(self):
         """At the same level, battleship (sizeMul=1.0) is larger than destroyer

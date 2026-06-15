@@ -60,6 +60,7 @@ class EnemyShip {
     // Turret system: same as player ships
     this.frontTurrets = cfg.frontTurrets || 1;
     this.backTurrets = cfg.backTurrets || 0;
+    this._barrels = cfg.barrels || 1;
     const nTurrets = this.frontTurrets + this.backTurrets;
     this.turretCooldowns = new Array(nTurrets).fill(0);
 
@@ -109,74 +110,125 @@ class EnemyShip {
     this.mesh.add(deck);
 
     if (cfg.hasBridge) {
-      const bw = cfg.width * 0.45;
-      const bh = cfg.height * 0.7;
-      const bl = cfg.length * 0.12;
-      const bridge = new THREE.Mesh(
-        new THREE.BoxGeometry(bw, bh, bl),
+      // Long-island superstructure mirroring the player ship: low deckhouse
+      // running fore-aft, with a forward bridge block (carrying the mast) and
+      // an aft funnel.
+      const isAbx = (cfg.barrels || 1) >= 3;
+      const bridgeOffsetZ = 0;
+      const bw = cfg.width * (isAbx ? 0.5 : 0.45);
+      // Bridge island height: raised to 140% to match the player ship.
+      const bh = cfg.height * 0.98;
+      const bl = cfg.length * 0.26;
+
+      const deckhouseH = bh * 0.5;
+      const deckhouse = new THREE.Mesh(
+        new THREE.BoxGeometry(bw * 0.85, deckhouseH, bl),
         hullMat
       );
-      bridge.position.set(0, deckY + bh / 2 + 0.1, 0);
-      this.mesh.add(bridge);
+      deckhouse.position.set(0, deckY + deckhouseH / 2 + 0.1, bridgeOffsetZ);
+      this.mesh.add(deckhouse);
 
       const windowMat = new THREE.MeshPhongMaterial({ color: 0x886644 });
       applyHalfLambert(windowMat);
       const windows = new THREE.Mesh(
-        new THREE.BoxGeometry(bw * 0.85, bh * 0.25, bl + 0.1),
+        new THREE.BoxGeometry(bw * 0.88, deckhouseH * 0.35, bl + 0.1),
         windowMat
       );
-      windows.position.y = bh * 0.1;
-      bridge.add(windows);
+      windows.position.y = deckhouseH * 0.1;
+      deckhouse.add(windows);
 
-      const sbw = bw * 0.6;
-      const sbh = bh * 0.35;
-      const sbl = bl * 0.6;
-      const smallBlock = new THREE.Mesh(
-        new THREE.BoxGeometry(sbw, sbh, sbl),
+      // Forward bridge block (taller).
+      const fwdBlockW = bw * 0.7;
+      const fwdBlockH = bh * 0.8;
+      const fwdBlockL = bl * 0.32;
+      const fwdBlock = new THREE.Mesh(
+        new THREE.BoxGeometry(fwdBlockW, fwdBlockH, fwdBlockL),
         hullMat
       );
-      smallBlock.position.set(0, bh / 2 + sbh / 2, 0);
-      bridge.add(smallBlock);
+      fwdBlock.position.set(0, deckhouseH / 2 + fwdBlockH / 2, bl * 0.30);
+      deckhouse.add(fwdBlock);
 
-      const mastH = bh * 0.8;
+      // Aft funnel block (shorter, squatter).
+      const funnelW = bw * 0.5;
+      const funnelH = bh * 0.6;
+      const funnelL = bl * 0.26;
+      const funnel = new THREE.Mesh(
+        new THREE.BoxGeometry(funnelW, funnelH, funnelL),
+        hullMat
+      );
+      funnel.position.set(0, deckhouseH / 2 + funnelH / 2, -bl * 0.32);
+      deckhouse.add(funnel);
+
+      const funnelTopMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+      applyHalfLambert(funnelTopMat);
+      const funnelTop = new THREE.Mesh(
+        new THREE.BoxGeometry(funnelW * 0.9, funnelH * 0.12, funnelL * 0.9),
+        funnelTopMat
+      );
+      funnelTop.position.y = funnelH / 2 - funnelH * 0.06;
+      funnel.add(funnelTop);
+
+      const mastH = bh * (isAbx ? 1.2 : 0.9);
       const mast = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.1, 0.15, mastH, 6),
+        new THREE.CylinderGeometry(0.1, 0.18, mastH, 6),
         hullMat
       );
-      mast.position.set(0, sbh / 2 + mastH / 2, 0);
-      smallBlock.add(mast);
+      mast.position.set(0, fwdBlockH / 2 + mastH / 2, -fwdBlockL * 0.1);
+      fwdBlock.add(mast);
+
+      const crossarm = new THREE.Mesh(
+        new THREE.BoxGeometry(fwdBlockW * 0.5, 0.12, 0.12),
+        hullMat
+      );
+      crossarm.position.set(0, mastH * 0.35, 0);
+      mast.add(crossarm);
     }
 
-    const turretSize = (1.2 + cfg.width * 0.15) * (cfg.turretMul || 1.0);
+    const barrels = cfg.barrels || 1;
+    const turretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
     const barrelLen = turretSize * 1.5;
-    const spacing = Math.max(1.5, cfg.width * 0.85);
+    const barrelGap = turretSize * 0.35;
+    // Spacing tracks the (widened) multi-barrel housing width so adjacent
+    // turrets pack tightly (was width*0.85, too loose with smaller turrets).
+    const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
+    const spacing = Math.max(1.2, housingWidth * 1.4);
 
     let frontCenter = cfg.length * 0.2;
     let backCenter = -cfg.length * 0.2;
 
     if (cfg.hasBridge) {
-      const bridgeHalf = cfg.length * 0.06;
-      const minDist = bridgeHalf + turretSize * 0.7 + 0.2;
+      const bridgeZ = 0;
+      const bridgeHalf = cfg.length * 0.14;
+      const frontGap = housingWidth * 0.35;
+      const backGap = housingWidth * 0.55;
       if (cfg.frontTurrets > 0) {
+        const frontEdge = bridgeZ + bridgeHalf;
         const closestOffset = (cfg.frontTurrets - 1) / 2 * spacing;
-        frontCenter = Math.max(frontCenter, minDist + closestOffset);
+        frontCenter = Math.max(frontCenter, frontEdge + frontGap + closestOffset);
       }
       if (cfg.backTurrets > 0) {
+        const backEdge = bridgeZ - bridgeHalf;
         const closestOffset = (cfg.backTurrets - 1) / 2 * spacing;
-        backCenter = Math.min(backCenter, -(minDist + closestOffset));
+        backCenter = Math.min(backCenter, backEdge - backGap - closestOffset);
       }
     }
 
     this._turretBodies = [];
     this._turretBarrels = [];
+    this._turretBarrelGroups = [];
+
+    // Step height so aft turrets are raised to fire over the ones ahead of them.
+    const stepH = turretSize * 0.55;
 
     for (let i = 0; i < cfg.frontTurrets; i++) {
       const offset = (i - (cfg.frontTurrets - 1) / 2) * spacing;
-      this._addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, frontCenter + offset, deckY);
+      // Front group fires forward: turret nearest the bridge (lowest i) is highest.
+      this._addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, frontCenter + offset, deckY, (cfg.frontTurrets - 1 - i) * stepH);
     }
     for (let i = 0; i < cfg.backTurrets; i++) {
       const offset = (i - (cfg.backTurrets - 1) / 2) * spacing;
-      this._addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, backCenter + offset, deckY);
+      // Rear group fires aft: turret nearest the bridge (highest i) is highest.
+      this._addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, backCenter + offset, deckY, i * stepH);
     }
 
     const hpWidth = cfg.length * 0.6;
@@ -200,7 +252,7 @@ class EnemyShip {
     this._deckY = deckY;
   }
 
-  _addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, z, deckY) {
+  _addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, z, deckY, yOffset = 0) {
     const turretGroup = new THREE.Group();
 
     const base = new THREE.Mesh(
@@ -209,26 +261,49 @@ class EnemyShip {
     );
     turretGroup.add(base);
 
+    // Widen the turret housing so multiple barrels sit naturally side by side.
+    const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(turretSize, turretSize, turretSize),
+      new THREE.BoxGeometry(housingWidth, turretSize, turretSize),
       turretMat
     );
     body.position.y = turretSize * 0.4;
     turretGroup.add(body);
 
-    const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.15, barrelLen, 8),
-      barrelMat
-    );
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0, turretSize * 0.5 + barrelLen / 2);
-    body.add(barrel);
+    // One barrel mesh per barrel, offset sideways on x; all parented to the
+    // body so they pitch together (body rotation animates elevation).
+    const barrelMeshes = [];
+    for (let b = 0; b < barrels; b++) {
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, barrelLen, 8),
+        barrelMat
+      );
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set((b - (barrels - 1) / 2) * barrelGap, 0, turretSize * 0.5 + barrelLen / 2);
+      body.add(barrel);
+      barrelMeshes.push(barrel);
+    }
 
-    turretGroup.position.set(0, deckY + 0.15, z);
+    turretGroup.position.set(0, deckY + 0.15 + yOffset, z);
     this.mesh.add(turretGroup);
 
+    // Cylindrical pedestal under raised (superfiring) turrets, filling the
+    // gap from the deck up to the turret base.
+    if (yOffset > 0.01) {
+      const pedestalH = yOffset + 0.15;
+      const pedestal = new THREE.Mesh(
+        new THREE.CylinderGeometry(housingWidth * 0.42, housingWidth * 0.5, pedestalH, 12),
+        turretMat
+      );
+      pedestal.position.set(0, deckY + pedestalH / 2, z);
+      this.mesh.add(pedestal);
+    }
+
     this._turretBodies.push(body);
-    this._turretBarrels.push(barrel);
+    // Per-turret barrel info for computing distinct muzzle origins when firing.
+    this._turretBarrelGroups.push({ meshes: barrelMeshes, barrelLen });
+    // Keep the flat list for the pitch animation loop.
+    for (const m of barrelMeshes) this._turretBarrels.push(m);
   }
 
   _rotateToward(target, dt) {
@@ -368,13 +443,14 @@ class EnemyShip {
 
       for (const b of this._turretBarrels) b.rotation.x = Math.PI / 2 - pitch;
 
-      // Turret-based salvo: fire from all turrets that can aim and are ready
+      // Turret-based salvo: fire from all turrets that can aim and are ready.
+      // Each barrel fires its own shell from its own muzzle position with
+      // independent spread, mirroring the server's multi-barrel fire logic.
       const dirX = Math.sin(targetYaw) * Math.cos(pitch);
       const dirY = Math.sin(pitch);
       const dirZ = Math.cos(targetYaw) * Math.cos(pitch);
-      const spreadDir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist, this.shipType);
 
-      const turretWorldPos = new THREE.Vector3();
+      const muzzleVec = new THREE.Vector3();
       for (let i = 0; i < this._turretBodies.length; i++) {
         if (this.turretCooldowns[i] > 0) continue;
 
@@ -384,11 +460,18 @@ class EnemyShip {
         const diff = ((localYaw - yawCenter + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
         if (Math.abs(diff) > yawRange + 0.05) continue;
 
-        // Get turret world position
-        this._turretBodies[i].getWorldPosition(turretWorldPos);
-        turretWorldPos.y = fireOriginY;
-
-        projectileManager.fire(turretWorldPos, spreadDir, this.damage, 'enemy');
+        const group = this._turretBarrelGroups[i];
+        for (let b = 0; b < this._barrels; b++) {
+          // Muzzle = barrel mesh's local +z end (barrelLen/2 from its center).
+          // localToWorld folds in the superfiring step height so elevated
+          // turrets actually fire from their raised muzzle, not the deck.
+          const mesh = group.meshes[b];
+          const halfLen = group.barrelLen / 2;
+          muzzleVec.set(0, 0, halfLen);
+          mesh.localToWorld(muzzleVec);
+          const spreadDir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist, this.shipType);
+          projectileManager.fire(muzzleVec.clone(), spreadDir, this.damage, 'enemy');
+        }
         this.turretCooldowns[i] = this.fireCooldown;
       }
     }
