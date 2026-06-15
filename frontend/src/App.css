@@ -133,6 +133,7 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 /* 狙击镜 */
 #scope-overlay {
   position: fixed; inset: 0; z-index: 52; pointer-events: none;
+  background: radial-gradient(circle at center, transparent 62%, rgba(0,0,0,0.45) 100%);
 }
 #scope-crosshair {
   position: absolute; inset: 0; width: 100%; height: 100%;

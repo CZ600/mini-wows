@@ -935,8 +935,9 @@ export class MultiplayerEngine {
     const scoped = this.controls.scoped;
     const shipScale = this.localShip.ship ? this.localShip.ship.shipLength / 10 : 1;
     let targetCamPos;
+    const hOff = this.controls.heightOffset || 0;
     if (scoped) {
-      const scopedH = this.localShip.ship?.scopedCameraHeight || CAM_HEIGHT_SCOPED;
+      const scopedH = (this.localShip.ship?.scopedCameraHeight || CAM_HEIGHT_SCOPED) + hOff;
       targetCamPos = new THREE.Vector3(
         this.localShip.pos_x,
         scopedH,
@@ -944,7 +945,7 @@ export class MultiplayerEngine {
       );
     } else {
       const camDist = CAM_DIST + shipScale * 5;
-      const camHeight = CAM_HEIGHT + shipScale * 3;
+      const camHeight = CAM_HEIGHT + shipScale * 3 + hOff;
       targetCamPos = new THREE.Vector3(
         this.localShip.pos_x - Math.sin(worldYaw) * camDist,
         camHeight,
@@ -954,7 +955,8 @@ export class MultiplayerEngine {
     const camLerp = scoped ? 0.15 : 0.12;
     this.camera.position.lerp(targetCamPos, camLerp);
 
-    const targetFov = scoped ? FOV_SCOPED : FOV_NORMAL;
+    const zoom = this.controls.zoomLevel || 1.0;
+    const targetFov = scoped ? FOV_SCOPED / zoom : (this.controls.normalFov || FOV_NORMAL);
     this._currentFov += (targetFov - this._currentFov) * (scoped ? 0.18 : 0.12);
     this.camera.fov = this._currentFov;
     this.camera.updateProjectionMatrix();

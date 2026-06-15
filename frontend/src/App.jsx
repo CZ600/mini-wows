@@ -24,22 +24,44 @@ const MENU_BGM_SOUND = '/Riptide%20Armada%202.mp3';
 const MENU_BGM_VOLUME = 0.1;
 const PREP_PATHS = new Set(['/', '/single', '/multi', '/multi/room', '/class-select', '/gameover']);
 
+const SCOPE_TICKS = [
+  -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+];
+
 function ScopeOverlay() {
   return (
     <div id="scope-overlay">
-      <svg id="scope-crosshair" viewBox="0 0 400 400" width="100%" height="100%">
-        <circle cx="200" cy="200" r="180" fill="none" stroke="rgba(0,0,0,0.7)" strokeWidth="120" />
-        <circle cx="200" cy="200" r="140" fill="none" stroke="rgba(180,180,180,0.3)" strokeWidth="1.5" />
-        <line x1="200" y1="40" x2="200" y2="185" stroke="rgba(200,200,200,0.7)" strokeWidth="1" />
-        <line x1="200" y1="215" x2="200" y2="260" stroke="rgba(200,200,200,0.7)" strokeWidth="1" />
-        <line x1="40" y1="200" x2="185" y2="200" stroke="rgba(200,200,200,0.7)" strokeWidth="1" />
-        <line x1="215" y1="200" x2="260" y2="200" stroke="rgba(200,200,200,0.7)" strokeWidth="1" />
-        <line x1="72" y1="72" x2="155" y2="155" stroke="rgba(200,200,200,0.35)" strokeWidth="0.8" />
-        <line x1="328" y1="72" x2="245" y2="155" stroke="rgba(200,200,200,0.35)" strokeWidth="0.8" />
-        <line x1="72" y1="328" x2="155" y2="245" stroke="rgba(200,200,200,0.35)" strokeWidth="0.8" />
-        <line x1="328" y1="328" x2="245" y2="245" stroke="rgba(200,200,200,0.35)" strokeWidth="0.8" />
+      <svg id="scope-crosshair" viewBox="0 0 400 400" width="100%" height="100%" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <mask id="scopeMask">
+            <rect width="400" height="400" fill="white" />
+            <circle cx="200" cy="200" r="215" fill="black" />
+          </mask>
+        </defs>
+        <rect width="400" height="400" fill="rgba(0,0,0,0.75)" mask="url(#scopeMask)" />
+        <circle cx="200" cy="200" r="160" fill="none" stroke="rgba(180,180,180,0.25)" strokeWidth="1.5" />
+        <line x1="0" y1="200" x2="400" y2="200" stroke="rgba(200,200,200,0.55)" strokeWidth="1" />
+        <line x1="200" y1="20" x2="200" y2="192" stroke="rgba(200,200,200,0.55)" strokeWidth="1" />
+        <line x1="200" y1="208" x2="200" y2="380" stroke="rgba(200,200,200,0.55)" strokeWidth="1" />
+        {SCOPE_TICKS.map((n) => {
+          const x = 200 + n * 18;
+          const isMajor = n % 5 === 0;
+          const isCenter = n === 0;
+          const h = isCenter ? 10 : isMajor ? 9 : 5;
+          const color = isCenter
+            ? 'rgba(255,60,60,0.8)'
+            : isMajor
+              ? 'rgba(200,200,200,0.65)'
+              : 'rgba(200,200,200,0.35)';
+          const sw = isMajor || isCenter ? 1.2 : 0.7;
+          return (
+            <line key={n} x1={x} y1={200 - h} x2={x} y2={200 + h}
+              stroke={color} strokeWidth={sw} />
+          );
+        })}
         <circle cx="200" cy="200" r="3" fill="rgba(255,60,60,0.8)" />
-        <text x="200" y="22" textAnchor="middle" fill="rgba(200,200,200,0.5)" fontSize="10" fontFamily="monospace">N</text>
+        <text x="200" y="24" textAnchor="middle" fill="rgba(200,200,200,0.5)" fontSize="10" fontFamily="monospace">N</text>
       </svg>
     </div>
   );

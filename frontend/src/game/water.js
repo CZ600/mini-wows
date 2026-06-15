@@ -53,17 +53,16 @@ export function createWater(scene) {
       float h = 0.0, dhx = 0.0, dhz = 0.0;
       vec2 p = position.xz;
 
-      float amp1 = 0.85 * (0.88 + 0.12 * sin(time * 0.35));
+      // 5 waves: removed two that were too similar to others
+      float amp1 = 1.1 * (0.88 + 0.12 * sin(time * 0.35));
       addWave(p, amp1, vec2(0.857, 0.514), 0.015, 0.8, h, dhx, dhz);
-      addWave(p, 0.55, vec2(0.287, 0.958), 0.025, 1.0, h, dhx, dhz);
+      addWave(p, 0.65, vec2(0.287, 0.958), 0.025, 1.0, h, dhx, dhz);
       float freq3 = 0.035 + 0.006 * sin(time * 0.27);
-      addWave(p, 0.38, vec2(-0.530, 0.848), freq3, 0.7, h, dhx, dhz);
-      float amp4 = 0.24 * (0.82 + 0.18 * sin(time * 0.43 + 1.5));
-      addWave(p, amp4, vec2(0.936, -0.351), 0.05, 1.3, h, dhx, dhz);
-      addWave(p, 0.16, vec2(0.216, 0.976), 0.065, 1.8, h, dhx, dhz);
-      float spd6 = 1.5 + 0.25 * sin(time * 0.31);
-      addWave(p, 0.15, vec2(0.6, 0.8), 0.04, spd6, h, dhx, dhz);
-      addWave(p, 0.10, vec2(-0.7, 0.714), 0.055, 1.7, h, dhx, dhz);
+      addWave(p, 0.40, vec2(-0.530, 0.848), freq3, 0.7, h, dhx, dhz);
+      float spd4 = 1.5 + 0.25 * sin(time * 0.31);
+      addWave(p, 0.20, vec2(0.6, 0.8), 0.04, spd4, h, dhx, dhz);
+      float amp5 = 0.28 * (0.82 + 0.18 * sin(time * 0.43 + 1.5));
+      addWave(p, amp5, vec2(0.936, -0.351), 0.05, 1.3, h, dhx, dhz);
 
       float nScale = 0.10;
       vec2 nCoord = p * nScale + vec2(time * 0.18, time * 0.13);

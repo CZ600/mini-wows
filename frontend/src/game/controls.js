@@ -14,6 +14,15 @@ export class Controls {
     this.scoped = false;
     this._scopePressed = false;
 
+    this.zoomLevel = 1.0;
+    this._minZoom = 0.3;
+    this._maxZoom = 3.0;
+    this.normalFov = 60;
+    this._minFov = 25;
+    this._maxFov = 100;
+    this.heightOffset = 0;
+    this._minHeight = -4;
+    this._maxHeight = 600;
     this.weaponMode = 'gun';
     this.torpedoTier = 1;
     this.torpedoSpread = 'narrow';
@@ -25,7 +34,13 @@ export class Controls {
       if (k === 'a' || k === 'd') this.keys[k] = true;
 
       if (this.locked) {
-        if (k === 'w' && !e.repeat) {
+        if (k === 'q' && !e.repeat && this.scoped) {
+          this.heightOffset = Math.min(this._maxHeight, this.heightOffset + 3);
+          e.preventDefault();
+        } else if (k === 'e' && !e.repeat && this.scoped) {
+          this.heightOffset = Math.max(this._minHeight, this.heightOffset - 3);
+          e.preventDefault();
+        } else if (k === 'w' && !e.repeat) {
           this.gear = Math.min(GEAR_RATIOS.length - 1, this.gear + 1);
           e.preventDefault();
         } else if (k === 's' && !e.repeat) {
@@ -99,6 +114,17 @@ export class Controls {
       if (e.button === 2) this.scoped = false;
     };
     this._onContextMenu = (e) => e.preventDefault();
+    this._onWheel = (e) => {
+      if (!this.locked) return;
+      e.preventDefault();
+      if (this.scoped) {
+        this.zoomLevel -= e.deltaY * 0.002;
+        this.zoomLevel = Math.max(this._minZoom, Math.min(this._maxZoom, this.zoomLevel));
+      } else {
+        this.normalFov -= e.deltaY * 0.1;
+        this.normalFov = Math.max(this._minFov, Math.min(this._maxFov, this.normalFov));
+      }
+    };
 
     document.addEventListener('keydown', this._onKeyDown);
     document.addEventListener('keyup', this._onKeyUp);
@@ -107,6 +133,7 @@ export class Controls {
     document.addEventListener('mousemove', this._onMouseMove);
     document.addEventListener('mousedown', this._onMouseDown);
     document.addEventListener('mouseup', this._onMouseUp);
+    document.addEventListener('wheel', this._onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
   }
 
@@ -161,6 +188,7 @@ export class Controls {
     document.removeEventListener('mousemove', this._onMouseMove);
     document.removeEventListener('mousedown', this._onMouseDown);
     document.removeEventListener('mouseup', this._onMouseUp);
+    document.removeEventListener('wheel', this._onWheel);
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
   }
 }
