@@ -51,6 +51,18 @@ export class InputSender {
     this.ws.send(msg);
   }
 
+  sendSkill(name) {
+    this.seq++;
+    const msg = {
+      type: 'activate_skill',
+      seq: this.seq,
+      ts: Date.now(),
+      skill: name,
+    };
+    this._pendingInputs.push(msg);
+    this.ws.send(msg);
+  }
+
   sendTorpedo(heading, tier, spread) {
     this.seq++;
     const msg = {

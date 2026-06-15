@@ -33,6 +33,7 @@ export class MultiplayerEngine {
     this.interpolator = new EntityInterpolator();
     this.audio = new AudioManager();
     this.controls = null;
+    this._fps = 60;
     this.onHudUpdate = null;
     this.onMinimapUpdate = null;
     this.onGameOver = null;
@@ -102,6 +103,7 @@ export class MultiplayerEngine {
     this.camera = camera;
     this._cCleanup = cCleanup;
     this.controls = new Controls(canvas);
+    this.controls.setAudioManager(this.audio);
     this.running = true;
     this.lastTime = performance.now();
     this._loop = this._loop.bind(this);
@@ -245,6 +247,7 @@ export class MultiplayerEngine {
       shipClass: myClass,
       ship: null,
       mesh: null,
+      skl: { rf: { a: 0, c: 0 }, dc: { a: 0, c: 0 }, ps: { a: 0, c: 0 } },
     };
 
     // Create detailed ship model
@@ -355,6 +358,11 @@ export class MultiplayerEngine {
 
       // Update respawn count
       this._myRespawns = serverState.rspn || 0;
+
+      // Update skills state from server
+      if (serverState.skl) {
+        this.localShip.skl = serverState.skl;
+      }
 
       // Track local team for friend/foe detection
       this._localTeam = serverState.team ?? null;
@@ -794,9 +802,11 @@ export class MultiplayerEngine {
 
     const dt = Math.min((time - this.lastTime) / 1000, 0.1);
     this.lastTime = time;
+    this._fps += ((1 / dt) - this._fps) * 0.05;
 
     if (this.water) {
       this.water.material.uniforms['time'].value += dt * 0.5;
+      this.water.material.uniforms['uCameraPos'].value.copy(this.camera.position);
     }
 
     if (!this._gameStarted || !this.localShip) {
@@ -844,6 +854,18 @@ export class MultiplayerEngine {
       // Send input to server
       this.inputSender.update(keys, this.controls.orbitYaw, this.controls.orbitPitch);
       this.inputSender.sendInput();
+
+      // Process skill activations
+      const skillActs = this.controls.consumeSkillActivations();
+      for (const name of skillActs) {
+        this.inputSender.sendSkill(name);
+        // Client-side prediction: shorten existing turret cooldowns on rapid_fire
+        if (name === 'rapid_fire' && this.localShip.ship) {
+          for (const t of this.localShip.ship.turrets) {
+            if (t.cooldown > 0) t.cooldown *= 0.7;
+          }
+        }
+      }
 
       this.audio.updateEngineBySpeed(this.localShip.speed, this.localShip.max_speed);
     } else {
@@ -977,6 +999,7 @@ export class MultiplayerEngine {
     if (this.onHudUpdate && this.localShip.ship) {
       const ship = this.localShip.ship;
       this.onHudUpdate({
+        fps: Math.round(this._fps),
         hp: this.localShip.hp,
         maxHp: this.localShip.max_hp,
         speed: Math.abs(this.localShip.speed * 3.6),
@@ -1001,6 +1024,7 @@ export class MultiplayerEngine {
         torpedoMaxCooldown: this._getTorpedoCooldown(),
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
         gear: this.controls.gear,
+        skills: this.localShip.skl,
       });
     }
 
@@ -1053,21 +1077,26 @@ export class MultiplayerEngine {
     const dirY = Math.sin(aimPitch);
     const dirZ = Math.cos(worldYaw) * Math.cos(aimPitch);
 
+    const skl = this.localShip.skl || {};
+    const precisionActive = (skl.ps && skl.ps.a > 0) || false;
+    const rapidFireActive = (skl.rf && skl.rf.a > 0) || false;
+    const spreadMult = precisionActive ? 0.7 : 1.0;
+    const cdMult = rapidFireActive ? 0.7 : 1.0;
+
     for (const turret of ship.turrets) {
       if (turret.cooldown <= 0 && turretCanAim(turret, aimYaw)) {
-        // Origin: turret base position in world space (different per turret)
         const turretWorldPos = new THREE.Vector3();
         turret.body.getWorldPosition(turretWorldPos);
-        turretWorldPos.y = 3.0; // turret height
+        turretWorldPos.y = 3.0;
 
         if (this._localProjMgr) {
           const tdx = aimTarget.x - turretWorldPos.x;
           const tdz = aimTarget.z - turretWorldPos.z;
           const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
-          const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, tdist, this.localShip.shipClass);
+          const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, tdist, this.localShip.shipClass, spreadMult);
           this._localProjMgr.fire(turretWorldPos, dir, ship.damage, 'player');
         }
-        turret.cooldown = ship.fireCooldown;
+        turret.cooldown = ship.fireCooldown * cdMult;
         anyFired = true;
       }
     }

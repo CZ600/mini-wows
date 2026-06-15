@@ -79,6 +79,26 @@ TORPEDO_HIT_RADIUS = 3
 # Ship-to-ship ramming
 RAMMING_DAMAGE = 50
 
+# Skills: F=rapid_fire, G=damage_control, H=precision
+# 激活时长(秒)、冷却时长(秒)、效果系数
+SKILL_CONFIG = {
+    "rapid_fire": {
+        "duration": 10.0,
+        "cooldown": 80.0,
+        "fire_cooldown_mult": 0.7,   # 装填时间乘 0.7 (减少30%)
+    },
+    "damage_control": {
+        "duration": 10.0,
+        "cooldown": 40.0,
+        "hp_regen_ratio": 0.3,       # 恢复 max_hp 的 30%
+    },
+    "precision": {
+        "duration": 10.0,
+        "cooldown": 60.0,
+        "spread_mult": 0.7,          # 散布 σ 乘 0.7 (减少30%)
+    },
+}
+
 # Room
 COUNTDOWN_SECONDS = 10
 ROOM_CLEANUP_DELAY = 30

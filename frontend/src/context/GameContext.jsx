@@ -7,6 +7,9 @@ import {
   getPlayerProgress, savePlayerProgress, resetPlayerProgress,
   getPlayerClass, setPlayerClass,
 } from '../api.js';
+import {
+  loadAudioSettings, saveAudioSettings, applyAudioSettingsToManager,
+} from '../game/audio_settings.js';
 
 const GameContext = createContext(null);
 
@@ -52,6 +55,12 @@ export function GameProvider({ children }) {
 
   // Game result
   const [gameResult, setGameResult] = useState({ score: 0, enemies: 0, level: 1 });
+
+  // Audio settings (persisted via audio_settings.js)
+  const initialSettings = useRef(loadAudioSettings());
+  const [bgmVolume, setBgmVolumeState] = useState(initialSettings.current.bgmVolume);
+  const [sfxVolume, setSfxVolumeState] = useState(initialSettings.current.sfxVolume);
+  const [muted, setMutedState] = useState(initialSettings.current.muted);
 
   // Navigate reference (set by NavigationHelper)
   const navigateRef = useRef(null);
@@ -131,6 +140,12 @@ export function GameProvider({ children }) {
       }
     })();
   }, []);
+
+  // Sync audio settings to engine audio managers whenever they change
+  useEffect(() => {
+    applyAudioSettingsToManager(engine.audio, { bgmVolume, sfxVolume, muted });
+    applyAudioSettingsToManager(mpEngine.audio, { bgmVolume, sfxVolume, muted });
+  }, [bgmVolume, sfxVolume, muted, engine, mpEngine]);
 
   // Helpers
   const nav = (path) => navigateRef.current?.(path);
@@ -297,6 +312,40 @@ export function GameProvider({ children }) {
     nav('/multi');
   };
 
+  // Audio volume setters (persist + update state)
+  const handleBgmVolumeChange = useCallback((v) => {
+    setBgmVolumeState(v);
+    saveAudioSettings({ bgmVolume: v });
+  }, []);
+
+  const handleSfxVolumeChange = useCallback((v) => {
+    setSfxVolumeState(v);
+    saveAudioSettings({ sfxVolume: v });
+  }, []);
+
+  const handleMutedChange = useCallback((m) => {
+    setMutedState(m);
+    saveAudioSettings({ muted: m });
+  }, []);
+
+  // Exit from single-player game to menu
+  const handleExitSpToMenu = useCallback(() => {
+    if (document.pointerLockElement) document.exitPointerLock();
+    engine.destroy();
+    setHudData(null);
+    setMinimapData(null);
+    setScoped(false);
+    setSpInitialized(false);
+    pendingStartRef.current = null;
+    spStartedRef.current = false;
+    nav('/');
+  }, [engine]);
+
+  // Exit from multiplayer game to menu
+  const handleExitMpToMenu = useCallback(() => {
+    handleBackToMenu();
+  }, [handleBackToMenu]);
+
   const value = {
     // Auth
     user, authState, setAuthState,
@@ -315,6 +364,11 @@ export function GameProvider({ children }) {
 
     // Game result
     gameResult,
+
+    // Audio settings
+    bgmVolume, sfxVolume, muted,
+    handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
+    handleExitSpToMenu, handleExitMpToMenu,
 
     // Navigation ref setter
     setNavigateRef: (fn) => { navigateRef.current = fn; },

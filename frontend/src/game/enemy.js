@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch } from './turret.js';
 import { applyHalfLambert } from './scene.js';
+import { BASE_MAX_SPEED } from './config.js';
 
 export const ENEMY_SCALE = {
   1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
@@ -46,15 +47,26 @@ class EnemyShip {
     const cfg = classCfg || LEVEL_CONFIG[enemyLevel];
     this.shipLength = cfg.length;
     this.shipWidth = cfg.width;
+    this.shipHeight = cfg.height || 2.5;
+    this._hasBridge = cfg.hasBridge || false;
 
+    // Use player-equivalent stats instead of ENEMY_SHIP_SCALE
+    this.hp = cfg.hp;
+    this.maxHp = cfg.hp;
+    this.damage = cfg.damage;
+    this.maxSpeed = cfg.maxSpeed || BASE_MAX_SPEED;
+    this.fireCooldown = cfg.fireCooldown;
+
+    // Turret system: same as player ships
+    this.frontTurrets = cfg.frontTurrets || 1;
+    this.backTurrets = cfg.backTurrets || 0;
+    const nTurrets = this.frontTurrets + this.backTurrets;
+    this.turretCooldowns = new Array(nTurrets).fill(0);
+
+    // Score value from ENEMY_SHIP_SCALE (not player-equivalent)
     const scale = ENEMY_SHIP_SCALE[enemyLevel] || ENEMY_SHIP_SCALE[8];
-    this.hp = scale.hp;
-    this.maxHp = scale.hp;
-    this.damage = scale.damage;
-    this.maxSpeed = scale.speed;
     this.scoreValue = scale.score;
     this.size = cfg.length;
-    this.cooldown = ENEMY_FIRE_COOLDOWN * (0.5 + Math.random() * 0.5);
     this.torpedoCooldown = 10 + Math.random() * 10;
 
     this.heading = Math.random() * Math.PI * 2;
@@ -241,7 +253,12 @@ class EnemyShip {
   }
 
   updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager) {
-    this.cooldown -= dt;
+    // Update turret cooldowns
+    for (let i = 0; i < this.turretCooldowns.length; i++) {
+      if (this.turretCooldowns[i] > 0) {
+        this.turretCooldowns[i] = Math.max(0, this.turretCooldowns[i] - dt);
+      }
+    }
     this.torpedoCooldown -= dt;
 
     const dx = playerPos.x - this.mesh.position.x;
@@ -317,8 +334,9 @@ class EnemyShip {
     }
 
     if ((this.state === 'chase' || this.state === 'orbit') && dist < ENEMY_DETECT_RANGE) {
-      // Lead prediction
-      const flightTime = dist / ENEMY_FIRE_SPEED;
+      // Lead prediction using INITIAL_SPEED (player-equivalent, 200 m/s)
+      const INITIAL_SPEED = 200;
+      const flightTime = dist / INITIAL_SPEED;
       const leadX = playerPos.x + Math.sin(playerHeading) * playerSpeed * flightTime;
       const leadZ = playerPos.z + Math.cos(playerHeading) * playerSpeed * flightTime;
       const leadDx = leadX - this.mesh.position.x;
@@ -337,7 +355,7 @@ class EnemyShip {
       if (horizDist < 1) {
         pitch = Math.PI / 6;
       } else {
-        const v2 = ENEMY_FIRE_SPEED * ENEMY_FIRE_SPEED;
+        const v2 = INITIAL_SPEED * INITIAL_SPEED;
         const v4 = v2 * v2;
         const disc = v4 - GRAVITY * (GRAVITY * horizDist * horizDist + 2 * dy * v2);
         pitch = disc < 0
@@ -346,22 +364,32 @@ class EnemyShip {
         pitch = Math.max(-20 * Math.PI / 180, Math.min(80 * Math.PI / 180, pitch));
       }
 
-      pitch = compensateDragPitch(pitch, horizDist, ENEMY_FIRE_SPEED);
+      pitch = compensateDragPitch(pitch, horizDist, INITIAL_SPEED);
 
       for (const b of this._turretBarrels) b.rotation.x = Math.PI / 2 - pitch;
 
-      if (this.cooldown <= 0) {
-        const firePos = new THREE.Vector3(
-          this.mesh.position.x,
-          fireOriginY,
-          this.mesh.position.z
-        );
-        const dirX = Math.sin(targetYaw) * Math.cos(pitch);
-        const dirY = Math.sin(pitch);
-        const dirZ = Math.cos(targetYaw) * Math.cos(pitch);
-        const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist);
-        projectileManager.fire(firePos, dir, this.damage, 'enemy');
-        this.cooldown = ENEMY_FIRE_COOLDOWN;
+      // Turret-based salvo: fire from all turrets that can aim and are ready
+      const dirX = Math.sin(targetYaw) * Math.cos(pitch);
+      const dirY = Math.sin(pitch);
+      const dirZ = Math.cos(targetYaw) * Math.cos(pitch);
+      const spreadDir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist, this.shipType);
+
+      const turretWorldPos = new THREE.Vector3();
+      for (let i = 0; i < this._turretBodies.length; i++) {
+        if (this.turretCooldowns[i] > 0) continue;
+
+        // Check if turret can aim at target
+        const yawCenter = i < this.frontTurrets ? 0 : Math.PI;
+        const yawRange = this._hasBridge ? 2.2 : Math.PI;
+        const diff = ((localYaw - yawCenter + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+        if (Math.abs(diff) > yawRange + 0.05) continue;
+
+        // Get turret world position
+        this._turretBodies[i].getWorldPosition(turretWorldPos);
+        turretWorldPos.y = fireOriginY;
+
+        projectileManager.fire(turretWorldPos, spreadDir, this.damage, 'enemy');
+        this.turretCooldowns[i] = this.fireCooldown;
       }
     }
 

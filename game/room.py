@@ -199,6 +199,8 @@ class Room:
                         self.game_state.process_fire(pid, msg)
                     elif msg_type == "fire_torpedo":
                         self.game_state.process_torpedo(pid, msg)
+                    elif msg_type == "activate_skill":
+                        self.game_state.process_skill(pid, msg)
 
                 self.game_state.update(DT)
                 self._tick_count += 1

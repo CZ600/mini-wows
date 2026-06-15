@@ -9,6 +9,7 @@ import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { EnemyManager, ENEMY_SCALE } from './enemy.js';
 import { Controls } from './controls.js';
 import { AudioManager } from './audio.js';
+import { ShipSkills } from './skills.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -36,6 +37,7 @@ export class GameEngine {
     this.onScopeChange = null;
     this.onLevelUp = null;
     this._gameOverFired = false;
+    this._fps = 60;
     this._aimTarget = new THREE.Vector3();
     this._currentFov = FOV_NORMAL;
     this.shipClass = null;
@@ -59,6 +61,7 @@ export class GameEngine {
     this._minimapTerrain = this.terrain.generateMinimapImage();
     this.audio = new AudioManager();
     this.controls = new Controls(canvas);
+    this.controls.setAudioManager(this.audio);
 
     this.ship = null;
     this.projectileManager = null;
@@ -96,6 +99,7 @@ export class GameEngine {
     this.enemyManager = new EnemyManager(this.scene, this.terrain);
     this.enemyManager.spawn(this.ship.position, initialLevel);
 
+    this.skills = new ShipSkills();
     this._updateControlsCapabilities();
     this._torpedoCooldowns = this.ship.torpedoTubes.map(() => 0);
 
@@ -169,9 +173,11 @@ export class GameEngine {
 
     const dt = Math.min((time - this.lastTime) / 1000, 0.1);
     this.lastTime = time;
+    this._fps += ((1 / dt) - this._fps) * 0.05;
 
     if (this.water) {
       this.water.material.uniforms['time'].value += dt * 0.5;
+      this.water.material.uniforms['uCameraPos'].value.copy(this.camera.position);
     }
 
     if (!this.ship) {
@@ -181,6 +187,13 @@ export class GameEngine {
 
     this.controls.updateMotionKeys(this.ship.speed, this.ship.maxSpeed);
     this.ship.update(dt, this.controls.keys, this.terrain);
+
+    // Process skills
+    this.skills.update(dt, this.ship);
+    const skillActs = this.controls.consumeSkillActivations();
+    for (const name of skillActs) {
+      this.skills.activate(name, this.ship);
+    }
 
     if (!this.ship.alive) {
       this.audio.updateEngineBySpeed(0, this.ship.maxSpeed);
@@ -255,14 +268,16 @@ export class GameEngine {
         this._fireTorpedoes();
       } else {
         let anyFired = false;
+        const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
+        const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
         for (const turret of this.ship.turrets) {
           if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
             const { origin, direction } = getTurretFireData(turret, this.ship.heading);
             const dx = aimTarget.x - this.ship.mesh.position.x;
             const dz = aimTarget.z - this.ship.mesh.position.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
-            this.projectileManager.fire(origin, applyCannonSpread(direction, dist, this.shipClass), this.ship.damage, 'player');
-            turret.cooldown = this.ship.fireCooldown;
+            this.projectileManager.fire(origin, applyCannonSpread(direction, dist, this.shipClass, spreadMult), this.ship.damage, 'player');
+            turret.cooldown = this.ship.fireCooldown * cdMult;
             anyFired = true;
           }
         }
@@ -323,6 +338,7 @@ export class GameEngine {
 
     if (this.onHudUpdate) {
       this.onHudUpdate({
+        fps: Math.round(this._fps),
         hp: this.ship.hp,
         maxHp: this.ship.maxHp,
         speed: Math.abs(this.ship.speed * 3.6),
@@ -350,6 +366,7 @@ export class GameEngine {
         shipClass: this.shipClass,
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
         gear: this.controls.gear,
+        skills: this.skills.toSnapshot(),
       });
     }
 

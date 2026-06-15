@@ -113,6 +113,8 @@ describe('GameContext', () => {
         'handleQuickMatch', 'handleCreateRoom', 'handleJoinRoom',
         'handleReady', 'handleSelectClass', 'handleLeaveRoom',
         'handleBackToMenu', 'handleBackToLobby',
+        'handleBgmVolumeChange', 'handleSfxVolumeChange', 'handleMutedChange',
+        'handleExitSpToMenu', 'handleExitMpToMenu',
       );
       for (const h of handlers) {
         if (typeof ctx[h] !== 'function') {

@@ -652,23 +652,26 @@ class TestShipCollisionDetection:
         assert hit_events[0]["target"] == 1
 
     def test_collision_margin_catches_near_miss(self):
-        """Increased margin should catch projectiles that pass close to ship edge."""
+        """Projectile passing just inside half-width should hit.
+
+        New hit-box tightens to visual hull: half_w = width * 0.45.
+        Level-1 ship (width=2) → half_w = 0.9. Projectile at x=0.85 must hit.
+        """
         from game.projectile import ProjectileManager
 
         terrain = _make_terrain()
         gs = GameState(terrain, mode="ffa")
-        gs.add_ship(1, "Alice", level=1)  # width=2, length=7
+        gs.add_ship(1, "Alice", level=1)  # width=2, half_w=0.9
         gs.add_ship(2, "Attacker", level=1)
 
         gs.ships[1].pos_x = 0
         gs.ships[1].pos_z = 0
         gs.ships[1].heading = 0
 
-        # Fire from z=10 toward the ship at origin, x offset of 2.5m from center
-        # ship_half_w = 2/2 + 2.0 = 3.0, so x=2.5 should still hit with the margin
-        # After 1 tick (dt=0.05), projectile at 200 m/s travels 10m, ends at z=0
+        # From (0.85, 1, 10) toward -z at 200 m/s: ends at (0.85, 1, 0).
+        # |0.85| < 0.9 → inside half_w → must hit.
         pm = ProjectileManager()
-        pm.fire(2, 50, (2.5, 1.0, 10), (0, 0, -1.0))
+        pm.fire(2, 50, (0.85, 1.0, 10), (0, 0, -1.0))
 
         events = pm.update(0.05, terrain, gs.ships)
         hit_events = [e for e in events if e["type"] == "hit"]
@@ -696,10 +699,10 @@ class TestShipCollisionDetection:
         """200 m/s projectile must not tunnel through small ship.
 
         At 20 Hz tick rate, 200 m/s = 10 m/tick. The level-1 ship has
-        effective half-width 3 (1 + 2 margin). A projectile going from
-        x=-5 to x=+5 in one tick has neither endpoint inside [-3, 3],
-        but the segment passes through. Swept (segment-AABB) detection
-        must catch this; point-in-box would miss it.
+        half-width 0.9 (width * 0.45). A projectile going from x=-5 to
+        x=+5 in one tick has neither endpoint inside [-0.9, 0.9], but the
+        segment passes through. Swept (segment-AABB) detection must catch
+        this; point-in-box would miss it.
         """
         from game.projectile import ProjectileManager
 
@@ -767,7 +770,13 @@ class TestShipCollisionDetection:
         assert len(hit_events) == 0
 
     def test_segment_catching_ship_at_edge(self):
-        """Projectile segment ending just inside the box should hit."""
+        """Projectile segment ending just outside the box should miss.
+
+        Level-1 ship half_w = 0.9. From (-1.5, 1, 0) toward +x at 200 m/s,
+        ends at (8.5, 1, 0). Segment passes through [-0.9, 0.9] on x → hit.
+        With start moved to (1.0, 1, 0), segment from 1.0 to 11.0 does NOT
+        cross [-0.9, 0.9] → clean miss.
+        """
         from game.projectile import ProjectileManager
 
         terrain = _make_terrain()
@@ -779,92 +788,177 @@ class TestShipCollisionDetection:
         gs.ships[1].pos_z = 0
         gs.ships[1].heading = 0
 
-        # From (-15, 1, 0) toward +x at 200 m/s: ends at (-5, 1, 0).
-        # Neither endpoint is inside [-3, 3] (|−15|>3, |−5|>3) — segment
-        # does NOT cross the box, so this is a clean miss.
+        # From (1.0, 1, 0) toward +x: ends at (11, 1, 0). Whole segment
+        # outside [-0.9, 0.9] → clean miss.
         pm = ProjectileManager()
-        pm.fire(2, 50, (-15.0, 1.0, 0.0), (1.0, 0.0, 0.0))
+        pm.fire(2, 50, (1.0, 1.0, 0.0), (1.0, 0.0, 0.0))
 
         events = pm.update(0.05, terrain, gs.ships)
         hit_events = [e for e in events if e["type"] == "hit"]
         assert len(hit_events) == 0
 
-    def test_battleship_has_proportional_hitbox(self):
-        """Battleship at L10 should have proportionally larger hitbox.
+    def test_half_width_strictly_matches_visual(self):
+        """Hitbox half-width must equal width * 0.45 (Deck half-width is
+        width * 0.425, plus ~6% tolerance for deck edge).
 
-        With the new max(width/2 * 1.7, width/2 + 2.0) rule, battleship L10
-        (width=11, half=5.5) gets half_w = max(9.35, 7.5) = 9.35 instead
-        of the old 7.5. A projectile passing at x=8 should now hit; with
-        the old +2.0 margin (half_w=7.5) it would miss.
+        Level-1 ship (width=2) → half_w = 0.9.
+        Projectile at x=0.85 must hit; at x=0.95 must miss.
         """
         from game.projectile import ProjectileManager
 
         terrain = _make_terrain()
         gs = GameState(terrain, mode="ffa")
-        gs.add_ship(1, "BB", level=10, ship_class="battleship")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # x=0.85: |0.85| < 0.9 → hit
+        pm1 = ProjectileManager()
+        pm1.fire(2, 50, (0.85, 1.0, -10.0), (0, 0, 1.0))
+        e1 = pm1.update(0.05, terrain, gs.ships)
+        assert any(ev["type"] == "hit" for ev in e1), "x=0.85 must hit (inside half_w=0.9)"
+
+        # x=0.95: |0.95| > 0.9 → miss
+        pm2 = ProjectileManager()
+        pm2.fire(2, 50, (0.95, 1.0, -10.0), (0, 0, 1.0))
+        e2 = pm2.update(0.05, terrain, gs.ships)
+        assert not any(ev["type"] == "hit" for ev in e2), "x=0.95 must miss (outside half_w=0.9)"
+
+    def test_half_length_strictly_matches_visual(self):
+        """Hitbox half-length must equal length * 0.45.
+
+        Level-1 ship (length=7) → half_l = 3.15.
+        Projectile at z=3.1 must hit; at z=3.2 must miss.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = 0
+
+        # z=3.1: |3.1| < 3.15 → hit
+        pm1 = ProjectileManager()
+        pm1.fire(2, 50, (-10.0, 1.0, 3.1), (1.0, 0, 0))
+        e1 = pm1.update(0.05, terrain, gs.ships)
+        assert any(ev["type"] == "hit" for ev in e1), "z=3.1 must hit (inside half_l=3.15)"
+
+        # z=3.2: |3.2| > 3.15 → miss
+        pm2 = ProjectileManager()
+        pm2.fire(2, 50, (-10.0, 1.0, 3.2), (1.0, 0, 0))
+        e2 = pm2.update(0.05, terrain, gs.ships)
+        assert not any(ev["type"] == "hit" for ev in e2), "z=3.2 must miss (outside half_l=3.15)"
+
+    def test_high_level_ship_hitbox_scales_with_size(self):
+        """Level-10 ship (width=11, length=53) → half_w=4.95, half_l=23.85.
+
+        Projectile at x=4.9 must hit; at x=5.0 must miss.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Big", level=10)
         gs.add_ship(2, "Attacker", level=10)
 
         gs.ships[1].pos_x = 0
         gs.ships[1].pos_z = 0
         gs.ships[1].heading = 0
 
-        # Projectile at x=8 (between old 7.5 and new 9.35), moving +z through ship
-        pm = ProjectileManager()
-        pm.fire(2, 50, (8.0, 5.0, -10.0), (0, 0, 1.0))
+        pm1 = ProjectileManager()
+        pm1.fire(2, 50, (4.9, 5.0, -10.0), (0, 0, 1.0))
+        e1 = pm1.update(0.05, terrain, gs.ships)
+        assert any(ev["type"] == "hit" for ev in e1), "x=4.9 must hit (inside half_w=4.95)"
 
-        events = pm.update(0.05, terrain, gs.ships)
-        hit_events = [e for e in events if e["type"] == "hit"]
-        assert len(hit_events) == 1, "Battleship L10 should hit at x=8 with proportional margin"
-        assert hit_events[0]["target"] == 1
+        pm2 = ProjectileManager()
+        pm2.fire(2, 50, (5.0, 5.0, -10.0), (0, 0, 1.0))
+        e2 = pm2.update(0.05, terrain, gs.ships)
+        assert not any(ev["type"] == "hit" for ev in e2), "x=5.0 must miss (outside half_w=4.95)"
 
-    def test_destroyer_hitbox_not_shrunk_at_low_level(self):
-        """Low-level small ships must keep their absolute +2.0 margin floor.
+    def test_rotated_ship_uses_local_axis_box(self):
+        """Ship rotated 90° must transform projectile into local space.
 
-        Without the floor, low-level destroyers would shrink dramatically
-        (L4 destroyer half_w 3.375 → 2.34) and become nearly unhittable.
-        The max() ensures small ships stay at +2.0 minimum.
+        Level-1 ship heading=π/2: width axis is along world z, length axis
+        along world x. Local half_w=0.9, half_l=3.15. Projectile passing
+        at world (z=0.85, x=anywhere) → local (x=0.85, z=anywhere) → hit.
         """
         from game.projectile import ProjectileManager
 
         terrain = _make_terrain()
         gs = GameState(terrain, mode="ffa")
-        gs.add_ship(1, "DD", level=4, ship_class="destroyer")  # width=2.75
-        gs.add_ship(2, "Attacker", level=4)
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
+
+        gs.ships[1].pos_x = 0
+        gs.ships[1].pos_z = 0
+        gs.ships[1].heading = math.pi / 2
+
+        # World z=0.85 → local x=0.85 (with heading=π/2). Inside half_w=0.9.
+        pm = ProjectileManager()
+        pm.fire(2, 50, (-10.0, 1.0, 0.85), (1.0, 0, 0))
+        events = pm.update(0.05, terrain, gs.ships)
+        hit_events = [e for e in events if e["type"] == "hit"]
+        assert len(hit_events) == 1, "Rotated ship must catch projectile on local width axis"
+
+    def test_height_upper_bound_includes_deck(self):
+        """Height upper bound = ship_height + 3.0 must still cover deck region.
+
+        Level-1 ship height=1.5 → upper bound = 4.5. Projectile at y=4.0 hits;
+        at y=5.0 misses.
+        """
+        from game.projectile import ProjectileManager
+
+        terrain = _make_terrain()
+        gs = GameState(terrain, mode="ffa")
+        gs.add_ship(1, "Alice", level=1)
+        gs.add_ship(2, "Attacker", level=1)
 
         gs.ships[1].pos_x = 0
         gs.ships[1].pos_z = 0
         gs.ships[1].heading = 0
 
-        # Destroyer L4 half_w must be at least width/2 + 2.0 = 3.375.
-        # Projectile at x=3.2 (inside 3.375) should still hit.
-        pm = ProjectileManager()
-        pm.fire(2, 50, (3.2, 2.0, -10.0), (0, 0, 1.0))
+        pm1 = ProjectileManager()
+        pm1.fire(2, 50, (0, 4.0, 0), (0, 0, 0))  # zero velocity, stays at y=4.0
+        e1 = pm1.update(0.05, terrain, gs.ships)
+        assert any(ev["type"] == "hit" for ev in e1), "y=4.0 must hit (below height+3=4.5)"
 
-        events = pm.update(0.05, terrain, gs.ships)
-        hit_events = [e for e in events if e["type"] == "hit"]
-        assert len(hit_events) == 1, "Low-level destroyer must keep +2.0 margin floor"
+        pm2 = ProjectileManager()
+        pm2.fire(2, 50, (0, 5.0, 0), (0, 0, 0))
+        e2 = pm2.update(0.05, terrain, gs.ships)
+        assert not any(ev["type"] == "hit" for ev in e2), "y=5.0 must miss (above height+3=4.5)"
 
     def test_battleship_easier_to_hit_than_destroyer(self):
-        """At the same level, a projectile at the same offset should hit
-        battleship but miss destroyer, confirming battleship's larger box."""
+        """At the same level, battleship (sizeMul=1.0) is larger than destroyer
+        (sizeMul=0.55), so a projectile at the same offset should hit battleship
+        but miss destroyer.
+
+        L10 battleship: width=11, half_w=4.95.
+        L10 destroyer: width=6.05, half_w=2.72.
+        Offset x=3.5: inside battleship half_w (4.95) but outside destroyer (2.72).
+        """
         from game.projectile import ProjectileManager
 
         terrain = _make_terrain()
         gs = GameState(terrain, mode="ffa")
         gs.add_ship(2, "Attacker", level=10)
 
-        # Test battleship first
         gs.add_ship(1, "BB", level=10, ship_class="battleship")
         gs.ships[1].pos_x = 0
         gs.ships[1].pos_z = 0
         gs.ships[1].heading = 0
 
         pm1 = ProjectileManager()
-        pm1.fire(2, 50, (8.5, 5.0, -10.0), (0, 0, 1.0))
+        pm1.fire(2, 50, (3.5, 5.0, -10.0), (0, 0, 1.0))
         bb_events = pm1.update(0.05, terrain, gs.ships)
         bb_hits = [e for e in bb_events if e["type"] == "hit"]
 
-        # Now replace with destroyer at same position
         gs.ships[1].alive = False
         del gs.ships[1]
         gs.add_ship(3, "DD", level=10, ship_class="destroyer")
@@ -873,13 +967,12 @@ class TestShipCollisionDetection:
         gs.ships[3].heading = 0
 
         pm2 = ProjectileManager()
-        pm2.fire(2, 50, (8.5, 5.0, -10.0), (0, 0, 1.0))
+        pm2.fire(2, 50, (3.5, 5.0, -10.0), (0, 0, 1.0))
         dd_events = pm2.update(0.05, terrain, gs.ships)
         dd_hits = [e for e in dd_events if e["type"] == "hit"]
 
-        # x=8.5 is between destroyer half_w (5.14) and battleship half_w (9.35)
-        assert len(bb_hits) == 1, "Battleship should be hit at x=8.5"
-        assert len(dd_hits) == 0, "Destroyer should NOT be hit at x=8.5"
+        assert len(bb_hits) == 1, "Battleship should be hit at x=3.5 (inside half_w=4.95)"
+        assert len(dd_hits) == 0, "Destroyer should NOT be hit at x=3.5 (outside half_w=2.72)"
 
 
 

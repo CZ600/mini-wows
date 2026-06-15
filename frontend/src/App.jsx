@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Routes, Route, Navigate, useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { useGame, NavigationHelper } from './context/GameContext.jsx';
 import { AuthRoute, AdminRoute } from './components/AuthRoute.jsx';
@@ -18,6 +18,9 @@ import ShipLabels from './components/ShipLabels.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
+import ExitConfirmModal from './components/ExitConfirmModal.jsx';
+import SettingsPanel from './components/SettingsPanel.jsx';
+import { loadAudioSettings } from './game/audio_settings.js';
 import './App.css';
 
 const MENU_BGM_SOUND = '/Riptide%20Armada%202.mp3';
@@ -198,8 +201,16 @@ function RoomPage() {
 }
 
 function SinglePlayPage() {
-  const { engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized, pendingStartRef, spStartedRef } = useGame();
+  const {
+    engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,
+    pendingStartRef, spStartedRef,
+    bgmVolume, sfxVolume, muted,
+    handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
+    handleExitSpToMenu,
+  } = useGame();
   const navigate = useNavigate();
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     if (!pendingStartRef.current) {
@@ -218,10 +229,33 @@ function SinglePlayPage() {
   return (
     <>
       <GameCanvas engine={engine} onInit={() => setSpInitialized(true)} />
-      {hudData && <HUD data={hudData} />}
+      {hudData && (
+        <HUD
+          data={hudData}
+          onOpenSettings={() => setShowSettings(true)}
+          onExit={() => setShowExitConfirm(true)}
+          onToggleMute={() => handleMutedChange(!muted)}
+          muted={muted}
+        />
+      )}
       {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
       {minimapData && !scoped && <Minimap data={minimapData} />}
       {scoped && <ScopeOverlay />}
+      <ExitConfirmModal
+        visible={showExitConfirm}
+        onConfirm={handleExitSpToMenu}
+        onCancel={() => setShowExitConfirm(false)}
+      />
+      <SettingsPanel
+        visible={showSettings}
+        bgmVolume={bgmVolume}
+        sfxVolume={sfxVolume}
+        muted={muted}
+        onBgmVolumeChange={handleBgmVolumeChange}
+        onSfxVolumeChange={handleSfxVolumeChange}
+        onMutedChange={handleMutedChange}
+        onClose={() => setShowSettings(false)}
+      />
     </>
   );
 }
@@ -230,7 +264,15 @@ function SinglePlayPage() {
 // Keeps canvas and mpEngine initialized across these pages so snapshots
 // received during room state don't crash (Ship constructor needs scene).
 function MultiCanvasLayout() {
-  const { mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData, mpScoped, mpEliminated, mpShipLabels } = useGame();
+  const {
+    mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData,
+    mpScoped, mpEliminated, mpShipLabels,
+    bgmVolume, sfxVolume, muted,
+    handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
+    handleExitMpToMenu,
+  } = useGame();
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     if (mpCanvasRef.current) {
@@ -241,7 +283,15 @@ function MultiCanvasLayout() {
   return (
     <>
       <canvas ref={mpCanvasRef} id="game-canvas" />
-      {mpHudData && <MultiplayerHUD data={mpHudData} />}
+      {mpHudData && (
+        <MultiplayerHUD
+          data={mpHudData}
+          onOpenSettings={() => setShowSettings(true)}
+          onExit={() => setShowExitConfirm(true)}
+          onToggleMute={() => handleMutedChange(!muted)}
+          muted={muted}
+        />
+      )}
       {mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
       {mpShipLabels && !mpScoped && <ShipLabels labels={mpShipLabels} />}
       {mpScoped && <ScopeOverlay />}
@@ -253,6 +303,22 @@ function MultiCanvasLayout() {
           </div>
         </div>
       )}
+      {/** Only show exit/settings modals when actually in game, not in lobby/room **/}
+      <ExitConfirmModal
+        visible={showExitConfirm}
+        onConfirm={handleExitMpToMenu}
+        onCancel={() => setShowExitConfirm(false)}
+      />
+      <SettingsPanel
+        visible={showSettings}
+        bgmVolume={bgmVolume}
+        sfxVolume={sfxVolume}
+        muted={muted}
+        onBgmVolumeChange={handleBgmVolumeChange}
+        onSfxVolumeChange={handleSfxVolumeChange}
+        onMutedChange={handleMutedChange}
+        onClose={() => setShowSettings(false)}
+      />
       <Outlet />
     </>
   );
@@ -296,9 +362,14 @@ export default function App() {
 }
 
 function AppRoutes() {
-  const { authState } = useGame();
+  const { authState, bgmVolume, muted } = useGame();
   const location = useLocation();
   const menuBgmRef = useRef(null);
+  const initialSettingsRef = useRef(null);
+
+  if (!initialSettingsRef.current) {
+    initialSettingsRef.current = loadAudioSettings();
+  }
 
   useEffect(() => {
     if (authState !== 'AUTHENTICATED') return;
@@ -315,6 +386,14 @@ function AppRoutes() {
       a.pause();
     }
   }, [authState, location.pathname]);
+
+  // Apply volume settings to menu BGM
+  useEffect(() => {
+    const a = menuBgmRef.current;
+    if (a) {
+      a.volume = muted ? 0 : MENU_BGM_VOLUME * (bgmVolume ?? 1);
+    }
+  }, [bgmVolume, muted]);
 
   useEffect(() => () => {
     if (menuBgmRef.current) {

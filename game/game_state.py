@@ -151,6 +151,7 @@ class GameState:
             ship.velocity_heading = 0
             for i in range(len(ship.turret_cooldowns)):
                 ship.turret_cooldowns[i] = 0
+            ship.skills.reset()
             self._respawn_remaining[pid] = remaining - 1
             self.events.append({
                 "type": "player_respawned",
@@ -266,7 +267,10 @@ class GameState:
             math.cos(yaw) * math.cos(pitch),
         )
 
-        direction = apply_cannon_spread(direction, horiz_dist, ship.ship_class)
+        direction = apply_cannon_spread(
+            direction, horiz_dist, ship.ship_class,
+            spread_mult=0.7 if ship.skills.is_active("precision") else 1.0,
+        )
 
         local_aim_yaw = yaw - ship.heading
         turret_caps = self._get_turret_yaw_caps(ship)
@@ -292,7 +296,10 @@ class GameState:
                 (ox, origin_y, oz),
                 direction,
             )
-            ship.turret_cooldowns[i] = ship.fire_cooldown
+            cd = ship.fire_cooldown
+            if ship.skills.is_active("rapid_fire"):
+                cd *= 0.7
+            ship.turret_cooldowns[i] = cd
 
     def process_torpedo(self, player_id, msg):
         """Server-authoritative torpedo fire."""
@@ -322,6 +329,16 @@ class GameState:
             heading, count=tube_count, spread=spread,
         )
 
+    def process_skill(self, player_id, msg):
+        """Server-authoritative skill activation."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive:
+            return
+        name = msg.get("skill")
+        if not ship.skills.can_activate(name):
+            return
+        ship.skills.activate(name, ship)
+
     def update(self, dt):
         self.tick += 1
         self.events = []
@@ -332,6 +349,14 @@ class GameState:
                 for i in range(len(ship.turret_cooldowns)):
                     if ship.turret_cooldowns[i] > 0:
                         ship.turret_cooldowns[i] -= dt
+                ship.skills.update(dt, ship)
+
+        # Update enemy turret cooldowns every tick
+        for enemy in self.enemy_mgr.enemies:
+            if enemy.alive and enemy.type == "ship":
+                for i in range(len(enemy.turret_cooldowns)):
+                    if enemy.turret_cooldowns[i] > 0:
+                        enemy.turret_cooldowns[i] = max(0.0, enemy.turret_cooldowns[i] - dt)
 
         # Update projectiles
         proj_events = self.projectile_mgr.update(dt, self.terrain, self.ships)

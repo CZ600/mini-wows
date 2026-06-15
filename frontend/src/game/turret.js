@@ -98,9 +98,9 @@ function gaussianRandom(mean, stdev) {
   return z * stdev + mean;
 }
 
-export function applyCannonSpread(direction, distance, shipClass) {
+export function applyCannonSpread(direction, distance, shipClass, spreadMult = 1.0) {
   const cfg = SPREAD_CLASS[shipClass] || { base: 0.0008, growth: 0.4 };
-  const sigmaH = cfg.base + distance * SPREAD_BASE * cfg.growth;
+  const sigmaH = (cfg.base + distance * SPREAD_BASE * cfg.growth) * spreadMult;
   const sigmaV = sigmaH * SPREAD_VERTICAL_MULT;
 
   const maxH = SPREAD_MAX_SIGMA * sigmaH;

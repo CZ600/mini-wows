@@ -3,12 +3,14 @@ export const GEAR_RATIOS = [-0.3, 0, 0.25, 0.5, 0.75, 1.0];
 export class Controls {
   constructor(canvas) {
     this.canvas = canvas;
+    this.audio = null;
     this.keys = { w: false, a: false, s: false, d: false };
     this.gear = 1;
     this.orbitYaw = 0;
     this.orbitPitch = -0.35;
     this.wantsFire = false;
     this.locked = false;
+    this.skillActivations = [];
     this.sensitivity = 0.002;
     this.scopedSensitivity = 0.0006;
     this.scoped = false;
@@ -22,7 +24,7 @@ export class Controls {
     this._maxFov = 100;
     this.heightOffset = 0;
     this._minHeight = -4;
-    this._maxHeight = 600;
+    this._maxHeight = 250;
     this.weaponMode = 'gun';
     this.torpedoTier = 1;
     this.torpedoSpread = 'narrow';
@@ -34,17 +36,37 @@ export class Controls {
       if (k === 'a' || k === 'd') this.keys[k] = true;
 
       if (this.locked) {
-        if (k === 'q' && !e.repeat && this.scoped) {
-          this.heightOffset = Math.min(this._maxHeight, this.heightOffset + 3);
+        // Skills (no-repeat to prevent spam)
+        if (k === 'f' && !e.repeat) {
+          this.skillActivations.push('rapid_fire');
+          e.preventDefault();
+        } else if (k === 'g' && !e.repeat) {
+          this.skillActivations.push('damage_control');
+          e.preventDefault();
+        } else if (k === 'h' && !e.repeat) {
+          this.skillActivations.push('precision');
+          e.preventDefault();
+        } else if (k === 'q' && !e.repeat && this.scoped) {
+          const step = this.heightOffset > 0
+            ? this.heightOffset * 0.25 + 3
+            : 2;
+          this.heightOffset = Math.min(this._maxHeight, this.heightOffset + step);
+          if (this.audio) this.audio.playScopeAdjust();
           e.preventDefault();
         } else if (k === 'e' && !e.repeat && this.scoped) {
-          this.heightOffset = Math.max(this._minHeight, this.heightOffset - 3);
+          const step = this.heightOffset > 5
+            ? this.heightOffset * 0.25 + 3
+            : 2;
+          this.heightOffset = Math.max(this._minHeight, this.heightOffset - step);
+          if (this.audio) this.audio.playScopeAdjust();
           e.preventDefault();
         } else if (k === 'w' && !e.repeat) {
           this.gear = Math.min(GEAR_RATIOS.length - 1, this.gear + 1);
+          if (this.audio) this.audio.playGearShift();
           e.preventDefault();
         } else if (k === 's' && !e.repeat) {
           this.gear = Math.max(0, this.gear - 1);
+          if (this.audio) this.audio.playGearShift();
           e.preventDefault();
         } else if (k === '1') {
           this.weaponMode = 'gun';
@@ -96,6 +118,8 @@ export class Controls {
       if (!this.locked) {
         this.scoped = false;
         this._scopePressed = false;
+        this.heightOffset = 0;
+        this.zoomLevel = 1.0;
       }
     };
     this._onMouseMove = (e) => {
@@ -108,10 +132,16 @@ export class Controls {
     this._onMouseDown = (e) => {
       if (!this.locked) return;
       if (e.button === 0) this.wantsFire = true;
-      if (e.button === 2) this.scoped = true;
     };
     this._onMouseUp = (e) => {
-      if (e.button === 2) this.scoped = false;
+      if (!this.locked) return;
+      if (e.button === 2) {
+        this.scoped = !this.scoped;
+        if (!this.scoped) {
+          this.heightOffset = 0;
+          this.zoomLevel = 1.0;
+        }
+      }
     };
     this._onContextMenu = (e) => e.preventDefault();
     this._onWheel = (e) => {
@@ -120,8 +150,9 @@ export class Controls {
       if (this.scoped) {
         this.zoomLevel -= e.deltaY * 0.002;
         this.zoomLevel = Math.max(this._minZoom, Math.min(this._maxZoom, this.zoomLevel));
+        if (this.audio) this.audio.playScopeAdjust();
       } else {
-        this.normalFov -= e.deltaY * 0.1;
+        this.normalFov += e.deltaY * 0.1;
         this.normalFov = Math.max(this._minFov, Math.min(this._maxFov, this.normalFov));
       }
     };
@@ -156,6 +187,10 @@ export class Controls {
     this._availableTiers = availableTiers;
   }
 
+  setAudioManager(audio) {
+    this.audio = audio;
+  }
+
   get availableTorpedoTiers() {
     return this._availableTiers;
   }
@@ -170,6 +205,8 @@ export class Controls {
     this.locked = false;
     this.scoped = false;
     this._scopePressed = false;
+    this.heightOffset = 0;
+    this.zoomLevel = 1.0;
   }
 
   consumeFire() {
@@ -178,6 +215,12 @@ export class Controls {
       return true;
     }
     return false;
+  }
+
+  consumeSkillActivations() {
+    const skills = [...this.skillActivations];
+    this.skillActivations = [];
+    return skills;
   }
 
   destroy() {

@@ -240,3 +240,198 @@ describe('AudioManager', () => {
     expect(created.filter(a => a.play.mock.calls.length > 0 || a.addEventListener.mock.calls.length > 0).length).toBe(3);
   });
 });
+
+describe('AudioManager volume scales', () => {
+  it('默认 bgmVolume/sfxVolume 为 1，muted 为 false', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    expect(am.bgmVolume).toBe(1);
+    expect(am.sfxVolume).toBe(1);
+    expect(am.muted).toBe(false);
+  });
+
+  it('setBgmVolume 立即更新已循环播放的 BGM 和海浪音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.startBGM();
+    am.startAmbient();
+    const [ambient, bgm] = created;
+    am.setBgmVolume(0.5);
+    expect(am.bgmVolume).toBe(0.5);
+    // AMBIENT_VOLUME=0.12 * 0.5 = 0.06
+    expect(ambient.volume).toBeCloseTo(0.06, 4);
+    // BGM_VOLUME=0.1 * 0.5 = 0.05
+    expect(bgm.volume).toBeCloseTo(0.05, 4);
+  });
+
+  it('setBgmVolume clamp 到 [0,1] 范围', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setBgmVolume(2);
+    expect(am.bgmVolume).toBe(1);
+    am.setBgmVolume(-1);
+    expect(am.bgmVolume).toBe(0);
+  });
+
+  it('setSfxVolume 影响 playFire 实际音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playFire('destroyer');
+    // FIRE_VOLUME=0.7 * 0.5 = 0.35
+    expect(created[0].volume).toBeCloseTo(0.35, 4);
+  });
+
+  it('setSfxVolume 影响 playExplosion 实际音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playExplosion();
+    // EXPLOSION_VOLUME=0.25 * 0.5 = 0.125
+    expect(created[0].volume).toBeCloseTo(0.125, 4);
+  });
+
+  it('setSfxVolume 影响 playTorpedoLaunch 实际音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playTorpedoLaunch();
+    // TORPEDO_LAUNCH_VOLUME=0.4 * 0.5 = 0.2
+    expect(created[0].volume).toBeCloseTo(0.2, 4);
+  });
+
+  it('setSfxVolume 影响 updateEngineBySpeed 计算的引擎音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    const engine = created[2];
+    am.updateEngineBySpeed(20, 20); // 满速，正常应为 ENGINE_MAX_VOLUME=0.6
+    // 0.6 * 0.5 = 0.3
+    expect(engine.volume).toBeCloseTo(0.3, 4);
+  });
+
+  it('setSfxVolume 影响 playGearShift 实际音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playGearShift();
+    // GEAR_SHIFT_VOLUME=0.5 * 0.5 = 0.25
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+
+  it('setSfxVolume 影响 playScopeAdjust 实际音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playScopeAdjust();
+    // SCOPE_ADJUST_VOLUME=0.5 * 0.5 = 0.25
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+
+  it('setSfxVolume 影响 playTorpedoHit 实际音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playTorpedoHit();
+    // TORPEDO_HIT_VOLUME=0.6 * 0.5 = 0.3
+    expect(created[0].volume).toBeCloseTo(0.3, 4);
+  });
+
+  it('setMuted(true) 立即把 BGM/Ambient/Engine 音量设为 0', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.startBGM();
+    am.startAmbient();
+    am.updateEngineBySpeed(10, 20);
+    const [ambient, bgm, engine] = created;
+    am.setMuted(true);
+    expect(ambient.volume).toBe(0);
+    expect(bgm.volume).toBe(0);
+    expect(engine.volume).toBe(0);
+  });
+
+  it('setMuted(false) 恢复 BGM/Ambient 到根据 bgmVolume 计算的音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setBgmVolume(0.5);
+    am.startBGM();
+    am.startAmbient();
+    const [ambient, bgm] = created;
+    am.setMuted(true);
+    am.setMuted(false);
+    expect(ambient.volume).toBeCloseTo(0.06, 4);
+    expect(bgm.volume).toBeCloseTo(0.05, 4);
+  });
+
+  it('静音状态下播放事件音实际音量为 0', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setMuted(true);
+    created.length = 0;
+    am.playFire('destroyer');
+    am.playExplosion();
+    am.playTorpedoLaunch();
+    am.playGearShift();
+    am.playScopeAdjust();
+    am.playTorpedoHit();
+    for (const a of created) {
+      expect(a.volume).toBe(0);
+    }
+  });
+
+  it('静音状态下 updateEngineBySpeed 引擎音量为 0', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setMuted(true);
+    const engine = created[2];
+    am.updateEngineBySpeed(20, 20);
+    expect(engine.volume).toBe(0);
+  });
+
+  it('静音优先级高于音量设置：muted=true 时即使 bgmVolume=1 也静音', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setBgmVolume(1);
+    am.setSfxVolume(1);
+    am.setMuted(true);
+    am.startBGM();
+    am.startAmbient();
+    const [ambient, bgm] = created;
+    expect(ambient.volume).toBe(0);
+    expect(bgm.volume).toBe(0);
+  });
+
+  it('init 之后调用 setBgmVolume 不影响已存 audio 元素的初始音量前状态', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    const [ambient, bgm] = created;
+    // 初始未调用 start，volume 是常量默认
+    expect(ambient.volume).toBeCloseTo(0.12, 4);
+    expect(bgm.volume).toBeCloseTo(0.1, 4);
+    am.setBgmVolume(0.5);
+    // setBgmVolume 即使未播放也应该更新元素 volume（用于一旦 play 立即生效）
+    expect(ambient.volume).toBeCloseTo(0.06, 4);
+    expect(bgm.volume).toBeCloseTo(0.05, 4);
+  });
+});

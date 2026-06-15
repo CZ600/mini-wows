@@ -119,7 +119,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         await room._broadcast_room_update()
                     current_room_id = None
 
-            elif msg_type in ("input", "fire", "fire_torpedo"):
+            elif msg_type in ("input", "fire", "fire_torpedo", "activate_skill"):
                 room = room_manager.get_room(current_room_id) if current_room_id else None
                 if room:
                     # Echo client timestamp back for client-side RTT calculation

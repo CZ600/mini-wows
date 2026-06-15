@@ -405,3 +405,125 @@ type: project
 - `frontend/tests/hud.test.jsx` 新增 4 个测试覆盖：六行档位渲染顺序、唯一 active 行、速度仅在 active 行、速度随档位移动
 - 全部前端测试 109 个通过
 
+### Feature 6: 游戏内退出按钮与二次确认
+
+**新增**: 单机/联机模式 HUD 左上角增加退出按钮（✕），点击后弹出确认弹窗。确认后单机直接切换场景、联机断开 WebSocket 并返回首页。
+
+**变更**:
+- `components/ExitConfirmModal.jsx`（新增）: 弹窗显示"确定要退出当前游戏吗？"，提供取消/确认两按钮，点击遮罩也可取消
+- `components/HUD.jsx` & `components/MultiplayerHUD.jsx`: 左上角渲染 `#game-top-toolbar`（包含设置/静音/退出按钮），通过 `onExit/onOpenSettings/onToggleMute` 回调与父组件通信
+- `context/GameContext.jsx`: 新增 `handleExitSpToMenu`（单机：指针解锁→destroy engine→清 state→导航 `/`）、`handleExitMpToMenu`（复用 `handleBackToMenu`）
+- `App.jsx`: `SinglePlayPage` 和 `MultiCanvasLayout` 各自持有 `showExitConfirm`/`showSettings` 局部状态，渲染 ExitConfirmModal 和 SettingsPanel
+
+### Feature 7: 音量控制与靜音
+
+**新增**: 
+- 游戏内设置面板（⚙️ 按钮），包含背景音（BGM+海浪）滑块、游戏音效（引擎+开火+爆炸+鱼雷+换档+瞄准）滑块、一键静音开关
+- 所有音量设置持久化到 localStorage（`wow_bgm_volume/wow_sfx_volume/wow_muted`），跨会话保持
+- 菜单 BGM 同样响应音量设置
+- 静音开关覆盖所有音效（优先级最高）
+
+**变更**:
+- `game/audio_settings.js`（新增）: localStorage 持久化封装（`loadAudioSettings/saveAudioSettings/applyAudioSettingsToManager`），含 clamp/JSON 异常/配额超限容错
+- `game/audio.js` `AudioManager`: 新增 `_bgmVolume/_sfxVolume/_muted` 状态和 `setBgmVolume/setSfxVolume/setMuted` 公开方法；`_bgmScale()/_sfxScale()` 计算有效倍率（静音时返回 0）；所有播放方法使用 `_sfxScale()` 修正实际音量；`_applyLoopVolumes()` 即时更新已循环播放的 BGM/Ambient/Engine 元素音量
+- `components/SettingsPanel.jsx`（新增）: 模态弹窗，两个 `input[type=range]` 滑块 + 静音按钮 + 关闭按钮；静音时滑块禁用并显示 0%
+- 方案 B 分类：背景音=BGM+海浪；游戏音效=引擎+事件音
+- `context/GameContext.jsx`: 新增 `bgmVolume/sfxVolume/muted` state，初始值从 localStorage 读取；`useEffect` 自动同步到 `engine.audio` 和 `mpEngine.audio`；新增 `handleBgmVolumeChange/handleSfxVolumeChange/handleMutedChange` 同步 setter
+- `App.jsx` `AppRoutes`: 菜单 BGM Audio 元素监听 `bgmVolume/muted` 变化实时调整音量
+
+**测试**:
+- `game/__tests__/audio.test.js` 新增 18 个测试覆盖：默认值、setBgmVolume 立即更新循环音、clamp 范围、setSfxVolume 影响 playFire/playExplosion/playTorpedoLaunch/updateEngineBySpeed/playGearShift/playScopeAdjust/playTorpedoHit、setMuted 清零所有循环和事件音、静音恢复、静音优先级、init 后未播放元素音量更新
+- `game/__tests__/audio_settings.test.js`（新增）9 个测试：默认值、往返读写、部分更新、损坏 JSON 容错、越界值 clamp、非布尔静音容错、localStorage 不可用/setItem 抛异常容错
+- `tests/settings_panel.test.jsx`（新增）12 个测试：不可见/可见、滑块组、静音按钮、初始值同步、onChange 回调、静音切换、滑块禁用、百分比显示、关闭按钮
+- `tests/exit_confirm.test.jsx`（新增）6 个测试：不可见/可见、文案、取消/确认回调、遮罩关闭、内部点击不触发
+- `tests/hud.test.jsx` 新增 9 个工具栏测试：渲染、回调注入、按钮点击、静音状态
+- `tests/multiplayer_hud.test.jsx`（新增）6 个测试：工具栏渲染、按钮点击、静音状态
+- 全部前端测试 216 个通过
+
+### Feature 8: 排行榜 UI 优化
+
+**变更**:
+- `components/LeaderboardPanel.jsx`: 新增 `.leaderboard-body` 滚动包装容器包裹表格
+- `App.css`: 面板宽度从 340px 扩至 420px；移除 `max-height: 300px`；新增 `#leaderboard-body` 容器 `max-height: 60vh; overflow-y: auto`；表头 `position: sticky; top: 0` 固定
+- `tests/leaderboard.test.jsx`（新增）6 个测试：不可见、空数据、50 行容器存在、3 行渲染、表头、关闭按钮
+
+**测试结果**: 全量前端 216 个测试通过，`vite build` 构建成功（80 模块无语法错误）。
+
+### Bug 27: 玩家船只航行浪花不可见
+
+**问题**: 船只航行时浪花完全看不见。
+
+**原因**: `WakeGPU`（`frontend/src/game/wake_gpu.js`）用 WebGL2 Transform Feedback 在 GPU 上模拟粒子，再通过 `gl.getBufferSubData` 把粒子状态读回 CPU，更新到 `THREE.Points` 网格渲染。该流程依赖大量原生 WebGL 调用（VAO 切换、TF buffer 绑定、`RASTERIZER_DISCARD`、`getBufferSubData` 同步读回），与 three.js 0.160 的内部状态机深度耦合。任一环节失败（TF 编译/链接错误、buffer 时序错乱、readback 返回旧数据、three.js state 重置冲突）都会导致 `_points` 网格的 position 数组始终是初始的 `y=-100`（视觉上不可见）。该文件为全新未追踪代码，单机和联机都强制使用 GPU 路径，所以两种模式都看不到浪花。
+
+**修复（回退到 CPU 实现）**:
+- 删除 `frontend/src/game/wake_gpu.js` 文件
+- `frontend/src/game/engine.js`: 移除 `WakeGPU` import、`this.wakeGPU` 实例化、`Ship` 构造的第 4 个参数、`destroy` 中的 dispose
+- `frontend/src/game/multiplayer_engine.js`: 同上 4 处修改
+- `frontend/src/game/ship.js`: 移除构造函数的 `wakeGPU` 参数；删除 `_emitWakeGPU` 方法；`_initWake` / `_emitWake` / `_updateWake` / `_destroyWake` 移除 GPU 分支，仅保留已成熟的 CPU 实现路径
+
+**约束**:
+- 单机和联机一律走 CPU 浪花，行为一致
+- `wake_gpu.js` 文件不再存在，ship.js 不再有 GPU 分支
+- 现有 `frontend/tests/wake.test.js` 14 个 CPU wake 测试全部覆盖
+
+### Bug 28: 碰撞盒与船体形状差距过大
+
+**问题**: 炮弹命中判定的 AABB 与视觉船体差距过大，玩家感觉"炮弹明明擦边过去了却被判定命中"。
+
+**根因**: `game/projectile.py` 的碰撞盒使用 `max(width/2 * 1.7, width/2 + 2.0)` 作为半宽、`length/2 + 2.0` 作为半长，远大于实际船体建模。视觉船体最宽是 `Deck`（`BoxGeometry(cfg.width * 0.85, ...)`），即视觉半宽 ≈ `width * 0.425`、视觉半长 ≈ `length * 0.425`；而旧碰撞盒在宽度方向 ≈ `width * 0.85`（**比视觉大一倍**）。
+
+**修复**:
+- `game/projectile.py` `ProjectileManager.update`:
+  - 半宽从 `max(width/2 * 1.7, width/2 + 2.0)` 改为 `width * 0.45`（视觉半宽 `width * 0.425` + ~6% 容差）
+  - 半长从 `length/2 + 2.0` 改为 `length * 0.45`（同上）
+  - 高度上限 `ship_height + 3.0` 保持不变（覆盖甲板及小桥楼基础，否则低等级船在甲板高度的炮弹会漏判）
+- swept AABB（segment-box 求交）保持不变，仍能捕获 200 m/s 高速炮弹的 tunneling
+
+**效果对比（半宽）**:
+
+| 船型 | 等级 | 旧 | 新 | 变化 |
+|------|------|------|-----|------|
+| (无 class) | L1 | 3.0 (width=2) | 0.9 | -70% |
+| (无 class) | L10 | 9.35 (width=11) | 4.95 | -47% |
+| destroyer | L10 | 5.14 (width=6.05) | 2.72 | -47% |
+| battleship | L10 | 9.35 (width=11) | 4.95 | -47% |
+
+**约束**:
+- 半宽 / 半长严格等于 `width * 0.45` / `length * 0.45`，不再有 `+2.0` 绝对值或 `* 1.7` 比例缩放
+- 高度上限不变（仍为 `ship_height + 3.0`）
+- 鱼雷判定盒不变（仍用 `TORPEDO_HIT_RADIUS=3` 爆炸半径）
+- 自弹不命中、队友不互相伤害、高速 tunneling 仍能被检测，这些 swept AABB 既有的性质保持
+- 旋转船体的碰撞盒仍通过把炮弹线段变换到船体局部坐标系实现
+
+**测试**: `tests/test_respawn.py::TestShipCollisionDetection` 现共 14 个测试：
+- 重写过时的 4 个（margin、proportional、shrink-floor、battleship-vs-destroyer）以匹配新尺寸
+- 新增 5 个：half_width/length 严格匹配、high-level 缩放、旋转船体局部坐标、高度上限覆盖甲板
+- 全量后端 214 个测试通过，前端 226 个测试通过，`vite build` 构建成功
+
+### Feature 9: AI 敌舰数值与火炮齐射强化
+
+**需求**: AI 敌舰（单机 + 联机 PvE）当前使用削弱版数值（`ENEMY_SHIP_SCALE`），且一次只能发射一枚炮弹。需要使其完全继承对应等级玩家战舰的数值和机制（包括多炮塔齐射）。
+
+**变更**:
+
+**后端 (`game/enemy.py`)**:
+- `ServerEnemyShip.__init__`: 属性源从 `ENEMY_SHIP_SCALE` 改为 `get_ship_config(enemy_level, ship_type)`，HP/伤害/速度/装填时间完全等同于同等级玩家舰船；新增炮塔系统（`front_turrets`/`back_turrets`/`turret_cooldowns`），炮塔数量与玩家一致；score_value 仍从 `ENEMY_SHIP_SCALE` 获取（评分不受影响）
+- `ServerEnemyShip._fire_at`: 从单发改为多炮塔齐射 -- 计算炮塔偏移、偏航角度限制（桥楼船 2.2 rad / 无桥楼船全向）、过滤冷却完毕且可瞄准目标的炮塔、每个炮塔独立发射并设置独立冷却；弹丸速度从 `ENEMY_FIRE_SPEED=150` 改为 `PROJECTILE_INITIAL_SPEED=200`；散布计算传入 `ship_type` 参数
+- 新增 4 个辅助方法：`_get_turret_offsets`、`_turret_world_pos`、`_get_turret_yaw_caps`、`_turret_can_aim`
+
+**后端 (`game/game_state.py`)**:
+- `update()`: 每 tick（20Hz）更新敌舰炮塔冷却时间，与玩家舰船保持一致（此前敌舰炮塔冷却只在 5Hz AI tick 中更新）
+
+**前端 (`frontend/src/game/enemy.js`)**:
+- `EnemyShip` 构造函数: 属性源从 `ENEMY_SHIP_SCALE` 改为 `getClassConfig` 或 `LEVEL_CONFIG`；新增炮塔冷却数组 `turretCooldowns`；新增 `_hasBridge` 属性
+- `updateShip`: 新增炮塔冷却每帧递减；开火逻辑从单发改为多炮塔齐射 -- 检查每门炮塔冷却和偏航角度、使用 `INITIAL_SPEED=200` 计算弹道、从炮塔世界坐标发射；散布传入 `shipType` 参数
+
+**效果示例**:
+- L8 AI 战舰（无 class）: HP 640→2400、伤害 90→65、速度 13→16.67、火炮 3 门齐射
+- L5 AI 战列舰: HP 340→1680、伤害 45→154、火炮 4 门齐射（2 前 + 2 后）
+- L4 AI 驱逐舰: HP 270→540、伤害 36→32、速度 10→23.3、炮塔 3 门 + 鱼雷 4 管
+
+**测试**:
+- `tests/test_enemy.py`（新增）: 38 个测试覆盖属性匹配（HP/伤害/速度/装填时间/炮塔数量/评分）、多炮塔齐射（前/后/全向弹道）、炮塔冷却独立更新、弹丸速度/散布参数、snapshot 数据
+- 全量后端 254 个测试通过，前端 226 个测试通过
+

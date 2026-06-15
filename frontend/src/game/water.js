@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { SUN_DIR } from './scene.js';
 
 export function createWater(scene) {
-  const geometry = new THREE.PlaneGeometry(10200, 10200, 768, 768);
+  const geometry = new THREE.PlaneGeometry(10200, 10200, 256, 256);
   geometry.rotateX(-Math.PI / 2);
 
   const vertexShader = `
     uniform float time;
+    uniform vec3 uCameraPos;
     varying vec3 vWorldPos;
     varying vec3 vNormal;
     varying float vHeight;
@@ -53,27 +54,47 @@ export function createWater(scene) {
       float h = 0.0, dhx = 0.0, dhz = 0.0;
       vec2 p = position.xz;
 
-      // 5 waves: removed two that were too similar to others
+      // LOD: distance from camera determines detail level
+      vec4 approxWorld = modelMatrix * vec4(position, 1.0);
+      float dist = length(approxWorld.xz - uCameraPos.xz);
+      float lodFade = 1.0 - smoothstep(200.0, 450.0, dist);
+
+      // Waves 1-3: longest wavelengths, always full amplitude
       float amp1 = 1.1 * (0.88 + 0.12 * sin(time * 0.35));
       addWave(p, amp1, vec2(0.857, 0.514), 0.015, 0.8, h, dhx, dhz);
       addWave(p, 0.65, vec2(0.287, 0.958), 0.025, 1.0, h, dhx, dhz);
       float freq3 = 0.035 + 0.006 * sin(time * 0.27);
       addWave(p, 0.40, vec2(-0.530, 0.848), freq3, 0.7, h, dhx, dhz);
-      float spd4 = 1.5 + 0.25 * sin(time * 0.31);
-      addWave(p, 0.20, vec2(0.6, 0.8), 0.04, spd4, h, dhx, dhz);
-      float amp5 = 0.28 * (0.82 + 0.18 * sin(time * 0.43 + 1.5));
-      addWave(p, amp5, vec2(0.936, -0.351), 0.05, 1.3, h, dhx, dhz);
 
+      // Waves 4-5: shorter wavelengths, faded with distance
+      float spd4 = 1.5 + 0.25 * sin(time * 0.31);
+      addWave(p, 0.20 * lodFade, vec2(0.6, 0.8), 0.04, spd4, h, dhx, dhz);
+      float amp5 = 0.28 * (0.82 + 0.18 * sin(time * 0.43 + 1.5));
+      addWave(p, amp5 * lodFade, vec2(0.936, -0.351), 0.05, 1.3, h, dhx, dhz);
+
+      // Fine noise: kept and slightly strengthened at distance to mask wave repetition
       float nScale = 0.10;
       vec2 nCoord = p * nScale + vec2(time * 0.18, time * 0.13);
       float eps = 1.2;
       float n0 = fbm(nCoord);
       float nx = fbm(nCoord + vec2(eps, 0.0));
       float nz = fbm(nCoord + vec2(0.0, eps));
-      float nAmp = 0.45;
+      float nAmp = 0.45 + 0.20 * (1.0 - lodFade);
       h += nAmp * n0;
       dhx += nAmp * (nx - n0) / eps;
       dhz += nAmp * (nz - n0) / eps;
+
+      // Large-scale noise: broad swells visible at distance, breaks 3-wave repetition
+      float nScaleFar = 0.025;
+      vec2 nCoordFar = p * nScaleFar + vec2(time * 0.05, time * 0.04);
+      float epsFar = 3.0;
+      float nf0 = fbm(nCoordFar);
+      float nfx = fbm(nCoordFar + vec2(epsFar, 0.0));
+      float nfz = fbm(nCoordFar + vec2(0.0, epsFar));
+      float nAmpFar = 0.30 * (1.0 - lodFade);
+      h += nAmpFar * nf0;
+      dhx += nAmpFar * (nfx - nf0) / epsFar;
+      dhz += nAmpFar * (nfz - nf0) / epsFar;
 
       vec3 pos = position;
       pos.y += h;
@@ -173,6 +194,7 @@ export function createWater(scene) {
     uniforms: {
       time: { value: 0 },
       uSunDir: { value: SUN_DIR.clone() },
+      uCameraPos: { value: new THREE.Vector3() },
     },
     vertexShader,
     fragmentShader,

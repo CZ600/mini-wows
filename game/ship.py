@@ -3,6 +3,7 @@ from game.config import (
     BASE_MAX_SPEED, ACCEL, DECEL_FRICTION, MAP_HALF,
     get_ship_config, get_drift_config,
 )
+from game.skills import ShipSkills
 
 
 class ServerShip:
@@ -32,6 +33,7 @@ class ServerShip:
         self.speed = 0.0
 
         self.turret_cooldowns = [0.0] * (cfg["front_turrets"] + cfg["back_turrets"])
+        self.skills = ShipSkills()
 
     def update(self, dt, keys, terrain=None):
         if not self.alive:
@@ -153,4 +155,5 @@ class ServerShip:
             "team": self.team,
             "lvl": self.level,
             "shipClass": self.ship_class,
+            "skl": self.skills.to_snapshot(),
         }

@@ -1,7 +1,8 @@
 import math
 import random
 from game.config import (
-    GRAVITY, ENEMY_FIRE_COOLDOWN, ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED,
+    GRAVITY, PROJECTILE_INITIAL_SPEED, ENEMY_FIRE_COOLDOWN,
+    ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED,
     ENEMY_SCALE, ENEMY_SHIP_SCALE, AI_DT, get_ship_config,
 )
 from game.projectile import apply_cannon_spread, compensate_drag_pitch
@@ -120,6 +121,8 @@ class ServerTurret:
 
 class ServerEnemyShip:
     SHIP_TURN_RATE = math.pi / 3
+    YAW_RANGE_FULL = math.pi
+    YAW_RANGE_BRIDGE = 2.2
 
     def __init__(self, enemy_id, x, z, enemy_level, ship_type=None):
         self.enemy_id = enemy_id
@@ -130,16 +133,27 @@ class ServerEnemyShip:
         self.ship_type = ship_type
         self.alive = True
 
-        scale = ENEMY_SHIP_SCALE.get(enemy_level, ENEMY_SHIP_SCALE[8])
-        self.hp = scale["hp"]
-        self.max_hp = scale["hp"]
-        self.damage = scale["damage"]
-        self.max_speed = scale["speed"]
-        self.score_value = scale["score"]
-
         cfg = get_ship_config(enemy_level, ship_type)
         self.ship_length = cfg["length"]
         self.ship_width = cfg["width"]
+        self.ship_height = cfg.get("height", 2.5)
+
+        # Use player-equivalent stats instead of ENEMY_SHIP_SCALE
+        self.hp = cfg["hp"]
+        self.max_hp = cfg["hp"]
+        self.damage = cfg["damage"]
+        self.max_speed = cfg.get("max_speed", 16.67)
+        self.fire_cooldown = cfg["fire_cooldown"]
+
+        # Turret system: same as player ships
+        self.front_turrets = cfg.get("front_turrets", 1)
+        self.back_turrets = cfg.get("back_turrets", 0)
+        n_turrets = self.front_turrets + self.back_turrets
+        self.turret_cooldowns = [0.0] * n_turrets
+
+        # Score value from ENEMY_SHIP_SCALE
+        scale = ENEMY_SHIP_SCALE.get(enemy_level, ENEMY_SHIP_SCALE[8])
+        self.score_value = scale["score"]
 
         self.heading = random.random() * math.pi * 2
         self.speed = 0
@@ -149,7 +163,6 @@ class ServerEnemyShip:
         self.patrol_x = x
         self.patrol_z = z
         self.orbit_dir = 1 if random.random() < 0.5 else -1
-        self.cooldown = ENEMY_FIRE_COOLDOWN * (0.5 + random.random() * 0.5)
         self.torpedo_cooldown = 10 + random.random() * 10
 
         self._pick_patrol_target()
@@ -187,7 +200,6 @@ class ServerEnemyShip:
         if not self.alive:
             return
 
-        self.cooldown -= dt
         self.torpedo_cooldown -= dt
 
         # Find closest alive player
@@ -257,11 +269,10 @@ class ServerEnemyShip:
             self.x = max(-5000, min(5000, new_x))
             self.z = max(-5000, min(5000, new_z))
 
-        # Fire at player
+        # Fire at player - turret-based salvo
         if (self.state in ("chase", "orbit") and closest_dist < ENEMY_DETECT_RANGE
-                and self.cooldown <= 0):
+                and any(cd <= 0 for cd in self.turret_cooldowns)):
             self._fire_at(closest_ship, closest_dist, game_state)
-            self.cooldown = ENEMY_FIRE_COOLDOWN
 
         # Torpedo for cruiser AI
         if (self.ship_type == "cruiser"
@@ -281,8 +292,8 @@ class ServerEnemyShip:
     def _fire_at(self, target, dist, game_state):
         fire_origin_y = 3.0
 
-        # Lead prediction
-        flight_time = dist / ENEMY_FIRE_SPEED if ENEMY_FIRE_SPEED > 0 else 0
+        # Lead prediction using PROJECTILE_INITIAL_SPEED (player-equivalent)
+        flight_time = dist / PROJECTILE_INITIAL_SPEED if PROJECTILE_INITIAL_SPEED > 0 else 0
         lead_x = target.pos_x + math.sin(target.heading) * target.speed * flight_time
         lead_z = target.pos_z + math.cos(target.heading) * target.speed * flight_time
         lead_dx = lead_x - self.x
@@ -294,7 +305,7 @@ class ServerEnemyShip:
         if lead_dist < 1:
             pitch = math.pi / 6
         else:
-            v2 = ENEMY_FIRE_SPEED * ENEMY_FIRE_SPEED
+            v2 = PROJECTILE_INITIAL_SPEED * PROJECTILE_INITIAL_SPEED
             v4 = v2 * v2
             disc = v4 - GRAVITY * (GRAVITY * lead_dist * lead_dist + 2 * dy * v2)
             if disc < 0:
@@ -303,7 +314,7 @@ class ServerEnemyShip:
                 pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * lead_dist))
             pitch = max(math.radians(-20), min(math.radians(80), pitch))
 
-        pitch = compensate_drag_pitch(pitch, lead_dist, ENEMY_FIRE_SPEED)
+        pitch = compensate_drag_pitch(pitch, lead_dist, PROJECTILE_INITIAL_SPEED)
 
         yaw = math.atan2(lead_dx, lead_dz)
         direction = (
@@ -312,13 +323,77 @@ class ServerEnemyShip:
             math.cos(yaw) * math.cos(pitch),
         )
 
-        direction = apply_cannon_spread(direction, lead_dist)
+        direction = apply_cannon_spread(direction, lead_dist, self.ship_type)
 
-        game_state.projectile_mgr.fire(
-            f"e_{self.enemy_id}", self.damage,
-            (self.x, fire_origin_y, self.z),
-            direction,
-        )
+        # Turret-based salvo: fire from all turrets that can aim at the target
+        turret_offsets = self._get_turret_offsets()
+        turret_caps = self._get_turret_yaw_caps()
+        local_aim_yaw = yaw - self.heading
+
+        for i in range(len(self.turret_cooldowns)):
+            if self.turret_cooldowns[i] > 0:
+                continue
+            if i < len(turret_caps) and not self._turret_can_aim(
+                turret_caps[i][0], turret_caps[i][1], local_aim_yaw
+            ):
+                continue
+            if i < len(turret_offsets):
+                ldx, ldz = turret_offsets[i]
+                ox, oz = self._turret_world_pos(ldx, ldz)
+            else:
+                ox, oz = self.x, self.z
+            game_state.projectile_mgr.fire(
+                f"e_{self.enemy_id}", self.damage,
+                (ox, fire_origin_y, oz),
+                direction,
+            )
+            self.turret_cooldowns[i] = self.fire_cooldown
+
+    def _get_turret_offsets(self):
+        """Return list of (dx, dz) offsets for each turret relative to ship center."""
+        n_front = self.front_turrets
+        n_back = self.back_turrets
+        length = self.ship_length
+        spacing = max(1.5, self.ship_width * 0.85)
+
+        offsets = []
+        front_center = length * 0.2
+        for i in range(n_front):
+            offset = (i - (n_front - 1) / 2) * spacing
+            offsets.append((0, front_center + offset))
+
+        back_center = -length * 0.2
+        for i in range(n_back):
+            offset = (i - (n_back - 1) / 2) * spacing
+            offsets.append((0, back_center + offset))
+
+        return offsets
+
+    def _turret_world_pos(self, local_dx, local_dz):
+        """Convert turret local offset to world position based on ship heading."""
+        cos_h = math.cos(self.heading)
+        sin_h = math.sin(self.heading)
+        wx = self.x + sin_h * local_dz + cos_h * local_dx
+        wz = self.z + cos_h * local_dz - sin_h * local_dx
+        return wx, wz
+
+    def _get_turret_yaw_caps(self):
+        """Return list of (yaw_center, yaw_range) per turret."""
+        cfg = get_ship_config(self.enemy_level, self.ship_type)
+        has_bridge = cfg.get("has_bridge", False)
+        yaw_range = self.YAW_RANGE_BRIDGE if has_bridge else self.YAW_RANGE_FULL
+        caps = []
+        for _ in range(self.front_turrets):
+            caps.append((0.0, yaw_range))
+        for _ in range(self.back_turrets):
+            caps.append((math.pi, yaw_range))
+        return caps
+
+    @staticmethod
+    def _turret_can_aim(yaw_center, yaw_range, local_aim_yaw):
+        """Check if aim yaw is within turret's arc."""
+        diff = (local_aim_yaw - yaw_center + math.pi) % (2 * math.pi) - math.pi
+        return abs(diff) <= yaw_range + 0.05
 
     def to_snapshot(self):
         return {

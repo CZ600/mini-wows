@@ -7,7 +7,44 @@ const GEAR_ROWS = [
   { name: '倒退', gear: 0 },
 ];
 
-export default function MultiplayerHUD({ data, events }) {
+function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
+  return (
+    <div id="game-top-toolbar">
+      {onOpenSettings && (
+        <button
+          className="toolbar-btn toolbar-settings-btn"
+          style={{ pointerEvents: 'auto' }}
+          onClick={onOpenSettings}
+          title="设置"
+        >
+          ⚙
+        </button>
+      )}
+      {onToggleMute && (
+        <button
+          className={`toolbar-btn toolbar-mute-btn${muted ? ' active' : ''}`}
+          style={{ pointerEvents: 'auto' }}
+          onClick={onToggleMute}
+          title={muted ? '取消静音' : '静音'}
+        >
+          {muted ? '🔇' : '🔊'}
+        </button>
+      )}
+      {onExit && (
+        <button
+          className="toolbar-btn toolbar-exit-btn"
+          style={{ pointerEvents: 'auto' }}
+          onClick={onExit}
+          title="退出"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, onToggleMute, muted }) {
   if (!data) return null;
 
   const hpPercent = Math.max(0, (data.hp / data.maxHp) * 100);
@@ -46,6 +83,12 @@ export default function MultiplayerHUD({ data, events }) {
 
   return (
     <>
+      <TopToolbar
+        onOpenSettings={onOpenSettings}
+        onExit={onExit}
+        onToggleMute={onToggleMute}
+        muted={muted}
+      />
       {/* Crosshair */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
         <div id="crosshair">
@@ -87,6 +130,12 @@ export default function MultiplayerHUD({ data, events }) {
             <span className="hud-label">延迟</span>
             <span className="hud-value" style={{ color: ping < 50 ? 'var(--success)' : ping < 100 ? 'var(--warning)' : 'var(--danger)' }}>
               {ping}ms
+            </span>
+          </div>
+          <div className="hud-row hud-row-boxed">
+            <span className="hud-label">FPS</span>
+            <span className="hud-value" style={{ color: data.fps >= 55 ? 'var(--success)' : data.fps >= 30 ? 'var(--warning)' : 'var(--danger)' }}>
+              {data.fps || 0}
             </span>
           </div>
         </div>
@@ -188,6 +237,26 @@ export default function MultiplayerHUD({ data, events }) {
                 <div className="weapon-slot-desc">{tierLabels[tier] || ''}{torpedoTubes.length}管</div>
               </div>
             ))}
+            {/* Skill slots */}
+            {['rf', 'dc', 'ps'].map(id => {
+              const s = (data.skills && data.skills[id]) || { a: 0, c: 0 };
+              const active = s.a > 0;
+              const cooling = s.c > 0;
+              const defs = { rf: { key: 'F', name: '速射', desc: '装填-30%' }, dc: { key: 'G', name: '损管', desc: '回血30%' }, ps: { key: 'H', name: '精准', desc: '散步-30%' } };
+              const d = defs[id];
+              let className = 'weapon-slot skill';
+              if (active) className += ' skill-active';
+              else if (cooling) className += ' skill-cooldown';
+              return (
+                <div key={id} className={className}>
+                  <span className="weapon-slot-key">{d.key}</span>
+                  <div className="weapon-slot-name">{d.name}</div>
+                  {active && <div className="weapon-slot-desc">{s.a.toFixed(1)}s</div>}
+                  {cooling && <div className="weapon-slot-desc">CD {Math.ceil(s.c)}s</div>}
+                  {!active && !cooling && <div className="weapon-slot-desc">{d.desc}</div>}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

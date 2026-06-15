@@ -7,10 +7,47 @@ const GEAR_ROWS = [
   { name: '倒退', gear: 0 },
 ];
 
-export default function HUD({ data }) {
+function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
+  return (
+    <div id="game-top-toolbar">
+      {onOpenSettings && (
+        <button
+          className="toolbar-btn toolbar-settings-btn"
+          style={{ pointerEvents: 'auto' }}
+          onClick={onOpenSettings}
+          title="设置"
+        >
+          ⚙
+        </button>
+      )}
+      {onToggleMute && (
+        <button
+          className={`toolbar-btn toolbar-mute-btn${muted ? ' active' : ''}`}
+          style={{ pointerEvents: 'auto' }}
+          onClick={onToggleMute}
+          title={muted ? '取消静音' : '静音'}
+        >
+          {muted ? '🔇' : '🔊'}
+        </button>
+      )}
+      {onExit && (
+        <button
+          className="toolbar-btn toolbar-exit-btn"
+          style={{ pointerEvents: 'auto' }}
+          onClick={onExit}
+          title="退出"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted }) {
   if (!data) return null;
 
-  const { hp, maxHp, speed, level, score, enemyCount, wave, turrets, currentThreshold, nextThreshold,
+  const { hp, maxHp, speed, level, score, enemyCount, wave, fps, turrets, currentThreshold, nextThreshold,
           weaponMode, torpedoTier, torpedoTubes, torpedoMaxCooldown, shipClass,
           availableTorpedoTiers, gear } = data;
   const gearIdx = gear == null ? 1 : gear;
@@ -41,6 +78,12 @@ export default function HUD({ data }) {
 
   return (
     <>
+      <TopToolbar
+        onOpenSettings={onOpenSettings}
+        onExit={onExit}
+        onToggleMute={onToggleMute}
+        muted={muted}
+      />
       {/* HP Bar - Top Center */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
         <div id="crosshair">
@@ -81,6 +124,7 @@ export default function HUD({ data }) {
           <div className="hud-row"><span className="hud-label">波次</span><span>{wave || 1}</span></div>
           <div className="hud-row"><span className="hud-label">分数</span><span>{score}</span></div>
           <div className="hud-row"><span className="hud-label">敌人</span><span>{enemyCount}</span></div>
+          <div className="hud-row"><span className="hud-label">FPS</span><span>{fps || 0}</span></div>
         </div>
       </div>
 
@@ -167,6 +211,26 @@ export default function HUD({ data }) {
                 <div className="weapon-slot-desc">{tierLabels[tier] || ''}{torpedoTubes.length}管</div>
               </div>
             ))}
+            {/* Skill slots */}
+            {['rf', 'dc', 'ps'].map(id => {
+              const s = (data.skills && data.skills[id]) || { a: 0, c: 0 };
+              const active = s.a > 0;
+              const cooling = s.c > 0;
+              const defs = { rf: { key: 'F', name: '速射', desc: '装填-30%' }, dc: { key: 'G', name: '损管', desc: '回血30%' }, ps: { key: 'H', name: '精准', desc: '散步-30%' } };
+              const d = defs[id];
+              let className = 'weapon-slot skill';
+              if (active) className += ' skill-active';
+              else if (cooling) className += ' skill-cooldown';
+              return (
+                <div key={id} className={className}>
+                  <span className="weapon-slot-key">{d.key}</span>
+                  <div className="weapon-slot-name">{d.name}</div>
+                  {active && <div className="weapon-slot-desc">{s.a.toFixed(1)}s</div>}
+                  {cooling && <div className="weapon-slot-desc">CD {Math.ceil(s.c)}s</div>}
+                  {!active && !cooling && <div className="weapon-slot-desc">{d.desc}</div>}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

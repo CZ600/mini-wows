@@ -78,17 +78,25 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
   padding: 8px; background: rgba(255,122,122,0.12); border-radius: var(--radius);
 }
 
-/* 排行榜 */
+/* 排行榜 已更新样式 */
 #leaderboard-panel {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  z-index: 110; margin-top: 80px;
+  z-index: 110;
   padding: 20px; background: var(--bg-secondary); border-radius: var(--radius);
   box-shadow: var(--card-shadow);
-  max-height: 300px; width: 340px;
+  width: 420px;
 }
 #leaderboard-panel h2 { color: var(--accent); margin-bottom: 12px; font-size: 20px; text-align: center; }
+.leaderboard-body {
+  max-height: 60vh; overflow-y: auto;
+  margin-bottom: 12px;
+}
 #leaderboard-table { width: 100%; border-collapse: collapse; color: var(--text-primary); }
-#leaderboard-table th { color: var(--accent); padding: 6px; font-size: 14px; border-bottom: 1px solid var(--border); }
+#leaderboard-table th {
+  color: var(--accent); padding: 6px; font-size: 14px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--bg-secondary); z-index: 1;
+}
 #leaderboard-table td { padding: 6px; font-size: 14px; text-align: center; }
 
 /* 管理员面板 */
@@ -140,7 +148,7 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 }
 
 /* 左上 */
-#hud-left { position: absolute; top: 20px; left: 20px; }
+#hud-left { position: absolute; top: 56px; left: 20px; }
 .hud-row { display: flex; align-items: center; margin-bottom: 8px; gap: 10px; }
 .hud-label { color: #a8c0d8; width: 50px; text-align: right; }
 .health-bar-outer {
@@ -726,6 +734,29 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 .weapon-slot-name { color: #fff; font-size: 13px; font-weight: bold; margin-top: 2px; }
 .weapon-slot-desc { color: rgba(255,255,255,0.6); font-size: 11px; margin-top: 2px; }
 
+/* Skill slots */
+.weapon-slot.skill {
+  min-width: 72px;
+  border-color: rgba(255,255,255,0.08);
+}
+.weapon-slot.skill-active {
+  border-color: var(--success); background: rgba(77,255,136,0.12);
+  box-shadow: 0 0 0 1px var(--success), 0 0 8px rgba(77,255,136,0.3);
+}
+.weapon-slot.skill-active .weapon-slot-key {
+  background: var(--success); color: #0a2a10;
+}
+.weapon-slot.skill-active .weapon-slot-desc {
+  color: var(--success);
+}
+.weapon-slot.skill-cooldown {
+  opacity: 0.45;
+  border-color: rgba(255,255,255,0.04);
+}
+.weapon-slot.skill-cooldown .weapon-slot-desc {
+  color: var(--warning);
+}
+
 /* Compass */
 #compass {
   position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
@@ -758,3 +789,146 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 }
 .kill-feed-item .killer { color: var(--accent); }
 .kill-feed-item .victim { color: var(--danger); }
+
+/* 左上工具栏 */
+#game-top-toolbar {
+  position: fixed; top: 12px; left: 16px; z-index: 55;
+  display: flex; gap: 6px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  padding: 4px 6px;
+}
+.toolbar-btn {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: 0.15s ease;
+  padding: 0;
+}
+.toolbar-btn:hover {
+  background: rgba(255,255,255,0.16);
+  color: var(--text-primary);
+}
+.toolbar-btn.active {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: rgba(255,122,122,0.14);
+}
+.toolbar-exit-btn:hover {
+  background: rgba(255,122,122,0.2);
+  color: var(--danger);
+}
+
+/* Modal 公共 */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 250;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(2px);
+}
+.modal-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow-hover);
+  padding: 28px 32px;
+  min-width: 320px;
+  max-width: 400px;
+  text-align: center;
+}
+.modal-title {
+  color: var(--accent);
+  font-size: 22px;
+  margin-bottom: 16px;
+}
+.modal-message {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+.modal-message-secondary {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+.modal-actions {
+  display: flex; gap: 12px; justify-content: center; margin-top: 20px;
+}
+.modal-actions .menu-btn {
+  width: auto; padding: 10px 24px; margin: 0;
+}
+
+/* Danger 确认按钮变体 */
+.menu-btn.danger {
+  background: rgba(255,122,122,0.2);
+  color: var(--danger);
+  border: 1px solid rgba(255,122,122,0.4);
+}
+.menu-btn.danger:hover {
+  background: rgba(255,122,122,0.35);
+  box-shadow: 0 4px 14px rgba(255,122,122,0.3);
+}
+
+/* 设置面板 */
+#settings-panel .modal-card {
+  text-align: left;
+}
+.settings-close-btn {
+  position: absolute; top: 12px; right: 12px;
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none;
+  color: var(--text-tertiary); font-size: 20px;
+  cursor: pointer; transition: 0.15s ease;
+}
+.settings-close-btn:hover { color: var(--text-primary); }
+.settings-row {
+  margin-bottom: 20px;
+}
+.settings-row-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.settings-label {
+  color: var(--text-primary); font-size: 15px;
+}
+.settings-value {
+  color: var(--accent); font-size: 13px; font-weight: bold;
+}
+.settings-row input[type="range"] {
+  width: 100%; height: 6px;
+  appearance: none; -webkit-appearance: none;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+.settings-row input[type="range"]::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-secondary);
+  cursor: pointer;
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+.settings-row input[type="range"]:disabled {
+  opacity: 0.35; cursor: not-allowed;
+}
+.settings-mute-row {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.settings-mute-row .menu-btn {
+  margin: 0; width: auto; padding: 8px 20px; font-size: 14px;
+}
+.settings-mute-row .menu-btn.active {
+  background: rgba(255,122,122,0.14); color: var(--danger);
+  border: 1px solid transparent;
+}

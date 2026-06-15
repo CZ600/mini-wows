@@ -13,6 +13,7 @@ export class ProjectileManager {
     this.audio = audio;
     this.projectiles = [];
     this.explosions = [];
+    this._splashes = [];
   }
 
   fire(origin, direction, damage, owner) {
@@ -65,7 +66,8 @@ export class ProjectileManager {
 
       // Water
       if (p.mesh.position.y <= 0) {
-        this._explode(p.mesh.position.clone(), 0x4488cc, 3);
+        this._createSplash(p.mesh.position.clone());
+        if (p.owner === 'player' && this.audio) this.audio.playExplosion();
         hit = true;
       }
 
@@ -140,6 +142,43 @@ export class ProjectileManager {
       e.mesh.scale.set(scale, scale, scale);
       if (e.mesh.material) e.mesh.material.opacity = 1 - progress;
     }
+
+    // Water splashes
+    for (let i = this._splashes.length - 1; i >= 0; i--) {
+      const s = this._splashes[i];
+      s.lifetime += dt;
+      const progress = s.lifetime / s.duration;
+      if (progress >= 1) {
+        this.scene.remove(s.points);
+        s.points.geometry.dispose();
+        s.points.material.dispose();
+        this._splashes.splice(i, 1);
+        continue;
+      }
+
+      const posArr = s.points.geometry.attributes.position.array;
+      const opaArr = s.points.geometry.attributes.aOpacity.array;
+      const sizeArr = s.points.geometry.attributes.aSize.array;
+
+      for (let j = 0; j < s.count; j++) {
+        const v = s.velocities[j];
+        v.y -= GRAVITY * dt;
+        posArr[j * 3] += v.x * dt;
+        posArr[j * 3 + 1] += v.y * dt;
+        posArr[j * 3 + 2] += v.z * dt;
+
+        if (posArr[j * 3 + 1] <= 0) {
+          opaArr[j] = 0;
+          sizeArr[j] = 0;
+        } else {
+          opaArr[j] = (1 - progress) * 0.9;
+        }
+      }
+
+      s.points.geometry.attributes.position.needsUpdate = true;
+      s.points.geometry.attributes.aOpacity.needsUpdate = true;
+      s.points.geometry.attributes.aSize.needsUpdate = true;
+    }
   }
 
   _explode(position, color, maxSize) {
@@ -165,6 +204,78 @@ export class ProjectileManager {
     this.explosions.push({ mesh: particles, lifetime: 0, duration: 0.6, maxSize: maxSize * 0.8 });
   }
 
+  _createSplash(position) {
+    const count = 28;
+    const positions = new Float32Array(count * 3);
+    const opacities = new Float32Array(count);
+    const sizes = new Float32Array(count);
+    const velocities = [];
+
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = position.x;
+      positions[i * 3 + 1] = Math.max(position.y, 0);
+      positions[i * 3 + 2] = position.z;
+
+      const isColumn = i < count * 0.3;
+      const angle = Math.random() * Math.PI * 2;
+      const radius = isColumn ? Math.random() * 1.0 : 1.5 + Math.random() * 3.5;
+      const upSpeed = isColumn ? 12 + Math.random() * 6 : 6 + Math.random() * 6;
+
+      velocities.push({
+        x: Math.cos(angle) * radius,
+        y: upSpeed,
+        z: Math.sin(angle) * radius,
+      });
+      opacities[i] = 1;
+      sizes[i] = isColumn ? 2.5 + Math.random() * 1.5 : 1.2 + Math.random() * 1.2;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('aOpacity', new THREE.BufferAttribute(opacities, 1));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      vertexShader: `
+        attribute float aOpacity;
+        attribute float aSize;
+        varying float vOpacity;
+        void main() {
+          vOpacity = aOpacity;
+          vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize * (200.0 / -mvPos.z);
+          gl_Position = projectionMatrix * mvPos;
+        }
+      `,
+      fragmentShader: `
+        varying float vOpacity;
+        void main() {
+          float d = length(gl_PointCoord - vec2(0.5));
+          if (d > 0.5) discard;
+          float a = (1.0 - smoothstep(0.35, 0.5, d)) * vOpacity;
+          vec3 core = vec3(1.0, 1.0, 1.0);
+          vec3 edge = vec3(0.55, 0.78, 0.92);
+          vec3 color = mix(core, edge, smoothstep(0.0, 0.42, d));
+          gl_FragColor = vec4(color, a);
+        }
+      `,
+    });
+
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    this.scene.add(points);
+
+    this._splashes.push({
+      points,
+      velocities,
+      lifetime: 0,
+      duration: 1.2,
+      count,
+    });
+  }
+
   destroy() {
     for (const p of this.projectiles) {
       this.scene.remove(p.mesh);
@@ -175,8 +286,14 @@ export class ProjectileManager {
       p.trail.material.dispose();
     }
     for (const e of this.explosions) { this.scene.remove(e.mesh); e.mesh.geometry.dispose(); e.mesh.material.dispose(); }
+    for (const s of this._splashes) {
+      this.scene.remove(s.points);
+      s.points.geometry.dispose();
+      s.points.material.dispose();
+    }
     this.projectiles = [];
     this.explosions = [];
+    this._splashes = [];
   }
 
   _updateTrail(p) {

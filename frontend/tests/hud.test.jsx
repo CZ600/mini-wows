@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import HUD from '../src/components/HUD.jsx';
 
 function slotKeys(container) {
@@ -153,8 +153,8 @@ describe('HUD torpedo display', () => {
 
   it('shows weapon slot key hints (1 for gun, 2/3/4 for torpedo tiers)', () => {
     const { container } = render(<HUD data={baseData} />);
-    expect(slotKeys(container)).toEqual(['1', '2', '3', '4']);
-    expect(slotNames(container)).toEqual(['火炮', '鱼雷', '鱼雷', '鱼雷']);
+    expect(slotKeys(container)).toEqual(['1', '2', '3', '4', 'F', 'G', 'H']);
+    expect(slotNames(container)).toEqual(['火炮', '鱼雷', '鱼雷', '鱼雷', '速射', '损管', '精准']);
   });
 
   it('only shows torpedo slots for available tiers', () => {
@@ -163,7 +163,7 @@ describe('HUD torpedo display', () => {
       availableTorpedoTiers: [1],
     };
     const { container } = render(<HUD data={cruiserData} />);
-    expect(slotKeys(container)).toEqual(['1', '2']);
+    expect(slotKeys(container)).toEqual(['1', '2', 'F', 'G', 'H']);
   });
 
   it('hides all torpedo slots when no tier available (battleship)', () => {
@@ -173,7 +173,7 @@ describe('HUD torpedo display', () => {
       torpedoTubes: [],
     };
     const { container } = render(<HUD data={battleshipData} />);
-    expect(slotKeys(container)).toEqual(['1']);
+    expect(slotKeys(container)).toEqual(['1', 'F', 'G', 'H']);
   });
 });
 
@@ -231,5 +231,81 @@ describe('HUD gear display', () => {
     const r2 = render(<HUD data={{ ...baseData, gear: 5, speed: 60 }} />);
     const active2 = r2.container.querySelector('.gear-row.active');
     expect(active2.querySelector('.gear-name').textContent).toBe('前进4');
+  });
+});
+
+describe('HUD top-left toolbar', () => {
+  const baseData = {
+    hp: 100, maxHp: 100, speed: 30, level: 5, score: 200,
+    enemyCount: 5, wave: 3, turrets: [], currentThreshold: 150,
+    nextThreshold: 250, weaponMode: 'gun', torpedoTubes: [],
+    torpedoMaxCooldown: 8, shipClass: 'destroyer',
+    availableTorpedoTiers: [], gear: 1,
+  };
+
+  it('渲染左上角工具栏 #game-top-toolbar', () => {
+    const { container } = render(<HUD data={baseData} />);
+    expect(container.querySelector('#game-top-toolbar')).toBeTruthy();
+  });
+
+  it('未传回调时不显示任何按钮', () => {
+    const { container } = render(<HUD data={baseData} />);
+    const btns = container.querySelectorAll('#game-top-toolbar button');
+    expect(btns.length).toBe(0);
+  });
+
+  it('传入所有回调时显示三个按钮', () => {
+    const { container } = render(
+      <HUD data={baseData} onExit={() => {}} onOpenSettings={() => {}} onToggleMute={() => {}} />
+    );
+    const btns = container.querySelectorAll('#game-top-toolbar button');
+    expect(btns.length).toBe(3);
+  });
+
+  it('传 onExit 时显示退出按钮并响应点击', () => {
+    const onExit = vi.fn();
+    const { container } = render(<HUD data={baseData} onExit={onExit} />);
+    const exitBtn = container.querySelector('.toolbar-exit-btn');
+    expect(exitBtn).toBeTruthy();
+    fireEvent.click(exitBtn);
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it('传 onOpenSettings 时点击设置按钮触发回调', () => {
+    const onOpenSettings = vi.fn();
+    const { container } = render(<HUD data={baseData} onOpenSettings={onOpenSettings} />);
+    const settingsBtn = container.querySelector('.toolbar-settings-btn');
+    expect(settingsBtn).toBeTruthy();
+    fireEvent.click(settingsBtn);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('传 onToggleMute 时点击静音按钮触发回调', () => {
+    const onToggleMute = vi.fn();
+    const { container } = render(<HUD data={baseData} onToggleMute={onToggleMute} />);
+    const muteBtn = container.querySelector('.toolbar-mute-btn');
+    expect(muteBtn).toBeTruthy();
+    fireEvent.click(muteBtn);
+    expect(onToggleMute).toHaveBeenCalledTimes(1);
+  });
+
+  it('静音状态时按钮显示为 active', () => {
+    const { container } = render(<HUD data={baseData} onToggleMute={() => {}} muted={true} />);
+    const muteBtn = container.querySelector('.toolbar-mute-btn');
+    expect(muteBtn.classList.contains('active')).toBe(true);
+  });
+
+  it('未静音时按钮不显示 active 类', () => {
+    const { container } = render(<HUD data={baseData} onToggleMute={() => {}} muted={false} />);
+    const muteBtn = container.querySelector('.toolbar-mute-btn');
+    expect(muteBtn.classList.contains('active')).toBe(false);
+  });
+
+  it('工具栏按钮支持 pointer-events: auto', () => {
+    const { container } = render(<HUD data={baseData} onExit={() => {}} onOpenSettings={() => {}} onToggleMute={() => {}} />);
+    const btns = container.querySelectorAll('#game-top-toolbar button');
+    for (const b of btns) {
+      expect(b.style.pointerEvents).toBe('auto');
+    }
   });
 });

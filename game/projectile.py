@@ -59,7 +59,7 @@ class ServerProjectile:
         }
 
 
-def apply_cannon_spread(direction, distance, ship_class=None):
+def apply_cannon_spread(direction, distance, ship_class=None, spread_mult=1.0):
     """Perturb direction with angular spread centered on the original aim.
 
     Spread model: sigma_h = class_base + distance * SPREAD_BASE * class_growth
@@ -68,9 +68,11 @@ def apply_cannon_spread(direction, distance, ship_class=None):
     - battleship: larger base, low growth → best at range
     Vertical sigma = horizontal * VERT_MULT.
     Random values clamped at ±MAX_SIGMA sigma to avoid wild outliers.
+
+    spread_mult: 全局 σ 乘数，例如 precision 技能激活时为 0.7。
     """
     class_cfg = CANNON_SPREAD_CLASS.get(ship_class, {"base": 0.0008, "growth": 0.4})
-    sigma_h = class_cfg["base"] + distance * CANNON_SPREAD_BASE * class_cfg["growth"]
+    sigma_h = (class_cfg["base"] + distance * CANNON_SPREAD_BASE * class_cfg["growth"]) * spread_mult
     sigma_v = sigma_h * CANNON_SPREAD_VERTICAL_MULT
 
     max_h = CANNON_SPREAD_MAX_SIGMA * sigma_h
@@ -141,17 +143,19 @@ class ProjectileManager:
         # Point-in-box would let fast projectiles (200 m/s = 10 m/tick at 20 Hz)
         # tunnel through small ships. The segment from prev to curr position is
         # tested against the box to catch every crossing.
+        #
+        # Half-width / half-length are tight to the visual mesh:
+        #   Deck is the widest BoxGeometry in ship.js: width * 0.85, length * 0.85
+        #   → visual half-extent = width * 0.425, length * 0.425.
+        # We use width * 0.45 / length * 0.45 to add a ~6% tolerance so a
+        # projectile that visually grazes the deck edge still counts as a hit.
         alive_ships = [(pid, s) for pid, s in ships.items() if s.alive]
         if alive_ships and self.projectiles:
             ship_ids = [pid for pid, _ in alive_ships]
             ship_positions = np.array([[s.pos_x, s.pos_z] for _, s in alive_ships])
             ship_headings = np.array([s.heading for _, s in alive_ships])
-            # Width margin: proportional for large ships (1.7x), absolute floor
-            # for small ships (+2.0). Without the floor, low-level destroyers
-            # would shrink to ~2.3m half-width and become nearly unhittable.
-            ship_w_half = np.array([s.ship_width / 2 for _, s in alive_ships])
-            ship_half_w = np.maximum(ship_w_half * 1.7, ship_w_half + 2.0)
-            ship_half_l = np.array([s.ship_length / 2 + 2.0 for _, s in alive_ships])
+            ship_half_w = np.array([s.ship_width * 0.45 for _, s in alive_ships])
+            ship_half_l = np.array([s.ship_length * 0.45 for _, s in alive_ships])
             # Upper bound covers hull + deck + small bridge base; without this,
             # projectiles at deck level (y≈2 on a level-1 ship) would miss.
             ship_h_upper = np.array([getattr(s, 'ship_height', 2.5) + 3.0 for _, s in alive_ships])
