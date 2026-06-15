@@ -9,7 +9,7 @@ import { InputSender } from './input_sender.js';
 import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED } from './config.js';
-import { Ship, CLASS_CONFIG } from './ship.js';
+import { Ship, CLASS_CONFIG, getDriftConfig } from './ship.js';
 import { updateTurrets, calcBallisticAngles, turretCanAim, applyCannonSpread } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
@@ -236,7 +236,7 @@ export class MultiplayerEngine {
     // Create local ship (for rendering)
     this.localShip = {
       pos_x: 0, pos_z: 0,
-      heading: 0, speed: 0,
+      heading: 0, velocityHeading: 0, speed: 0,
       hp: 100, max_hp: 100,
       max_speed: BASE_MAX_SPEED,
       turn_radius: 20,
@@ -364,6 +364,7 @@ export class MultiplayerEngine {
         this.localShip.pos_x = serverState.x;
         this.localShip.pos_z = serverState.z;
         this.localShip.heading = serverState.h;
+        this.localShip.velocityHeading = serverState.vh ?? serverState.h;
         this.localShip.speed = serverState.spd;
         this.localShip.ship.mesh.position.set(serverState.x, 0, serverState.z);
         this.localShip.ship.mesh.rotation.y = serverState.h;
@@ -396,6 +397,7 @@ export class MultiplayerEngine {
         this.localShip.pos_x = serverState.x;
         this.localShip.pos_z = serverState.z;
         this.localShip.heading = serverState.h;
+        this.localShip.velocityHeading = serverState.h;
         this.localShip.speed = 0;
         this._eliminated = false;
         if (this.localShip.ship) {
@@ -807,8 +809,6 @@ export class MultiplayerEngine {
     if (this.localShip.alive) {
       this.controls.updateMotionKeys(this.localShip.speed, this.localShip.max_speed);
       const keys = this.controls.keys;
-      this.localShip.pos_x += Math.sin(this.localShip.heading) * this.localShip.speed * dt;
-      this.localShip.pos_z += Math.cos(this.localShip.heading) * this.localShip.speed * dt;
 
       // Apply controls locally for immediate feedback
       // Speed-dependent acceleration: faster at low speed, slower at high speed
@@ -829,6 +829,15 @@ export class MultiplayerEngine {
         if (keys.d) this.localShip.heading -= turnRate * dt;
       }
 
+      // Drift: velocityHeading chases heading
+      if (typeof this.localShip.velocityHeading !== 'number') {
+        this.localShip.velocityHeading = this.localShip.heading;
+      }
+      this._applyLocalDrift(dt);
+
+      this.localShip.pos_x += Math.sin(this.localShip.velocityHeading) * this.localShip.speed * dt;
+      this.localShip.pos_z += Math.cos(this.localShip.velocityHeading) * this.localShip.speed * dt;
+
       this.localShip.pos_x = Math.max(-5000, Math.min(5000, this.localShip.pos_x));
       this.localShip.pos_z = Math.max(-5000, Math.min(5000, this.localShip.pos_z));
 
@@ -846,6 +855,7 @@ export class MultiplayerEngine {
       this.localShip.ship.mesh.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
       this.localShip.ship.mesh.rotation.y = this.localShip.heading;
       this.localShip.ship.heading = this.localShip.heading;
+      this.localShip.ship.velocityHeading = this.localShip.velocityHeading;
       this.localShip.ship.speed = this.localShip.speed;
       this.localShip.ship.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
       if (Math.abs(this.localShip.speed) > 1) {
@@ -1102,6 +1112,31 @@ export class MultiplayerEngine {
     const base = { 1: 8, 2: 8, 3: 8 };
     const levelsAbove4 = Math.max(0, (this.localShip?.level || 1) - 4);
     return (base[tier] || 8) * Math.pow(0.95, levelsAbove4);
+  }
+
+  _applyLocalDrift(dt) {
+    const ls = this.localShip;
+    const driftCfg = getDriftConfig(ls.shipClass);
+    let diff = ls.heading - ls.velocityHeading;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+
+    const speedRatio = Math.abs(ls.speed) <= 0.5 ? 0 : Math.abs(ls.speed) / ls.max_speed;
+    const recovery = driftCfg.recovery_base * (1 - speedRatio * (1 - driftCfg.speed_factor));
+    const maxStep = recovery * dt;
+
+    if (Math.abs(diff) <= maxStep) {
+      ls.velocityHeading = ls.heading;
+    } else {
+      ls.velocityHeading += Math.sign(diff) * maxStep;
+    }
+
+    let finalDiff = ls.heading - ls.velocityHeading;
+    while (finalDiff > Math.PI) finalDiff -= 2 * Math.PI;
+    while (finalDiff < -Math.PI) finalDiff += 2 * Math.PI;
+    if (Math.abs(finalDiff) > driftCfg.max_angle) {
+      ls.velocityHeading = ls.heading - Math.sign(finalDiff) * driftCfg.max_angle;
+    }
   }
 
   _cleanupGame() {

@@ -148,6 +148,7 @@ class GameState:
             ship.pos_x = spawn_x
             ship.pos_z = spawn_z
             ship.speed = 0
+            ship.velocity_heading = 0
             for i in range(len(ship.turret_cooldowns)):
                 ship.turret_cooldowns[i] = 0
             self._respawn_remaining[pid] = remaining - 1

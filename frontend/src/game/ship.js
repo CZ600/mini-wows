@@ -44,6 +44,18 @@ export const CLASS_CONFIG = {
   },
 };
 
+export const DRIFT_CONFIG = {
+  default:    { recovery_base: 2.5, speed_factor: 0.14, max_angle: 0.40 },
+  destroyer:  { recovery_base: 2.5, speed_factor: 0.10, max_angle: 0.65 },
+  cruiser:    { recovery_base: 2.5, speed_factor: 0.14, max_angle: 0.45 },
+  battleship: { recovery_base: 2.0, speed_factor: 0.05, max_angle: 0.25 },
+};
+
+export function getDriftConfig(shipClass) {
+  if (!shipClass) return DRIFT_CONFIG.default;
+  return DRIFT_CONFIG[shipClass] || DRIFT_CONFIG.default;
+}
+
 const BASE_MAX_SPEED = 16.67;
 
 export function getClassConfig(shipClass, level) {
@@ -199,6 +211,7 @@ export class Ship {
     this.torpedoTubes = getTorpedoTubes(shipClass, level);
 
     this.heading = 0;
+    this.velocityHeading = 0;
     this.speed = 0;
     this.position = new THREE.Vector3(0, 0, 0);
     this.hp = this.maxHp;
@@ -481,6 +494,7 @@ export class Ship {
   upgradeToLevel(newLevel) {
     const pos = this.position.clone();
     const heading = this.heading;
+    const vh = this.velocityHeading;
     const alive = this.alive;
 
     this.mesh.traverse(child => {
@@ -507,6 +521,7 @@ export class Ship {
     this._initWake();
     this.position.copy(pos);
     this.heading = heading;
+    this.velocityHeading = vh;
     this.alive = alive;
     this.mesh.position.copy(pos);
     this.mesh.rotation.y = heading;
@@ -545,8 +560,10 @@ export class Ship {
       if (keys.d) this.heading -= turnRate * dt;
     }
 
-    const newX = this.position.x + Math.sin(this.heading) * this.speed * dt;
-    const newZ = this.position.z + Math.cos(this.heading) * this.speed * dt;
+    this._applyDrift(dt);
+
+    const newX = this.position.x + Math.sin(this.velocityHeading) * this.speed * dt;
+    const newZ = this.position.z + Math.cos(this.velocityHeading) * this.speed * dt;
     const half = 5000;
     this.position.x = Math.max(-half, Math.min(half, newX));
     this.position.z = Math.max(-half, Math.min(half, newZ));
@@ -576,6 +593,30 @@ export class Ship {
 
     for (const t of this.turrets) {
       if (t.cooldown > 0) t.cooldown -= dt;
+    }
+  }
+
+  _applyDrift(dt) {
+    const driftCfg = getDriftConfig(this.shipClass);
+    let diff = this.heading - this.velocityHeading;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+
+    const speedRatio = Math.abs(this.speed) <= 0.5 ? 0 : Math.abs(this.speed) / this.maxSpeed;
+    const recovery = driftCfg.recovery_base * (1 - speedRatio * (1 - driftCfg.speed_factor));
+    const maxStep = recovery * dt;
+
+    if (Math.abs(diff) <= maxStep) {
+      this.velocityHeading = this.heading;
+    } else {
+      this.velocityHeading += Math.sign(diff) * maxStep;
+    }
+
+    let finalDiff = this.heading - this.velocityHeading;
+    while (finalDiff > Math.PI) finalDiff -= 2 * Math.PI;
+    while (finalDiff < -Math.PI) finalDiff += 2 * Math.PI;
+    if (Math.abs(finalDiff) > driftCfg.max_angle) {
+      this.velocityHeading = this.heading - Math.sign(finalDiff) * driftCfg.max_angle;
     }
   }
 

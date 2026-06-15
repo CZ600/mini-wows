@@ -66,8 +66,9 @@ class ServerTurret:
         raw_dz = target_ship.pos_z - self.z
         raw_dist = math.sqrt(raw_dx * raw_dx + raw_dz * raw_dz)
         flight_time = raw_dist / ENEMY_FIRE_SPEED if ENEMY_FIRE_SPEED > 0 else 0
-        lead_x = target_ship.pos_x + math.sin(target_ship.heading) * target_ship.speed * flight_time
-        lead_z = target_ship.pos_z + math.cos(target_ship.heading) * target_ship.speed * flight_time
+        vh = getattr(target_ship, 'velocity_heading', target_ship.heading)
+        lead_x = target_ship.pos_x + math.sin(vh) * target_ship.speed * flight_time
+        lead_z = target_ship.pos_z + math.cos(vh) * target_ship.speed * flight_time
 
         dx = lead_x - self.x
         dz = lead_z - self.z

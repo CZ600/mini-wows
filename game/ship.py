@@ -1,7 +1,7 @@
 import math
 from game.config import (
     BASE_MAX_SPEED, ACCEL, DECEL_FRICTION, MAP_HALF,
-    get_ship_config,
+    get_ship_config, get_drift_config,
 )
 
 
@@ -28,6 +28,7 @@ class ServerShip:
         self.pos_x = 0.0
         self.pos_z = 0.0
         self.heading = 0.0
+        self.velocity_heading = 0.0
         self.speed = 0.0
 
         self.turret_cooldowns = [0.0] * (cfg["front_turrets"] + cfg["back_turrets"])
@@ -58,8 +59,10 @@ class ServerShip:
             if keys.get("d"):
                 self.heading -= turn_rate * dt
 
-        new_x = self.pos_x + math.sin(self.heading) * self.speed * dt
-        new_z = self.pos_z + math.cos(self.heading) * self.speed * dt
+        self._apply_drift(dt)
+
+        new_x = self.pos_x + math.sin(self.velocity_heading) * self.speed * dt
+        new_z = self.pos_z + math.cos(self.velocity_heading) * self.speed * dt
         new_x = max(-MAP_HALF, min(MAP_HALF, new_x))
         new_z = max(-MAP_HALF, min(MAP_HALF, new_z))
 
@@ -73,6 +76,32 @@ class ServerShip:
 
         self.pos_x = new_x
         self.pos_z = new_z
+
+    def _apply_drift(self, dt):
+        drift_cfg = get_drift_config(self.ship_class)
+        diff = self.heading - self.velocity_heading
+        while diff > math.pi:
+            diff -= 2 * math.pi
+        while diff < -math.pi:
+            diff += 2 * math.pi
+
+        speed_ratio = 0 if abs(self.speed) <= 0.5 else abs(self.speed) / max(self.max_speed, 1e-6)
+        recovery = drift_cfg["recovery_base"] * (1 - speed_ratio * (1 - drift_cfg["speed_factor"]))
+        max_step = recovery * dt
+
+        if abs(diff) <= max_step:
+            self.velocity_heading = self.heading
+        else:
+            self.velocity_heading += (1 if diff > 0 else -1) * max_step
+
+        final_diff = self.heading - self.velocity_heading
+        while final_diff > math.pi:
+            final_diff -= 2 * math.pi
+        while final_diff < -math.pi:
+            final_diff += 2 * math.pi
+        if abs(final_diff) > drift_cfg["max_angle"]:
+            sign = 1 if final_diff > 0 else -1
+            self.velocity_heading = self.heading - sign * drift_cfg["max_angle"]
 
     def _get_corners_at(self, x, z):
         half_l = self.ship_length / 2
@@ -116,6 +145,7 @@ class ServerShip:
             "x": round(self.pos_x, 2),
             "z": round(self.pos_z, 2),
             "h": round(self.heading, 4),
+            "vh": round(self.velocity_heading, 4),
             "spd": round(self.speed, 2),
             "hp": round(self.hp, 1),
             "mhp": self.max_hp,

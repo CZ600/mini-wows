@@ -9,4 +9,5 @@ build/
 .vite/
 .claude\CLAUDE.md
 claude\CLAUDE.md
+*.db
 game.db

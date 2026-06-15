@@ -19,6 +19,20 @@ SNAPSHOT_HISTORY_SIZE = TICK_RATE * SNAPSHOT_HISTORY_SECONDS
 
 # Ship physics
 BASE_MAX_SPEED = 16.67
+
+# Drift: velocity_heading chases heading, recovery slows at high speed
+DRIFT_CONFIG = {
+    "default":    {"recovery_base": 2.5, "speed_factor": 0.14, "max_angle": 0.40},
+    "destroyer":  {"recovery_base": 2.5, "speed_factor": 0.10, "max_angle": 0.65},
+    "cruiser":    {"recovery_base": 2.5, "speed_factor": 0.14, "max_angle": 0.45},
+    "battleship": {"recovery_base": 2.0, "speed_factor": 0.05, "max_angle": 0.25},
+}
+
+def get_drift_config(ship_class):
+    if not ship_class:
+        return DRIFT_CONFIG["default"]
+    return DRIFT_CONFIG.get(ship_class, DRIFT_CONFIG["default"])
+
 ACCEL = BASE_MAX_SPEED / 15.0
 DECEL_FRICTION = 0.98
 
