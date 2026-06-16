@@ -191,8 +191,16 @@ export function GameProvider({ children }) {
   // Helpers
   const nav = (path) => navigateRef.current?.(path);
 
-  const ensureMpConnected = () => {
+  // Ensures the multiplayer engine is loaded + connected before any room action.
+  // Engines load lazily, so an entry point that skips handleMultiplayer() (e.g. a
+  // direct navigate('/multi')) would otherwise leave mpEngineRef.current null and
+  // crash on `mp.ws.connected`. This guards against that and loads on demand.
+  const ensureMpConnected = async () => {
+    if (!mpEngineRef.current) {
+      await loadEngines();
+    }
     const mp = mpEngineRef.current;
+    if (!mp || !mp.ws) return;
     if (!mp.ws.connected) {
       mp.ws.onMessage = (msg) => mp._handleMessage(msg);
       mp.ws.onDisconnect = () => {
@@ -290,31 +298,34 @@ export function GameProvider({ children }) {
 
   const handleMultiplayer = async () => {
     await loadEngines();
-    ensureMpConnected();
+    await ensureMpConnected();
     nav('/multi');
   };
 
-  const handleQuickMatch = (mode, level, shipClass, respawnLimit) => {
-    ensureMpConnected();
+  const handleQuickMatch = async (mode, level, shipClass, respawnLimit) => {
     pendingRoomRef.current = true;
     setRoomInfo(null);
-    mpEngine.quickMatch(mode, level, shipClass, respawnLimit);
+    await ensureMpConnected();
+    const mp = mpEngineRef.current;
+    mp.quickMatch(mode, level, shipClass, respawnLimit);
     nav('/multi/room');
   };
 
-  const handleCreateRoom = (mode, level, shipClass, respawnLimit) => {
-    ensureMpConnected();
+  const handleCreateRoom = async (mode, level, shipClass, respawnLimit) => {
     pendingRoomRef.current = true;
     setRoomInfo(null);
-    mpEngine.createRoom(mode, level, shipClass, respawnLimit);
+    await ensureMpConnected();
+    const mp = mpEngineRef.current;
+    mp.createRoom(mode, level, shipClass, respawnLimit);
     nav('/multi/room');
   };
 
-  const handleJoinRoom = (roomId) => {
-    ensureMpConnected();
+  const handleJoinRoom = async (roomId) => {
     pendingRoomRef.current = true;
     setRoomInfo(null);
-    mpEngine.joinRoom(roomId);
+    await ensureMpConnected();
+    const mp = mpEngineRef.current;
+    mp.joinRoom(roomId);
     nav('/multi/room');
   };
 
