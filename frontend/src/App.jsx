@@ -18,6 +18,7 @@ import ShipLabels from './components/ShipLabels.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
+import TutorialPage from './components/TutorialPage.jsx';
 import ExitConfirmModal from './components/ExitConfirmModal.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
@@ -132,6 +133,7 @@ function MenuPage() {
         onShowLeaderboard={() => setShowLeaderboard(v => !v)}
         onShowAdmin={() => navigate('/admin')}
         onLogout={handleLogout}
+        onShowTutorial={() => navigate('/tutorial')}
       />
       <LeaderboardPanel visible={showLeaderboard} onClose={() => setShowLeaderboard(false)} />
     </>
@@ -387,6 +389,7 @@ function AppRoutes() {
       <Route path="/gameover" element={<AuthRoute><GameOverPage /></AuthRoute>} />
       <Route path="/class-select" element={<AuthRoute><ClassSelectPage /></AuthRoute>} />
       <Route path="/loading" element={<AuthRoute><LoadingScreen /></AuthRoute>} />
+      <Route path="/tutorial" element={<TutorialPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

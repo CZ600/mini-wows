@@ -11,3 +11,4 @@ build/
 claude\CLAUDE.md
 *.db
 game.db
+.claude/settings.local.json
