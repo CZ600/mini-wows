@@ -7,7 +7,9 @@ const GEAR_ROWS = [
   { name: '倒退', gear: 0 },
 ];
 
-function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
+function TopToolbar({ hp, maxHp, onOpenSettings, onExit, onToggleMute, muted }) {
+  const hpPercent = hp != null && maxHp ? (hp / maxHp) * 100 : 0;
+  const hpColor = hpPercent > 60 ? 'var(--success)' : hpPercent > 30 ? 'var(--warning)' : 'var(--danger)';
   return (
     <div id="game-top-toolbar">
       {onOpenSettings && (
@@ -40,6 +42,28 @@ function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
           ✕
         </button>
       )}
+      {hp != null && maxHp != null && (
+        <div className="toolbar-hp" title={`血量 ${Math.ceil(hp)} / ${maxHp}`}>
+          <span className="toolbar-hp-label">血量</span>
+          <div className="health-bar-outer">
+            <div className="health-bar-inner" style={{ width: hpPercent + '%', backgroundColor: hpColor }} />
+          </div>
+          <span className="toolbar-hp-value">{Math.ceil(hp)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopStats({ fps }) {
+  if (fps == null) return null;
+  const fpsColor = fps >= 55 ? 'var(--success)' : fps >= 30 ? 'var(--warning)' : 'var(--danger)';
+  return (
+    <div id="top-stats">
+      <div className="stat-pill">
+        <span className="stat-label">FPS</span>
+        <span className="stat-value" style={{ color: fpsColor }}>{fps || 0}</span>
+      </div>
     </div>
   );
 }
@@ -51,8 +75,6 @@ export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted 
           weaponMode, torpedoTier, torpedoTubes, torpedoMaxCooldown, shipClass,
           availableTorpedoTiers, gear } = data;
   const gearIdx = gear == null ? 1 : gear;
-  const hpPercent = (hp / maxHp) * 100;
-  const hpColor = hpPercent > 60 ? 'var(--success)' : hpPercent > 30 ? 'var(--warning)' : 'var(--danger)';
 
   const frontTurrets = turrets ? turrets.filter(t => t.isFront) : [];
   const backTurrets = turrets ? turrets.filter(t => !t.isFront) : [];
@@ -79,27 +101,19 @@ export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted 
   return (
     <>
       <TopToolbar
+        hp={hp}
+        maxHp={maxHp}
         onOpenSettings={onOpenSettings}
         onExit={onExit}
         onToggleMute={onToggleMute}
         muted={muted}
       />
+      <TopStats fps={fps} />
       {/* HP Bar - Top Center */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
         <div id="crosshair">
           <div className="cross-h" />
           <div className="cross-v" />
-        </div>
-
-        {/* Top Left - HP */}
-        <div id="hud-left">
-          <div className="hud-row">
-            <span className="hud-label">血量</span>
-            <div className="health-bar-outer">
-              <div className="health-bar-inner" style={{ width: hpPercent + '%', backgroundColor: hpColor }} />
-            </div>
-            <span>{Math.ceil(hp)}</span>
-          </div>
         </div>
 
         {/* Top Right - Level & Score */}
@@ -124,7 +138,6 @@ export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted 
           <div className="hud-row"><span className="hud-label">波次</span><span>{wave || 1}</span></div>
           <div className="hud-row"><span className="hud-label">分数</span><span>{score}</span></div>
           <div className="hud-row"><span className="hud-label">敌人</span><span>{enemyCount}</span></div>
-          <div className="hud-row"><span className="hud-label">FPS</span><span>{fps || 0}</span></div>
         </div>
       </div>
 

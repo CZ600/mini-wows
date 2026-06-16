@@ -7,7 +7,9 @@ const GEAR_ROWS = [
   { name: '倒退', gear: 0 },
 ];
 
-function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
+function TopToolbar({ hp, maxHp, onOpenSettings, onExit, onToggleMute, muted }) {
+  const hpPercent = hp != null && maxHp ? (hp / maxHp) * 100 : 0;
+  const hpColor = hpPercent > 60 ? 'var(--success)' : hpPercent > 30 ? 'var(--warning)' : 'var(--danger)';
   return (
     <div id="game-top-toolbar">
       {onOpenSettings && (
@@ -40,6 +42,44 @@ function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
           ✕
         </button>
       )}
+      {hp != null && maxHp != null && (
+        <div className="toolbar-hp" title={`血量 ${Math.ceil(hp)} / ${maxHp}`}>
+          <span className="toolbar-hp-label">血量</span>
+          <div className="health-bar-outer">
+            <div className="health-bar-inner" style={{ width: hpPercent + '%', backgroundColor: hpColor }} />
+          </div>
+          <span className="toolbar-hp-value">{Math.ceil(hp)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopStats({ fps, ping, packetLoss }) {
+  const fpsColor = fps >= 55 ? 'var(--success)' : fps >= 30 ? 'var(--warning)' : 'var(--danger)';
+  const pingColor = ping < 50 ? 'var(--success)' : ping < 100 ? 'var(--warning)' : 'var(--danger)';
+  // Only show packet loss when it's non-trivial to avoid clutter/noise.
+  const lossPct = packetLoss != null ? Math.round(packetLoss * 100) : 0;
+  const showLoss = lossPct > 0;
+  const lossColor = lossPct < 5 ? 'var(--success)' : lossPct < 15 ? 'var(--warning)' : 'var(--danger)';
+  return (
+    <div id="top-stats">
+      {ping != null && (
+        <div className="stat-pill">
+          <span className="stat-label">延迟</span>
+          <span className="stat-value" style={{ color: pingColor }}>{ping}ms</span>
+        </div>
+      )}
+      {showLoss && (
+        <div className="stat-pill">
+          <span className="stat-label">丢包</span>
+          <span className="stat-value" style={{ color: lossColor }}>{lossPct}%</span>
+        </div>
+      )}
+      <div className="stat-pill">
+        <span className="stat-label">FPS</span>
+        <span className="stat-value" style={{ color: fpsColor }}>{fps || 0}</span>
+      </div>
     </div>
   );
 }
@@ -47,8 +87,6 @@ function TopToolbar({ onOpenSettings, onExit, onToggleMute, muted }) {
 export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, onToggleMute, muted }) {
   if (!data) return null;
 
-  const hpPercent = Math.max(0, (data.hp / data.maxHp) * 100);
-  const hpColor = hpPercent > 60 ? 'var(--success)' : hpPercent > 30 ? 'var(--warning)' : 'var(--danger)';
   const speed = data.speed || 0;
   const ping = data.ping || 0;
   const level = data.level || 1;
@@ -84,11 +122,14 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
   return (
     <>
       <TopToolbar
+        hp={data.hp}
+        maxHp={data.maxHp}
         onOpenSettings={onOpenSettings}
         onExit={onExit}
         onToggleMute={onToggleMute}
         muted={muted}
       />
+      <TopStats fps={data.fps} ping={ping} packetLoss={data.packetLoss} />
       {/* Crosshair */}
       <div id="hud" style={{ pointerEvents: 'none' }}>
         <div id="crosshair">
@@ -96,18 +137,7 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
           <div className="cross-v" />
         </div>
 
-        {/* Top Left - HP */}
-        <div id="hud-left">
-          <div className="hud-row">
-            <span className="hud-label">血量</span>
-            <div className="health-bar-outer">
-              <div className="health-bar-inner" style={{ width: hpPercent + '%', backgroundColor: hpColor }} />
-            </div>
-            <span>{Math.ceil(data.hp)}</span>
-          </div>
-        </div>
-
-        {/* Top Right - Level, Respawn & Ping */}
+        {/* Top Right - Level & Respawn */}
         <div id="hud-right">
           <div className="hud-row hud-row-boxed">
             <span className="hud-label">等级</span><span className="hud-value">{level}</span>
@@ -126,18 +156,6 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
               </span>
             </div>
           )}
-          <div className="hud-row hud-row-boxed">
-            <span className="hud-label">延迟</span>
-            <span className="hud-value" style={{ color: ping < 50 ? 'var(--success)' : ping < 100 ? 'var(--warning)' : 'var(--danger)' }}>
-              {ping}ms
-            </span>
-          </div>
-          <div className="hud-row hud-row-boxed">
-            <span className="hud-label">FPS</span>
-            <span className="hud-value" style={{ color: data.fps >= 55 ? 'var(--success)' : data.fps >= 30 ? 'var(--warning)' : 'var(--danger)' }}>
-              {data.fps || 0}
-            </span>
-          </div>
         </div>
       </div>
 

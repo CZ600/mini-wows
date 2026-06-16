@@ -1004,6 +1004,7 @@ export class MultiplayerEngine {
         maxHp: this.localShip.max_hp,
         speed: Math.abs(this.localShip.speed * 3.6),
         ping: this._ping,
+        packetLoss: this.inputSender.getPacketLoss(),
         level: this.localShip.level,
         shipClass: this.localShip.shipClass,
         respawns: this._myRespawns,

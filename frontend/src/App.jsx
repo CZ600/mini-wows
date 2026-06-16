@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Routes, Route, Navigate, useNavigate, Outlet, useLocation } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate, Outlet } from 'react-router-dom';
 import { useGame, NavigationHelper } from './context/GameContext.jsx';
 import { AuthRoute, AdminRoute } from './components/AuthRoute.jsx';
 import { GameProvider } from './context/GameContext.jsx';
@@ -20,12 +20,8 @@ import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
 import ExitConfirmModal from './components/ExitConfirmModal.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
-import { loadAudioSettings } from './game/audio_settings.js';
+import LoadingScreen from './components/LoadingScreen.jsx';
 import './App.css';
-
-const MENU_BGM_SOUND = '/Riptide%20Armada%202.mp3';
-const MENU_BGM_VOLUME = 0.1;
-const PREP_PATHS = new Set(['/', '/single', '/multi', '/multi/room', '/class-select', '/gameover']);
 
 const SCOPE_TICKS = [
   -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 0,
@@ -362,45 +358,7 @@ export default function App() {
 }
 
 function AppRoutes() {
-  const { authState, bgmVolume, muted } = useGame();
-  const location = useLocation();
-  const menuBgmRef = useRef(null);
-  const initialSettingsRef = useRef(null);
-
-  if (!initialSettingsRef.current) {
-    initialSettingsRef.current = loadAudioSettings();
-  }
-
-  useEffect(() => {
-    if (authState !== 'AUTHENTICATED') return;
-    if (!menuBgmRef.current) {
-      const a = new Audio(MENU_BGM_SOUND);
-      a.loop = true;
-      a.volume = MENU_BGM_VOLUME;
-      menuBgmRef.current = a;
-    }
-    const a = menuBgmRef.current;
-    if (PREP_PATHS.has(location.pathname)) {
-      if (a.paused) a.play().catch(() => {});
-    } else if (!a.paused) {
-      a.pause();
-    }
-  }, [authState, location.pathname]);
-
-  // Apply volume settings to menu BGM
-  useEffect(() => {
-    const a = menuBgmRef.current;
-    if (a) {
-      a.volume = muted ? 0 : MENU_BGM_VOLUME * (bgmVolume ?? 1);
-    }
-  }, [bgmVolume, muted]);
-
-  useEffect(() => () => {
-    if (menuBgmRef.current) {
-      menuBgmRef.current.pause();
-      menuBgmRef.current = null;
-    }
-  }, []);
+  const { authState } = useGame();
 
   if (authState === 'CHECKING') {
     return (
@@ -428,6 +386,7 @@ function AppRoutes() {
       <Route path="/play" element={<AuthRoute><SinglePlayPage /></AuthRoute>} />
       <Route path="/gameover" element={<AuthRoute><GameOverPage /></AuthRoute>} />
       <Route path="/class-select" element={<AuthRoute><ClassSelectPage /></AuthRoute>} />
+      <Route path="/loading" element={<AuthRoute><LoadingScreen /></AuthRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
