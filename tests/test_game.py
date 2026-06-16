@@ -93,7 +93,7 @@ class TestTerrain:
     def test_generate_islands_deterministic(self):
         i1 = generate_islands(42)
         i2 = generate_islands(42)
-        assert len(i1) == len(i2) == 5
+        assert len(i1) == len(i2) == 10
         for a, b in zip(i1, i2):
             assert abs(a["x"] - b["x"]) < 0.001
             assert abs(a["z"] - b["z"]) < 0.001

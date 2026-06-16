@@ -63,11 +63,18 @@ def generate_islands(seed):
     rng = random.Random(seed)
     islands = []
     for _ in range(ISLAND_COUNT):
+        # 与单机 (frontend/src/game/terrain.js) 完全一致的参数与随机顺序:
+        # height -> radius -> x -> z
+        # 最高高度提升至原来的 300%（最大值 60 -> 180），范围 20~200
+        height = 20 + rng.random() * 180
+        # 底座面积随高度放大：高山配更宽的底座，避免尖塔感
+        # 矮山(height≈20):  约 300~500；高山(height≈200): 约 800~1000
+        radius = 300 + (height / 200) * 500 + rng.random() * 200
         islands.append({
             "x": (rng.random() - 0.5) * MAP_SIZE * 0.7,
             "z": (rng.random() - 0.5) * MAP_SIZE * 0.7,
-            "radius": 150 + rng.random() * 350,
-            "height": 20 + rng.random() * 60,
+            "radius": radius,
+            "height": height,
         })
     return islands
 
