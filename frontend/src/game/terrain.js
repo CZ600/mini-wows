@@ -31,12 +31,18 @@ export class Terrain {
     } else {
       const rng = terrainSeed ? seededRandom(terrainSeed) : Math.random;
       this.islandCenters = [];
-      for (let i = 0; i < 5; i++) {
+      // 山体密度比原来增加 100%（5 -> 10）
+      for (let i = 0; i < 10; i++) {
+        // 最高高度提升至原来的 300%（最大值 60 -> 180）
+        const height = 20 + rng() * 180;
+        // 底座面积随高度放大：高山配更宽的底座，避免尖塔感
+        // 矮山(height≈20):  约 350~550；高山(height≈200): 约 800~1000
+        const radius = 300 + (height / 200) * 500 + rng() * 200;
         this.islandCenters.push({
           x: (rng() - 0.5) * MAP_SIZE * 0.7,
           z: (rng() - 0.5) * MAP_SIZE * 0.7,
-          radius: 150 + rng() * 350,
-          height: 20 + rng() * 60,
+          radius,
+          height,
         });
       }
     }
@@ -69,7 +75,7 @@ export class Terrain {
     for (let i = 0; i < positions.length; i += 3) {
       const h = positions[i + 1];
       let r, g, b;
-      if (h <= 0) { r = 0.76; g = 0.70; b = 0.50; }
+      if (h <= 0) { r = 0.78; g = 0.78; b = 0.76; }
       else if (h < 7) { r = 0.86; g = 0.82; b = 0.62; }
       else if (h < 32) { r = 0.25; g = 0.55; b = 0.15; }
       else { r = 0.50; g = 0.45; b = 0.38; }
