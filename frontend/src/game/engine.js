@@ -105,6 +105,8 @@ export class GameEngine {
 
     this.controls.orbitYaw = 0;
     this.controls.orbitPitch = -0.18;
+    this.controls.scopedWorldYaw = 0;
+    this.controls._wasScoped = false;
     this.controls.keys = { w: false, a: false, s: false, d: false };
     this.controls.gear = 1;
     this._gameOverFired = false;
@@ -209,8 +211,16 @@ export class GameEngine {
 
     this.audio.updateEngineBySpeed(this.ship.speed, this.ship.maxSpeed);
 
-    const worldYaw = this.ship.heading + this.controls.orbitYaw;
     const scoped = this.controls.scoped;
+    // 进入开镜的边沿：把当前世界朝向锚定为绝对方向，之后船身转向
+    // 不再带动瞄准镜；只有鼠标移动会改 scopedWorldYaw。
+    if (scoped && !this.controls._wasScoped) {
+      this.controls.scopedWorldYaw = this.ship.heading + this.controls.orbitYaw;
+    }
+    this.controls._wasScoped = scoped;
+    const worldYaw = scoped
+      ? this.controls.scopedWorldYaw
+      : this.ship.heading + this.controls.orbitYaw;
     const shipScale = this.ship.shipLength / 10;
     let targetCamPos;
     const hOff = this.controls.heightOffset || 0;
@@ -296,7 +306,9 @@ export class GameEngine {
       this.torpedoManager.update(dt, this.ship, this.enemyManager.enemies);
 
       const isTorpedoMode = this.controls.weaponMode === 'torpedo';
-      const aimYaw = this.ship.heading + this.controls.orbitYaw;
+      const aimYaw = this.controls.scoped
+        ? this.controls.scopedWorldYaw
+        : this.ship.heading + this.controls.orbitYaw;
       const tier = this.controls.torpedoTier;
       const stats = TORPEDO_TIERS[tier];
       this.torpedoManager.updateAimFan(
@@ -450,7 +462,9 @@ export class GameEngine {
 
     this.torpedoManager.fire(
       this.ship.position,
-      this.ship.heading + this.controls.orbitYaw,
+      this.controls.scoped
+        ? this.controls.scopedWorldYaw
+        : this.ship.heading + this.controls.orbitYaw,
       tier,
       this.level,
       readyTubes.length,

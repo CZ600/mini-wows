@@ -15,6 +15,10 @@ export class Controls {
     this.scopedSensitivity = 0.0006;
     this.scoped = false;
     this._scopePressed = false;
+    // 开镜期锁定的绝对世界偏航角：开镜时船身转向不再带动瞄准镜方向，
+    // 只有鼠标水平移动才会改变这个值。引擎层在进入开镜的边沿上锚定它。
+    this.scopedWorldYaw = 0;
+    this._wasScoped = false;
 
     this.zoomLevel = 1.0;
     this._minZoom = 0.3;
@@ -120,12 +124,20 @@ export class Controls {
         this._scopePressed = false;
         this.heightOffset = 0;
         this.zoomLevel = 1.0;
+        this.scopedWorldYaw = 0;
+        this._wasScoped = false;
       }
     };
     this._onMouseMove = (e) => {
       if (!this.locked) return;
       const sens = this.scoped ? this.scopedSensitivity : this.sensitivity;
-      this.orbitYaw -= e.movementX * sens;
+      // 开镜时水平移动直接改绝对世界偏航角（与 ship.heading 解耦），
+      // 非开镜时仍走 orbitYaw（相对船身的偏移）。
+      if (this.scoped) {
+        this.scopedWorldYaw -= e.movementX * sens;
+      } else {
+        this.orbitYaw -= e.movementX * sens;
+      }
       this.orbitPitch -= e.movementY * sens;
       this.orbitPitch = Math.max(-1.2, Math.min(0.4, this.orbitPitch));
     };
@@ -140,6 +152,8 @@ export class Controls {
         if (!this.scoped) {
           this.heightOffset = 0;
           this.zoomLevel = 1.0;
+          this.scopedWorldYaw = 0;
+          this._wasScoped = false;
         }
       }
     };
@@ -207,6 +221,8 @@ export class Controls {
     this._scopePressed = false;
     this.heightOffset = 0;
     this.zoomLevel = 1.0;
+    this.scopedWorldYaw = 0;
+    this._wasScoped = false;
   }
 
   consumeFire() {

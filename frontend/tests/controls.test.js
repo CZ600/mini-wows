@@ -268,6 +268,65 @@ describe('Controls gear state', () => {
   });
 });
 
+describe('Controls scope world-yaw decoupling', () => {
+  it('scopedWorldYaw starts at 0 and _wasScoped is false', () => {
+    const c = new Controls(mockCanvas());
+    expect(c.scopedWorldYaw).toBe(0);
+    expect(c._wasScoped).toBe(false);
+    c.destroy();
+  });
+
+  it('non-scoped mouse move drives orbitYaw, not scopedWorldYaw', () => {
+    const c = new Controls(mockCanvas());
+    c.locked = true;
+    const before = c.orbitYaw;
+    c._onMouseMove({ movementX: 100, movementY: 0 });
+    expect(c.orbitYaw).not.toBe(before);
+    expect(c.scopedWorldYaw).toBe(0);
+    c.destroy();
+  });
+
+  it('scoped mouse X drives scopedWorldYaw, leaving orbitYaw untouched', () => {
+    const c = new Controls(mockCanvas());
+    c.locked = true;
+    c.scoped = true;
+    const orbitBefore = c.orbitYaw;
+    c._onMouseMove({ movementX: 200, movementY: 0 });
+    expect(c.orbitYaw).toBe(orbitBefore); // ship-relative offset unchanged
+    expect(c.scopedWorldYaw).toBeLessThan(0); // movementX>0 → yaw decreases
+    c.destroy();
+  });
+
+  it('right-click exits scope and resets scopedWorldYaw / _wasScoped', () => {
+    const c = new Controls(mockCanvas());
+    c.locked = true;
+    c.scoped = true;
+    c.scopedWorldYaw = 1.234;
+    c._wasScoped = true;
+    c._onMouseUp({ button: 2 });
+    expect(c.scoped).toBe(false);
+    expect(c.scopedWorldYaw).toBe(0);
+    expect(c._wasScoped).toBe(false);
+    c.destroy();
+  });
+
+  it('pointer-lock loss resets scopedWorldYaw / _wasScoped', () => {
+    const c = new Controls(mockCanvas());
+    c.scoped = true;
+    c.scopedWorldYaw = 0.5;
+    c._wasScoped = true;
+    Object.defineProperty(document, 'pointerLockElement', {
+      configurable: true,
+      get: () => null,
+    });
+    c._onLockChange();
+    expect(c.scoped).toBe(false);
+    expect(c.scopedWorldYaw).toBe(0);
+    expect(c._wasScoped).toBe(false);
+    c.destroy();
+  });
+});
+
 describe('Controls updateMotionKeys', () => {
   const MAX = 16.67;
 
