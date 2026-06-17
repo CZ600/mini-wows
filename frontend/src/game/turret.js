@@ -67,6 +67,47 @@ export function updateTurrets(ship, aimYaw, aimPitch, dt) {
   }
 }
 
+// Aim each turret at the same world aim point, but along its own line. This
+// replaces the old "every turret shares one ship-centred yaw/pitch" aiming:
+// front and rear groups no longer point in parallel — they converge on the
+// target. Returns the ship-centred local aim yaw (for the fire-arc check,
+// which stays hull-layout based) or null when there are no turrets.
+const _aimOrigin = new THREE.Vector3();
+
+export function aimTurretsAtPoint(ship, aimTarget, dt) {
+  if (!ship.turrets.length || !aimTarget) return null;
+
+  // Ship-centred local yaw, used only for the front/rear fire-arc check.
+  const sdx = aimTarget.x - ship.mesh.position.x;
+  const sdz = aimTarget.z - ship.mesh.position.z;
+  let shipLocalYaw = 0;
+  if (Math.sqrt(sdx * sdx + sdz * sdz) >= 1) {
+    shipLocalYaw = Math.atan2(sdx, sdz) - ship.heading;
+  }
+
+  for (const turret of ship.turrets) {
+    // Each turret computes its own ballistic yaw/pitch from its own position,
+    // so the barrels physically point at the target.
+    turret.body.getWorldPosition(_aimOrigin);
+    const { yaw, pitch } = calcBallisticAngles(_aimOrigin, aimTarget, ship.heading);
+
+    // Clamp to this turret's arc, then slew toward it at a finite yaw rate.
+    let diff = normalizeAngle(yaw - turret.yawCenter);
+    diff = Math.max(-turret.yawRange, Math.min(turret.yawRange, diff));
+    const clampedTarget = turret.yawCenter + diff;
+
+    const rotDiff = normalizeAngle(clampedTarget - turret.currentYaw);
+    const maxYawDelta = MAX_YAW_SPEED * dt;
+    turret.currentYaw += Math.max(-maxYawDelta, Math.min(maxYawDelta, rotDiff));
+    turret.group.rotation.y = turret.currentYaw;
+
+    turret.currentPitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, pitch));
+    turret.barrelPivot.rotation.x = -turret.currentPitch;
+  }
+
+  return shipLocalYaw;
+}
+
 export function turretCanAim(turret, aimYaw) {
   const diff = Math.abs(normalizeAngle(aimYaw - turret.yawCenter));
   return diff <= turret.yawRange + 0.05;

@@ -10,7 +10,7 @@ import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED } from './config.js';
 import { Ship, CLASS_CONFIG, getDriftConfig } from './ship.js';
-import { updateTurrets, calcBallisticAngles, turretCanAim, applyCannonSpread, getTurretFireData } from './turret.js';
+import { turretCanAim, applyCannonSpread, getTurretFireData, aimTurretsAtPoint } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 
@@ -894,11 +894,9 @@ export class MultiplayerEngine {
     let currentAimYaw = 0;
     if (this.localShip.ship && this.localShip.ship.turrets.length > 0) {
       const aimTarget = this._findAimTarget();
-      const turretPos = new THREE.Vector3();
-      this.localShip.ship.turrets[0].body.getWorldPosition(turretPos);
-      const { yaw, pitch: aimPitch } = calcBallisticAngles(turretPos, aimTarget, this.localShip.heading);
-      currentAimYaw = yaw;
-      updateTurrets(this.localShip.ship, yaw, aimPitch, dt);
+      // Each turret aims at the aim point along its own line (no more parallel
+      // fire). currentAimYaw is the ship-centred yaw used for the fire-arc check.
+      currentAimYaw = aimTurretsAtPoint(this.localShip.ship, aimTarget, dt) ?? 0;
       for (const t of this.localShip.ship.turrets) {
         if (t.cooldown > 0) t.cooldown -= dt;
       }
@@ -1066,18 +1064,6 @@ export class MultiplayerEngine {
     const aimTarget = this._findAimTarget();
     let anyFired = false;
 
-    // Calculate common aim direction (same as server logic)
-    const turretPos = new THREE.Vector3();
-    ship.turrets[0].body.getWorldPosition(turretPos);
-    const { pitch: aimPitch } = calcBallisticAngles(turretPos, aimTarget, this.localShip.heading);
-    const worldYaw = Math.atan2(
-      aimTarget.x - this.localShip.pos_x,
-      aimTarget.z - this.localShip.pos_z
-    );
-    const dirX = Math.sin(worldYaw) * Math.cos(aimPitch);
-    const dirY = Math.sin(aimPitch);
-    const dirZ = Math.cos(worldYaw) * Math.cos(aimPitch);
-
     const skl = this.localShip.skl || {};
     const precisionActive = (skl.ps && skl.ps.a > 0) || false;
     const rapidFireActive = (skl.rf && skl.rf.a > 0) || false;
@@ -1094,11 +1080,14 @@ export class MultiplayerEngine {
             // getTurretFireData folds in the superfiring step height via
             // barrelPivot.localToWorld, so elevated turrets fire from their
             // raised muzzle (mirrors server's muzzle_y = origin_y + y_step).
-            const { origin } = getTurretFireData(turret, this.localShip.heading, b);
+            // The direction comes from the turret's own converged aim
+            // (currentYaw/currentPitch set by aimTurretsAtPoint), so a salvo
+            // converges on the target instead of every shell flying parallel.
+            const { origin, direction } = getTurretFireData(turret, this.localShip.heading, b);
             const tdx = aimTarget.x - origin.x;
             const tdz = aimTarget.z - origin.z;
             const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
-            const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, tdist, this.localShip.shipClass, spreadMult);
+            const dir = applyCannonSpread(direction, tdist, this.localShip.shipClass, spreadMult);
             this._localProjMgr.fire(origin, dir, ship.damage, 'player');
           }
         }

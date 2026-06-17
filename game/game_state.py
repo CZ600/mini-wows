@@ -222,7 +222,11 @@ class GameState:
         return wx, wz
 
     YAW_RANGE_FULL = math.pi
-    YAW_RANGE_BRIDGE = 2.2
+    # Bridge ships (Lv4+) keep a slightly narrower arc than the full 360° of
+    # early-game ships — the island blocks dead-ast/fire arcs. Widened from 2.2
+    # to 2.6 (≈149°/side) so front and rear groups overlap at the beam and
+    # oblique quarters (e.g. ±150°) can still bring a turret group to bear.
+    YAW_RANGE_BRIDGE = 2.6
 
     def _get_turret_yaw_caps(self, ship):
         """Return list of (yaw_center, yaw_range) per turret, mirroring client buildTurretDefs."""
@@ -244,6 +248,41 @@ class GameState:
         diff = (local_aim_yaw - yaw_center + math.pi) % (2 * math.pi) - math.pi
         return abs(diff) <= yaw_range + 0.05
 
+    @staticmethod
+    def _ballistic_direction(origin_x, origin_y, origin_z, aim_x, aim_y, aim_z):
+        """Compute a launch direction (unit vector) from a muzzle origin toward
+        a world aim point, using the same low-angle solution as the client.
+
+        Each turret fires along its own line to the aim point instead of every
+        turret sharing one ship-centred direction, so a salvo converges on the
+        target rather than flying in parallel. Returns (dir_x, dir_y, dir_z).
+        """
+        dx = aim_x - origin_x
+        dz = aim_z - origin_z
+        dy = aim_y - origin_y
+        horiz_dist = math.sqrt(dx * dx + dz * dz)
+
+        if horiz_dist < 1:
+            pitch = math.pi / 4
+            yaw = 0.0
+        else:
+            v2 = PROJECTILE_INITIAL_SPEED ** 2
+            v4 = v2 * v2
+            disc = v4 - GRAVITY * (GRAVITY * horiz_dist * horiz_dist + 2 * dy * v2)
+            if disc < 0:
+                pitch = math.pi / 4
+            else:
+                pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * horiz_dist))
+            pitch = max(0, min(math.radians(60), pitch))
+            yaw = math.atan2(dx, dz)
+
+        pitch = compensate_drag_pitch(pitch, horiz_dist, PROJECTILE_INITIAL_SPEED)
+        return (
+            math.sin(yaw) * math.cos(pitch),
+            math.sin(pitch),
+            math.cos(yaw) * math.cos(pitch),
+        )
+
     def process_fire(self, player_id, msg):
         """Server-authoritative fire: client sends aim target, server creates projectile."""
         ship = self.ships.get(player_id)
@@ -264,38 +303,20 @@ class GameState:
         aim_z = aim.get("z", ship.pos_z)
 
         origin_y = 3.0  # turret height
-        dx = aim_x - ship.pos_x
-        dz = aim_z - ship.pos_z
-        dy = aim_y - origin_y
-        horiz_dist = math.sqrt(dx * dx + dz * dz)
 
-        if horiz_dist < 1:
-            pitch = math.pi / 4
-            yaw = ship.heading
+        # Aim arc check still uses the ship-centred yaw: the front/rear group
+        # split (yawCenter 0 vs π) is a hull-layout property, not a per-turret
+        # geometric one, so we keep it independent of each turret's small lateral
+        # offset. Only the *launch direction* below is computed per turret, so a
+        # salvo converges on the aim point instead of every shell flying parallel.
+        ship_dx = aim_x - ship.pos_x
+        ship_dz = aim_z - ship.pos_z
+        if math.sqrt(ship_dx * ship_dx + ship_dz * ship_dz) < 1:
+            local_aim_yaw = 0.0
         else:
-            v2 = PROJECTILE_INITIAL_SPEED ** 2
-            v4 = v2 * v2
-            disc = v4 - GRAVITY * (GRAVITY * horiz_dist * horiz_dist + 2 * dy * v2)
-            if disc < 0:
-                pitch = math.pi / 4
-            else:
-                pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * horiz_dist))
-            pitch = max(0, min(math.radians(60), pitch))
-            yaw = math.atan2(dx, dz)
+            local_aim_yaw = math.atan2(ship_dx, ship_dz) - ship.heading
 
-        pitch = compensate_drag_pitch(pitch, horiz_dist, PROJECTILE_INITIAL_SPEED)
-
-        direction = (
-            math.sin(yaw) * math.cos(pitch),
-            math.sin(pitch),
-            math.cos(yaw) * math.cos(pitch),
-        )
-        # Note: per-barrel spread is applied inside the fire loop below so each
-        # barrel of a multi-barrel turret scatters independently.
-
-        local_aim_yaw = yaw - ship.heading
         turret_caps = self._get_turret_yaw_caps(ship)
-
         fireable = [
             i for i in ready_turrets
             if i < len(turret_caps)
@@ -311,23 +332,31 @@ class GameState:
         # barrelGap = turretSize * 0.35), used to give each barrel its own muzzle.
         turret_size = (0.8 + ship.ship_width * 0.10) * cfg.get("turret_mul", 1.0)
         barrel_gap = turret_size * 0.35
+        spread_mult = 0.7 if ship.skills.is_active("precision") else 1.0
 
         for i in fireable:
             if i < len(turret_offsets):
                 ldx, ldz, y_step = turret_offsets[i]
             else:
                 ldx, ldz, y_step = 0.0, 0.0, 0.0
+            muzzle_y = origin_y + y_step
             # Multi-barrel turrets fire one projectile per barrel. Each barrel
             # fires from its own muzzle (lateral offset on the turret's local x),
             # and each projectile gets its own spread so a double/triple turret
             # scatters like a salvo rather than a single shot.
-            muzzle_y = origin_y + y_step
             for b in range(barrels):
                 barrel_ldx = ldx + (b - (barrels - 1) / 2) * barrel_gap
                 ox, oz = self._turret_world_pos(ship, barrel_ldx, ldz)
+                # Per-turret (per-barrel) direction: each muzzle aims at the
+                # target along its own line, so a fore/aft salvo converges.
+                direction = self._ballistic_direction(
+                    ox, muzzle_y, oz, aim_x, aim_y, aim_z,
+                )
+                # Spread sigma scales with this barrel's range to the aim point.
+                barrel_dist = math.sqrt((aim_x - ox) ** 2 + (aim_z - oz) ** 2)
                 spread_dir = apply_cannon_spread(
-                    direction, horiz_dist, ship.ship_class,
-                    spread_mult=0.7 if ship.skills.is_active("precision") else 1.0,
+                    direction, barrel_dist, ship.ship_class,
+                    spread_mult=spread_mult,
                 )
                 self.projectile_mgr.fire(
                     player_id, ship.damage,

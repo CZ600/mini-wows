@@ -80,13 +80,30 @@ export class ProjectileManager {
         }
       }
 
-      // Hit player ship
+      // Hit player ship — OBB in the ship's local space.
+      // The hull rotates with heading, so an axis-aligned box would shift the
+      // hit area sideways as the ship turns. Transform the projectile into the
+      // ship's local frame (inverse heading) then test the local AABB, where
+      // local X = ship width and local Z = ship length. Vertical extent runs
+      // from just below the keel up to the top of the shortest turret
+      // (deck + 0.15 + turretSize * 0.9, the lowest non-superfiring housing),
+      // so high-arc shells that clip a turret roof still count as a hit.
       if (!hit && p.owner === 'enemy' && ship && ship.alive) {
         const sp = ship.mesh.position;
-        const dx = Math.abs(p.mesh.position.x - sp.x);
-        const dy = Math.abs(p.mesh.position.y - sp.y);
-        const dz = Math.abs(p.mesh.position.z - sp.z);
-        if (dx < ship.shipWidth / 2 + 0.5 && dy < 2.5 && dz < ship.shipLength / 2 + 0.5) {
+        const relX = p.mesh.position.x - sp.x;
+        const relZ = p.mesh.position.z - sp.z;
+        const h = ship.heading;
+        const cosH = Math.cos(h);
+        const sinH = Math.sin(h);
+        const localX =  relX * cosH + relZ * sinH;
+        const localZ = -relX * sinH + relZ * cosH;
+        const sh = ship.shipHeight || 2.5;
+        const ts = ship.turretSize || 1.0;
+        const turretTop = (sh + 1) + 0.15 + ts * 0.9;
+        if (Math.abs(localX) < ship.shipWidth / 2 + 0.5 &&
+            Math.abs(localZ) < ship.shipLength / 2 + 0.5 &&
+            p.mesh.position.y >= sp.y - 1 &&
+            p.mesh.position.y <= sp.y + turretTop + 0.5) {
           ship.takeDamage(p.damage);
           this._explode(p.mesh.position.clone(), 0xff4400, 5);
           if (this.audio) this.audio.playExplosion();
@@ -99,10 +116,40 @@ export class ProjectileManager {
         for (const enemy of enemies) {
           if (!enemy.alive) continue;
           const ep = enemy.mesh.position;
-          const halfSize = enemy.size / 2;
-          if (Math.abs(p.mesh.position.x - ep.x) < halfSize + 1 &&
-              p.mesh.position.y >= ep.y - 1 && p.mesh.position.y <= ep.y + enemy.size + 3 &&
-              Math.abs(p.mesh.position.z - ep.z) < halfSize + 1) {
+
+          // Enemy ships use an OBB (rotated to heading) just like the player,
+          // so the hit area tracks the hull regardless of which way it points.
+          // Vertical box spans from just above the keel up to the bridge top
+          // (deckhouse + forward bridge block), matching the tallest solid
+          // superstructure but excluding the thin mast above it. Turrets keep
+          // the axis-aligned size cube — their mesh is genuinely square and
+          // they don't rotate.
+          let hitEnemy;
+          if (enemy.type === 'ship') {
+            const relX = p.mesh.position.x - ep.x;
+            const relZ = p.mesh.position.z - ep.z;
+            const h = enemy.heading;
+            const cosH = Math.cos(h);
+            const sinH = Math.sin(h);
+            const localX =  relX * cosH + relZ * sinH;
+            const localZ = -relX * sinH + relZ * cosH;
+            // Bridge top (excl. mast): deckY + deckhouseH + fwdBlockH
+            //   = (height+1) + height*0.49 + height*0.784 = 1 + height*2.274
+            const sh = enemy.shipHeight || 2.5;
+            const bridgeTop = 1 + sh * 2.274;
+            hitEnemy = Math.abs(localX) < (enemy.shipWidth  || enemy.size) / 2 + 0.5 &&
+                       Math.abs(localZ) < (enemy.shipLength || enemy.size) / 2 + 0.5 &&
+                       p.mesh.position.y >= ep.y - 1 &&
+                       p.mesh.position.y <= ep.y + bridgeTop + 0.5;
+          } else {
+            const halfSize = enemy.size / 2;
+            hitEnemy = Math.abs(p.mesh.position.x - ep.x) < halfSize + 1 &&
+                       p.mesh.position.y >= ep.y - 1 &&
+                       p.mesh.position.y <= ep.y + enemy.size + 3 &&
+                       Math.abs(p.mesh.position.z - ep.z) < halfSize + 1;
+          }
+
+          if (hitEnemy) {
             enemy.takeDamage(p.damage);
             this._explode(p.mesh.position.clone(), 0xff4400, 6);
             if (this.audio) this.audio.playExplosion();

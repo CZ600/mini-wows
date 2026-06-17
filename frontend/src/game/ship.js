@@ -129,7 +129,11 @@ export function getTorpedoTubes(shipClass, level) {
 const ACCEL = BASE_MAX_SPEED / 15;
 const DECEL_FRICTION = 0.98;
 const YAW_RANGE_FULL = Math.PI;
-const YAW_RANGE_BRIDGE = 2.2;
+// Bridge ships (Lv4+) keep a slightly narrower arc than the full 360° of
+// early-game ships — the island blocks dead-ast/fire arcs. Widened from 2.2
+// to 2.6 (≈149°/side) so front and rear groups overlap at the beam and oblique
+// quarters (e.g. ±150°) can still bring a turret group to bear.
+const YAW_RANGE_BRIDGE = 2.6;
 
 function buildTurretDefs(cfg) {
   const defs = [];
@@ -254,6 +258,7 @@ export class Ship {
     const cfg = this._getConfig(level);
     this.shipLength = cfg.length;
     this.shipWidth = cfg.width;
+    this.shipHeight = cfg.height;
     this.turnRadius = cfg.turnRadius;
     this.maxHp = cfg.hp;
     this.maxSpeed = cfg.maxSpeed || BASE_MAX_SPEED;
@@ -403,6 +408,7 @@ export class Ship {
 
     const barrels = cfg.barrels || 1;
     const turretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
+    this.turretSize = turretSize; // exposed for hitbox height computation
     const barrelLen = turretSize * 1.5;
     // Multi-barrel spacing: barrels fan out sideways across the turret face.
     const barrelGap = turretSize * 0.35;
@@ -640,6 +646,7 @@ export class Ship {
     const cfg = this._getConfig(newLevel);
     this.shipLength = cfg.length;
     this.shipWidth = cfg.width;
+    this.shipHeight = cfg.height;
     this.turnRadius = cfg.turnRadius;
     this.maxHp = cfg.hp;
     this.hp = cfg.hp;

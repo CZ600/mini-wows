@@ -3,7 +3,7 @@ import { createScene, createRenderer, createCamera } from './scene.js';
 import { createWater } from './water.js';
 import { Terrain } from './terrain.js';
 import { Ship, LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
-import { updateTurrets, getTurretFireData, calcBallisticAngles, turretCanAim, applyCannonSpread } from './turret.js';
+import { getTurretFireData, turretCanAim, applyCannonSpread, aimTurretsAtPoint } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { EnemyManager, ENEMY_SCALE } from './enemy.js';
@@ -254,13 +254,11 @@ export class GameEngine {
 
     const aimTarget = this._findAimTarget();
 
+    // Each turret aims at the aim point along its own line (no more parallel
+    // fire). shipLocalYaw is the ship-centred yaw used for the fire-arc check.
     let currentAimYaw = 0;
     if (this.ship.turrets.length > 0) {
-      const turretPos = new THREE.Vector3();
-      this.ship.turrets[0].body.getWorldPosition(turretPos);
-      const { yaw, pitch: aimPitch } = calcBallisticAngles(turretPos, aimTarget, this.ship.heading);
-      currentAimYaw = yaw;
-      updateTurrets(this.ship, yaw, aimPitch, dt);
+      currentAimYaw = aimTurretsAtPoint(this.ship, aimTarget, dt) ?? 0;
     }
 
     if (this.controls.consumeFire()) {
@@ -273,14 +271,15 @@ export class GameEngine {
         const barrels = this.ship.barrels || 1;
         for (const turret of this.ship.turrets) {
           if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
-            const dx = aimTarget.x - this.ship.mesh.position.x;
-            const dz = aimTarget.z - this.ship.mesh.position.z;
-            const dist = Math.sqrt(dx * dx + dz * dz);
             // One shell per barrel: each fires from its own muzzle position
-            // with its own spread.
+            // along the turret's own converged aim direction, with its own
+            // spread scaled to that barrel's range to the target.
             for (let b = 0; b < barrels; b++) {
               const { origin, direction } = getTurretFireData(turret, this.ship.heading, b);
-              this.projectileManager.fire(origin, applyCannonSpread(direction, dist, this.shipClass, spreadMult), this.ship.damage, 'player');
+              const tdx = aimTarget.x - origin.x;
+              const tdz = aimTarget.z - origin.z;
+              const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+              this.projectileManager.fire(origin, applyCannonSpread(direction, tdist, this.shipClass, spreadMult), this.ship.damage, 'player');
             }
             turret.cooldown = this.ship.fireCooldown * cdMult;
             anyFired = true;

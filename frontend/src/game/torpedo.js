@@ -146,10 +146,30 @@ export class TorpedoManager {
         for (const enemy of enemies) {
           if (!enemy.alive) continue;
           const ep = enemy.mesh.position;
-          const dx = t.mesh.position.x - ep.x;
-          const dz = t.mesh.position.z - ep.z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < HIT_RADIUS + enemy.size / 2) {
+
+          // Turrets keep the circular check (their mesh is square and does
+          // not rotate). Enemy ships use an OBB — transform the torpedo into
+          // the ship's local frame then expand the local AABB by HIT_RADIUS,
+          // mirroring server torpedo.py (half_w + R / half_l + R).
+          let hitEnemy;
+          if (enemy.type === 'ship') {
+            const relX = t.mesh.position.x - ep.x;
+            const relZ = t.mesh.position.z - ep.z;
+            const h = enemy.heading;
+            const cosH = Math.cos(h);
+            const sinH = Math.sin(h);
+            const localX =  relX * cosH + relZ * sinH;
+            const localZ = -relX * sinH + relZ * cosH;
+            hitEnemy = Math.abs(localX) < (enemy.shipWidth  || enemy.size) / 2 + HIT_RADIUS &&
+                       Math.abs(localZ) < (enemy.shipLength || enemy.size) / 2 + HIT_RADIUS;
+          } else {
+            const dx = t.mesh.position.x - ep.x;
+            const dz = t.mesh.position.z - ep.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            hitEnemy = dist < HIT_RADIUS + enemy.size / 2;
+          }
+
+          if (hitEnemy) {
             enemy.takeDamage((50 + t.tier * 20) * 2);
             if (this.audio) this.audio.playTorpedoHit();
             hit = true;
@@ -160,11 +180,18 @@ export class TorpedoManager {
 
       if (!hit && t.owner === 'enemy' && ship && ship.alive) {
         const sp = ship.position;
-        const dx = t.mesh.position.x - sp.x;
-        const dz = t.mesh.position.z - sp.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        const hitRadius = Math.max(ship.shipLength, ship.shipWidth) / 2;
-        if (dist < hitRadius + HIT_RADIUS) {
+        // OBB in the player ship's local frame, expanded by HIT_RADIUS —
+        // matches the cannon hitbox and avoids the circular approximation
+        // that stretched the hit area along the ship's longer axis.
+        const relX = t.mesh.position.x - sp.x;
+        const relZ = t.mesh.position.z - sp.z;
+        const h = ship.heading;
+        const cosH = Math.cos(h);
+        const sinH = Math.sin(h);
+        const localX =  relX * cosH + relZ * sinH;
+        const localZ = -relX * sinH + relZ * cosH;
+        if (Math.abs(localX) < ship.shipWidth / 2 + HIT_RADIUS &&
+            Math.abs(localZ) < ship.shipLength / 2 + HIT_RADIUS) {
           ship.takeDamage((30 + t.tier * 15) * 2);
           if (this.audio) this.audio.playTorpedoHit();
           hit = true;

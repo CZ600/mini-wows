@@ -319,21 +319,21 @@ class TestTurretAimFilter:
         gs.process_fire(1, {"aim": {"x": 500, "y": 2, "z": 0}})
         assert len(gs.projectile_mgr.projectiles) == 4
 
-    def test_aim_outside_all_turret_ranges_fires_nothing(self):
-        """瞄准点在所有炮塔射界之外时不发射任何炮弹。"""
+    def test_oblique_quarter_brings_both_groups(self):
+        """桥楼船(射界2.6)朝斜后方(~150°)射击：前后两组炮塔都在射界内，
+        四门炮全部开火（旧射界2.2 时此处只有后炮塔2门，扩大后前后重叠）。
+
+        yawRange=2.6 → 前(yawCenter=0)覆盖|φ|≤2.6，后(yawCenter=π)覆盖
+        |φ-π|≤2.6。150°≈2.618rad：前|2.618|=2.618≤2.6 ✓，后|2.618-π|=0.524≤2.6 ✓。
+        两组覆盖区在斜后方重叠，故不再存在"所有炮塔都瞄不到"的死角——
+        这正是适度扩大射界的目标。"""
         gs, ship = self._setup(level=4)
-        # 瞄准与船头呈 ~150° 的位置（超出前后炮塔 2.2 弧度射界）
-        # 前: |2.618 - 0| = 2.618 > 2.2 ✗
-        # 后: |2.618 - π| = 0.524 ≤ 2.2 ✓ → 后炮塔可以
-        # 实际上很难让前后都不能，因为前后 yawCenter 差 π，
-        # 而 yawRange=2.2*2=4.4 > π ≈ 3.14，所以总有炮塔能瞄准
-        # 此测试验证斜后方只有后炮塔能开火(2门)
         angle = math.radians(150)
         aim_x = math.sin(angle) * 500
         aim_z = math.cos(angle) * 500
         gs.process_fire(1, {"aim": {"x": aim_x, "y": 2, "z": aim_z}})
-        # 150° 时前炮塔不能(|2.618|>2.2)，后炮塔能(|0.524|<2.2)
-        assert len(gs.projectile_mgr.projectiles) == 2
+        # 150° 时前后两组炮塔都在射界内 → 4门全开
+        assert len(gs.projectile_mgr.projectiles) == 4
 
 
 class TestProtocol:

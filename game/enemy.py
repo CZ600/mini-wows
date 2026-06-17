@@ -122,7 +122,10 @@ class ServerTurret:
 class ServerEnemyShip:
     SHIP_TURN_RATE = math.pi / 3
     YAW_RANGE_FULL = math.pi
-    YAW_RANGE_BRIDGE = 2.2
+    # Bridge ships keep a slightly narrower arc than the full 360° of early-game
+    # ships. Widened from 2.2 to 2.6 (≈149°/side) so oblique quarters can still
+    # bring a turret group to bear. Mirrors client ship.js / game_state.py.
+    YAW_RANGE_BRIDGE = 2.6
 
     def __init__(self, enemy_id, x, z, enemy_level, ship_type=None):
         self.enemy_id = enemy_id
@@ -292,43 +295,26 @@ class ServerEnemyShip:
     def _fire_at(self, target, dist, game_state):
         fire_origin_y = 3.0
 
-        # Lead prediction using PROJECTILE_INITIAL_SPEED (player-equivalent)
+        # Lead prediction using PROJECTILE_INITIAL_SPEED (player-equivalent).
+        # The lead point is the common aim target every turret converges on.
         flight_time = dist / PROJECTILE_INITIAL_SPEED if PROJECTILE_INITIAL_SPEED > 0 else 0
         lead_x = target.pos_x + math.sin(target.heading) * target.speed * flight_time
         lead_z = target.pos_z + math.cos(target.heading) * target.speed * flight_time
-        lead_dx = lead_x - self.x
-        lead_dz = lead_z - self.z
-        lead_dist = math.sqrt(lead_dx * lead_dx + lead_dz * lead_dz)
 
-        dy = 0 - fire_origin_y
-
-        if lead_dist < 1:
-            pitch = math.pi / 6
+        # Aim arc check uses the enemy-centred yaw, mirroring the player path:
+        # the front/rear group split is a hull-layout property, not per-turret.
+        ship_lead_dx = lead_x - self.x
+        ship_lead_dz = lead_z - self.z
+        ship_lead_dist = math.sqrt(ship_lead_dx * ship_lead_dx + ship_lead_dz * ship_lead_dz)
+        if ship_lead_dist < 1:
+            yaw = self.heading
         else:
-            v2 = PROJECTILE_INITIAL_SPEED * PROJECTILE_INITIAL_SPEED
-            v4 = v2 * v2
-            disc = v4 - GRAVITY * (GRAVITY * lead_dist * lead_dist + 2 * dy * v2)
-            if disc < 0:
-                pitch = math.pi / 6
-            else:
-                pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * lead_dist))
-            pitch = max(math.radians(-20), min(math.radians(80), pitch))
-
-        pitch = compensate_drag_pitch(pitch, lead_dist, PROJECTILE_INITIAL_SPEED)
-
-        yaw = math.atan2(lead_dx, lead_dz)
-        direction = (
-            math.sin(yaw) * math.cos(pitch),
-            math.sin(pitch),
-            math.cos(yaw) * math.cos(pitch),
-        )
-
-        direction = apply_cannon_spread(direction, lead_dist, self.ship_type)
+            yaw = math.atan2(ship_lead_dx, ship_lead_dz)
+        local_aim_yaw = yaw - self.heading
 
         # Turret-based salvo: fire from all turrets that can aim at the target
         turret_offsets = self._get_turret_offsets()
         turret_caps = self._get_turret_yaw_caps()
-        local_aim_yaw = yaw - self.heading
 
         for i in range(len(self.turret_cooldowns)):
             if self.turret_cooldowns[i] > 0:
@@ -342,6 +328,13 @@ class ServerEnemyShip:
                 ox, oz = self._turret_world_pos(ldx, ldz)
             else:
                 ox, oz = self.x, self.z
+            # Per-turret direction: each turret aims at the lead point along its
+            # own line, so a fore/aft salvo converges instead of flying parallel.
+            direction = self._aim_direction(ox, fire_origin_y, oz, lead_x, lead_z)
+            tdx = lead_x - ox
+            tdz = lead_z - oz
+            barrel_dist = math.sqrt(tdx * tdx + tdz * tdz)
+            direction = apply_cannon_spread(direction, barrel_dist, self.ship_type)
             game_state.projectile_mgr.fire(
                 f"e_{self.enemy_id}", self.damage,
                 (ox, fire_origin_y, oz),
@@ -394,6 +387,39 @@ class ServerEnemyShip:
         """Check if aim yaw is within turret's arc."""
         diff = (local_aim_yaw - yaw_center + math.pi) % (2 * math.pi) - math.pi
         return abs(diff) <= yaw_range + 0.05
+
+    @staticmethod
+    def _aim_direction(origin_x, origin_y, origin_z, aim_x, aim_z):
+        """Compute a launch direction (unit vector) from a turret's muzzle toward
+        a world aim point. Each turret fires along its own line to the aim point
+        so a fore/aft salvo converges instead of every shell flying parallel.
+
+        Uses the AI's wider pitch envelope (-20°..80°) and sea-level target.
+        """
+        dx = aim_x - origin_x
+        dz = aim_z - origin_z
+        dy = 0.0 - origin_y
+        horiz_dist = math.sqrt(dx * dx + dz * dz)
+
+        if horiz_dist < 1:
+            pitch = math.pi / 6
+        else:
+            v2 = PROJECTILE_INITIAL_SPEED * PROJECTILE_INITIAL_SPEED
+            v4 = v2 * v2
+            disc = v4 - GRAVITY * (GRAVITY * horiz_dist * horiz_dist + 2 * dy * v2)
+            if disc < 0:
+                pitch = math.pi / 6
+            else:
+                pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * horiz_dist))
+            pitch = max(math.radians(-20), min(math.radians(80), pitch))
+
+        pitch = compensate_drag_pitch(pitch, horiz_dist, PROJECTILE_INITIAL_SPEED)
+        yaw = math.atan2(dx, dz)
+        return (
+            math.sin(yaw) * math.cos(pitch),
+            math.sin(pitch),
+            math.cos(yaw) * math.cos(pitch),
+        )
 
     def to_snapshot(self):
         return {
