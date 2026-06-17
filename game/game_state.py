@@ -4,7 +4,7 @@ from collections import deque
 from game.config import (
     DT, SNAPSHOT_HISTORY_SIZE, GRAVITY, PROJECTILE_INITIAL_SPEED,
     ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED, ENEMY_FIRE_COOLDOWN,
-    RAMMING_DAMAGE, get_ship_config,
+    RAMMING_DAMAGE, get_ship_config, get_muzzle_speed, get_cannon_drag,
 )
 from game.ship import ServerShip
 from game.terrain import Terrain
@@ -249,7 +249,7 @@ class GameState:
         return abs(diff) <= yaw_range + 0.05
 
     @staticmethod
-    def _ballistic_direction(origin_x, origin_y, origin_z, aim_x, aim_y, aim_z):
+    def _ballistic_direction(origin_x, origin_y, origin_z, aim_x, aim_y, aim_z, muzzle_speed=PROJECTILE_INITIAL_SPEED):
         """Compute a launch direction (unit vector) from a muzzle origin toward
         a world aim point, using the same low-angle solution as the client.
 
@@ -266,7 +266,7 @@ class GameState:
             pitch = math.pi / 4
             yaw = 0.0
         else:
-            v2 = PROJECTILE_INITIAL_SPEED ** 2
+            v2 = muzzle_speed ** 2
             v4 = v2 * v2
             disc = v4 - GRAVITY * (GRAVITY * horiz_dist * horiz_dist + 2 * dy * v2)
             if disc < 0:
@@ -276,7 +276,7 @@ class GameState:
             pitch = max(0, min(math.radians(60), pitch))
             yaw = math.atan2(dx, dz)
 
-        pitch = compensate_drag_pitch(pitch, horiz_dist, PROJECTILE_INITIAL_SPEED)
+        pitch = compensate_drag_pitch(pitch, horiz_dist, muzzle_speed)
         return (
             math.sin(yaw) * math.cos(pitch),
             math.sin(pitch),
@@ -334,6 +334,12 @@ class GameState:
         barrel_gap = turret_size * 0.35
         spread_mult = 0.7 if ship.skills.is_active("precision") else 1.0
 
+        # Per-class ballistic params: muzzle speed + drag govern the shell's
+        # range. Fetched once per salvo and reused for every turret/barrel so
+        # the whole salvo shares one trajectory model.
+        muzzle_speed = get_muzzle_speed(ship.ship_class)
+        cannon_drag = get_cannon_drag(ship.ship_class)
+
         for i in fireable:
             if i < len(turret_offsets):
                 ldx, ldz, y_step = turret_offsets[i]
@@ -351,6 +357,7 @@ class GameState:
                 # target along its own line, so a fore/aft salvo converges.
                 direction = self._ballistic_direction(
                     ox, muzzle_y, oz, aim_x, aim_y, aim_z,
+                    muzzle_speed=muzzle_speed,
                 )
                 # Spread sigma scales with this barrel's range to the aim point.
                 barrel_dist = math.sqrt((aim_x - ox) ** 2 + (aim_z - oz) ** 2)
@@ -362,6 +369,8 @@ class GameState:
                     player_id, ship.damage,
                     (ox, muzzle_y, oz),
                     spread_dir,
+                    muzzle_speed=muzzle_speed,
+                    drag=cannon_drag,
                 )
             cd = ship.fire_cooldown
             if ship.skills.is_active("rapid_fire"):
@@ -507,12 +516,19 @@ class GameState:
                 if not same_team:
                     ship_a.take_damage(RAMMING_DAMAGE)
                     ship_b.take_damage(RAMMING_DAMAGE)
+                    # Ramming impact point: midpoint between the two hulls at
+                    # roughly deck height, for client-side explosion rendering.
+                    mid_x = round((ship_a.pos_x + ship_b.pos_x) / 2, 2)
+                    mid_z = round((ship_a.pos_z + ship_b.pos_z) / 2, 2)
                     events.append({
                         "type": "hit",
                         "target": pid_a,
                         "damage": RAMMING_DAMAGE,
                         "attacker": pid_b,
                         "weapon": "ram",
+                        "x": mid_x,
+                        "y": 2.0,
+                        "z": mid_z,
                     })
                     events.append({
                         "type": "hit",
@@ -520,6 +536,9 @@ class GameState:
                         "damage": RAMMING_DAMAGE,
                         "attacker": pid_a,
                         "weapon": "ram",
+                        "x": mid_x,
+                        "y": 2.0,
+                        "z": mid_z,
                     })
                     for pid, ship, attacker_id in (
                         (pid_a, ship_a, pid_b),
@@ -531,6 +550,9 @@ class GameState:
                                 "target": pid,
                                 "destroyed_by": attacker_id,
                                 "weapon": "ram",
+                                "x": mid_x,
+                                "y": 2.0,
+                                "z": mid_z,
                             })
 
                 # Push both ships apart along the line between their centers

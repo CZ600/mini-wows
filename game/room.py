@@ -10,6 +10,20 @@ from game.terrain import Terrain, generate_islands
 from game.game_state import GameState
 from game.protocol import encode
 
+# 舰船职业中文映射（与前端 MultiplayerHUD 保持一致），用于拼装系统击杀消息。
+SHIP_CLASS_NAMES = {
+    "destroyer": "驱逐舰",
+    "cruiser": "巡洋舰",
+    "battleship": "战列舰",
+}
+
+
+def ship_class_label(ship_class):
+    """返回舰船职业的中文名，缺失时回退为“战舰”。"""
+    if ship_class and ship_class in SHIP_CLASS_NAMES:
+        return SHIP_CLASS_NAMES[ship_class]
+    return "战舰"
+
 
 class RoomState(Enum):
     WAITING = "waiting"
@@ -163,6 +177,10 @@ class Room:
 
         self.game_state = GameState(self.terrain, self.mode, respawn_limit=self.respawn_limit)
 
+        # 已播报过“击沉”系统消息的 (victim_id) 集合，防止同一死亡事件在
+        # 多个 tick 或重生后重复播报。每局游戏开始时重置。
+        self._announced_kills = set()
+
         for pid, conn in self.players.items():
             if conn.connected:
                 self.game_state.add_ship(
@@ -235,6 +253,48 @@ class Room:
                             await self.send_to(target, {
                                 "type": "player_eliminated",
                             })
+
+                # Broadcast a system chat message on each fresh player kill:
+                # “A玩家 的 X战舰 击沉了 B玩家 的 Y战舰”.
+                # Only fires for player-vs-player kills where the attacker is a
+                # known player (ramming/guns/torpedoes). Enemy (PvE) and
+                # self/environment kills are skipped.
+                for evt in self.game_state.events:
+                    if evt.get("type") != "entity_destroyed":
+                        continue
+                    target = evt.get("target")
+                    attacker = evt.get("destroyed_by")
+                    # 必须双方都是真实玩家，且不是自毁/环境击杀
+                    if target is None or attacker is None:
+                        continue
+                    if target not in self.game_state.ships:
+                        continue
+                    if attacker not in self.game_state.ships:
+                        continue
+                    # 去重：同一受害者只播报一次，直至其重生
+                    if target in self._announced_kills:
+                        continue
+                    self._announced_kills.add(target)
+
+                    victim_ship = self.game_state.ships[target]
+                    attacker_ship = self.game_state.ships[attacker]
+                    msg = "{a} 的 {ac} 击沉了 {v} 的 {vc}".format(
+                        a=attacker_ship.username,
+                        ac=ship_class_label(attacker_ship.ship_class),
+                        v=victim_ship.username,
+                        vc=ship_class_label(victim_ship.ship_class),
+                    )
+                    await self._broadcast({
+                        "type": "chat",
+                        "from": "系统",
+                        "msg": msg,
+                        "sys": True,
+                    })
+
+                # Clear announced-kill markers for players that respawned this
+                # tick, so their next death can be announced again.
+                for pid in respawned_players:
+                    self._announced_kills.discard(pid)
 
                 # Clean up disconnected players past grace period
                 now = time.monotonic()
@@ -349,3 +409,10 @@ class Room:
             self._countdown_task.cancel()
             self._countdown_task = None
         self.players.clear()
+
+    async def close(self):
+        """管理员强制关闭房间时的清理：先通知房内所有玩家（走前端已有的
+        error 处理路径，弹窗并回到大厅），再取消后台任务、清空玩家。
+        """
+        await self._broadcast({"type": "error", "msg": "房间已被管理员关闭"})
+        await self.cleanup()

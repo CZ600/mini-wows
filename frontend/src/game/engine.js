@@ -10,6 +10,7 @@ import { EnemyManager, ENEMY_SCALE } from './enemy.js';
 import { Controls } from './controls.js';
 import { AudioManager } from './audio.js';
 import { ShipSkills } from './skills.js';
+import { getMuzzleSpeed, getCannonDrag } from './config.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -279,6 +280,8 @@ export class GameEngine {
         const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
         const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
         const barrels = this.ship.barrels || 1;
+        const muzzleSpeed = getMuzzleSpeed(this.shipClass);
+        const cannonDrag = getCannonDrag(this.shipClass);
         for (const turret of this.ship.turrets) {
           if (turret.cooldown <= 0 && turretCanAim(turret, currentAimYaw)) {
             // One shell per barrel: each fires from its own muzzle position
@@ -289,7 +292,7 @@ export class GameEngine {
               const tdx = aimTarget.x - origin.x;
               const tdz = aimTarget.z - origin.z;
               const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
-              this.projectileManager.fire(origin, applyCannonSpread(direction, tdist, this.shipClass, spreadMult), this.ship.damage, 'player');
+              this.projectileManager.fire(origin, applyCannonSpread(direction, tdist, this.shipClass, spreadMult), this.ship.damage, 'player', muzzleSpeed, cannonDrag);
             }
             turret.cooldown = this.ship.fireCooldown * cdMult;
             anyFired = true;

@@ -8,7 +8,7 @@ import { WSClient } from './ws_client.js';
 import { InputSender } from './input_sender.js';
 import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
-import { BASE_MAX_SPEED } from './config.js';
+import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag } from './config.js';
 import { Ship, CLASS_CONFIG, getDriftConfig } from './ship.js';
 import { turretCanAim, applyCannonSpread, getTurretFireData, aimTurretsAtPoint } from './turret.js';
 import { ProjectileManager } from './projectile.js';
@@ -142,6 +142,14 @@ export class MultiplayerEngine {
 
   leaveRoom() {
     this.ws.send({ type: 'leave_room' });
+  }
+
+  // Send a chat message. Length is capped client-side (100 chars) and again
+  // server-side; profanity is censored on the server before broadcast.
+  sendChat(text) {
+    const trimmed = String(text == null ? '' : text).replace(/[\r\n]+/g, ' ').slice(0, 100);
+    if (!trimmed.trim()) return;
+    this.ws.send({ type: 'chat', msg: trimmed });
   }
 
   _handleMessage(msg) {
@@ -439,19 +447,42 @@ export class MultiplayerEngine {
       this._updateTorpedoVisuals(msg.torps);
     }
 
-    // Process events — only play explosion for events involving the local player
+    // Process events — render a visual explosion at the server-authoritative
+    // impact point for every hit (so you see all combat, not just your own),
+    // but only play the explosion sound when the local player is involved.
     if (msg.evts) {
       const me = String(this._myId ?? '');
       for (const evt of msg.evts) {
-        if (evt.type === 'hit' || evt.type === 'kill') {
-          const target = String(evt.target ?? '');
-          const attacker = String(evt.attacker ?? evt.destroyed_by ?? '');
-          if (target === me || attacker === me) {
-            if (evt.weapon === 'torpedo') {
-              this.audio.playTorpedoHit();
-            } else {
-              this.audio.playExplosion();
-            }
+        const isHit = evt.type === 'hit';
+        const isDestroyed = evt.type === 'entity_destroyed';
+        if (!isHit && !isDestroyed) continue;
+
+        // Hit detection runs server-side, so always trust the provided
+        // coordinates. Fall back gracefully if a coordinate is missing
+        // (older snapshots / ram events without coords).
+        if (typeof evt.x === 'number' && typeof evt.z === 'number') {
+          const pos = new THREE.Vector3(evt.x, evt.y ?? 2, evt.z);
+          if (evt.weapon === 'torpedo') {
+            // Bigger, water-surface blast for torpedoes.
+            this._localProjMgr?.spawnExplosion(pos, 0xff6622, 9);
+          } else if (evt.weapon === 'ram') {
+            this._localProjMgr?.spawnExplosion(pos, 0xff8844, 3);
+          } else if (isDestroyed) {
+            this._localProjMgr?.spawnExplosion(pos, 0xff2200, 10);
+          } else {
+            this._localProjMgr?.spawnExplosion(pos, 0xff4400, 6);
+          }
+        }
+
+        // Sound is local-only to avoid an overwhelming cacophony from
+        // distant fights.
+        const target = String(evt.target ?? '');
+        const attacker = String(evt.attacker ?? evt.destroyed_by ?? '');
+        if (target === me || attacker === me) {
+          if (evt.weapon === 'torpedo') {
+            this.audio.playTorpedoHit();
+          } else {
+            this.audio.playExplosion();
           }
         }
       }
@@ -1082,6 +1113,8 @@ export class MultiplayerEngine {
     const spreadMult = precisionActive ? 0.7 : 1.0;
     const cdMult = rapidFireActive ? 0.7 : 1.0;
     const barrels = ship.barrels || 1;
+    const muzzleSpeed = getMuzzleSpeed(this.localShip.shipClass);
+    const cannonDrag = getCannonDrag(this.localShip.shipClass);
 
     for (const turret of ship.turrets) {
       if (turret.cooldown <= 0 && turretCanAim(turret, aimYaw)) {
@@ -1100,7 +1133,7 @@ export class MultiplayerEngine {
             const tdz = aimTarget.z - origin.z;
             const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
             const dir = applyCannonSpread(direction, tdist, this.localShip.shipClass, spreadMult);
-            this._localProjMgr.fire(origin, dir, ship.damage, 'player');
+            this._localProjMgr.fire(origin, dir, ship.damage, 'player', muzzleSpeed, cannonDrag);
           }
         }
         turret.cooldown = ship.fireCooldown * cdMult;

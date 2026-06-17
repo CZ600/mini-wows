@@ -12,19 +12,20 @@ class ServerProjectile:
     __slots__ = [
         "proj_id", "owner", "damage",
         "x", "y", "z", "px", "py", "pz",
-        "vx", "vy", "vz", "lifetime", "alive",
+        "vx", "vy", "vz", "lifetime", "alive", "drag",
     ]
 
-    def __init__(self, proj_id, owner, damage, origin, direction):
+    def __init__(self, proj_id, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG):
         self.proj_id = proj_id
         self.owner = owner
         self.damage = damage
         self.x, self.y, self.z = origin
         self.px, self.py, self.pz = origin
-        speed = PROJECTILE_INITIAL_SPEED
+        speed = muzzle_speed
         self.vx = direction[0] * speed
         self.vy = direction[1] * speed
         self.vz = direction[2] * speed
+        self.drag = drag
         self.lifetime = 0.0
         self.alive = True
 
@@ -33,7 +34,7 @@ class ServerProjectile:
         self.px, self.py, self.pz = self.x, self.y, self.z
 
         # Drag: speed decays over time (non-ideal trajectory)
-        drag = 1.0 - PROJECTILE_DRAG * dt
+        drag = 1.0 - self.drag * dt
         self.vx *= drag
         self.vy *= drag
         self.vz *= drag
@@ -117,8 +118,8 @@ class ProjectileManager:
         self.projectiles = []
         self._next_id = 0
 
-    def fire(self, owner, damage, origin, direction):
-        proj = ServerProjectile(self._next_id, owner, damage, origin, direction)
+    def fire(self, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG):
+        proj = ServerProjectile(self._next_id, owner, damage, origin, direction, muzzle_speed=muzzle_speed, drag=drag)
         self._next_id += 1
         self.projectiles.append(proj)
         return proj
@@ -236,17 +237,26 @@ class ProjectileManager:
 
                     ship.take_damage(p.damage)
                     p.alive = False
+                    # Impact coordinates so the client can render the explosion
+                    # at the server-authoritative hit point (no client-side hit
+                    # prediction in multiplayer).
                     events.append({
                         "type": "hit",
                         "target": pid,
                         "damage": p.damage,
                         "attacker": p.owner,
+                        "x": round(p.x, 2),
+                        "y": round(p.y, 2),
+                        "z": round(p.z, 2),
                     })
                     if not ship.alive:
                         events.append({
                             "type": "entity_destroyed",
                             "target": pid,
                             "destroyed_by": p.owner,
+                            "x": round(p.x, 2),
+                            "y": round(p.y, 2),
+                            "z": round(p.z, 2),
                         })
                     break
 

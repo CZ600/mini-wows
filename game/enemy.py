@@ -4,6 +4,7 @@ from game.config import (
     GRAVITY, PROJECTILE_INITIAL_SPEED, ENEMY_FIRE_COOLDOWN,
     ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED,
     ENEMY_SCALE, ENEMY_SHIP_SCALE, AI_DT, get_ship_config,
+    get_muzzle_speed, get_cannon_drag,
 )
 from game.projectile import apply_cannon_spread, compensate_drag_pitch
 
@@ -295,9 +296,15 @@ class ServerEnemyShip:
     def _fire_at(self, target, dist, game_state):
         fire_origin_y = 3.0
 
-        # Lead prediction using PROJECTILE_INITIAL_SPEED (player-equivalent).
+        # Per-class ballistic params: the enemy ship's main guns use the same
+        # muzzle speed / drag as the player ship of the same class, so AI and
+        # player ranges match.
+        muzzle_speed = get_muzzle_speed(self.ship_type)
+        cannon_drag = get_cannon_drag(self.ship_type)
+
+        # Lead prediction using the class muzzle speed (player-equivalent).
         # The lead point is the common aim target every turret converges on.
-        flight_time = dist / PROJECTILE_INITIAL_SPEED if PROJECTILE_INITIAL_SPEED > 0 else 0
+        flight_time = dist / muzzle_speed if muzzle_speed > 0 else 0
         lead_x = target.pos_x + math.sin(target.heading) * target.speed * flight_time
         lead_z = target.pos_z + math.cos(target.heading) * target.speed * flight_time
 
@@ -330,7 +337,7 @@ class ServerEnemyShip:
                 ox, oz = self.x, self.z
             # Per-turret direction: each turret aims at the lead point along its
             # own line, so a fore/aft salvo converges instead of flying parallel.
-            direction = self._aim_direction(ox, fire_origin_y, oz, lead_x, lead_z)
+            direction = self._aim_direction(ox, fire_origin_y, oz, lead_x, lead_z, muzzle_speed)
             tdx = lead_x - ox
             tdz = lead_z - oz
             barrel_dist = math.sqrt(tdx * tdx + tdz * tdz)
@@ -339,6 +346,8 @@ class ServerEnemyShip:
                 f"e_{self.enemy_id}", self.damage,
                 (ox, fire_origin_y, oz),
                 direction,
+                muzzle_speed=muzzle_speed,
+                drag=cannon_drag,
             )
             self.turret_cooldowns[i] = self.fire_cooldown
 
@@ -389,7 +398,7 @@ class ServerEnemyShip:
         return abs(diff) <= yaw_range + 0.05
 
     @staticmethod
-    def _aim_direction(origin_x, origin_y, origin_z, aim_x, aim_z):
+    def _aim_direction(origin_x, origin_y, origin_z, aim_x, aim_z, muzzle_speed=PROJECTILE_INITIAL_SPEED):
         """Compute a launch direction (unit vector) from a turret's muzzle toward
         a world aim point. Each turret fires along its own line to the aim point
         so a fore/aft salvo converges instead of every shell flying parallel.
@@ -404,7 +413,7 @@ class ServerEnemyShip:
         if horiz_dist < 1:
             pitch = math.pi / 6
         else:
-            v2 = PROJECTILE_INITIAL_SPEED * PROJECTILE_INITIAL_SPEED
+            v2 = muzzle_speed * muzzle_speed
             v4 = v2 * v2
             disc = v4 - GRAVITY * (GRAVITY * horiz_dist * horiz_dist + 2 * dy * v2)
             if disc < 0:
@@ -413,7 +422,7 @@ class ServerEnemyShip:
                 pitch = math.atan((v2 - math.sqrt(disc)) / (GRAVITY * horiz_dist))
             pitch = max(math.radians(-20), min(math.radians(80), pitch))
 
-        pitch = compensate_drag_pitch(pitch, horiz_dist, PROJECTILE_INITIAL_SPEED)
+        pitch = compensate_drag_pitch(pitch, horiz_dist, muzzle_speed)
         yaw = math.atan2(dx, dz)
         return (
             math.sin(yaw) * math.cos(pitch),

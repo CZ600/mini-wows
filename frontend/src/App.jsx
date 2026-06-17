@@ -22,6 +22,7 @@ import TutorialPage from './components/TutorialPage.jsx';
 import ExitConfirmModal from './components/ExitConfirmModal.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
+import ChatBox from './components/ChatBox.jsx';
 import './App.css';
 
 const SCOPE_TICKS = [
@@ -265,6 +266,7 @@ function MultiCanvasLayout() {
   const {
     mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData,
     mpScoped, mpEliminated, mpShipLabels,
+    mpChat, handleSendMpChat,
     bgmVolume, sfxVolume, muted,
     handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
     handleExitMpToMenu,
@@ -289,6 +291,9 @@ function MultiCanvasLayout() {
           onToggleMute={() => handleMutedChange(!muted)}
           muted={muted}
         />
+      )}
+      {mpHudData && (
+        <ChatBox messages={mpChat} onSend={handleSendMpChat} />
       )}
       {mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
       {mpShipLabels && !mpScoped && <ShipLabels labels={mpShipLabels} />}

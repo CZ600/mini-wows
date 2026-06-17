@@ -3,6 +3,7 @@ import jwt
 from fastapi import WebSocket, WebSocketDisconnect, Query
 from game.room_manager import room_manager
 from game.protocol import decode, encode
+from game.chat import sanitize
 from settings import SECRET_KEY, ALGORITHM
 
 
@@ -113,7 +114,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
             elif msg_type == "leave_room":
                 if current_room_id:
-                    room_manager.leave_room(current_room_id, player_id)
+                    await room_manager.leave_room(current_room_id, player_id)
                     room = room_manager.get_room(current_room_id)
                     if room:
                         await room._broadcast_room_update()
@@ -131,23 +132,26 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             elif msg_type == "chat":
                 room = room_manager.get_room(current_room_id) if current_room_id else None
                 if room:
-                    await room._broadcast({
-                        "type": "chat",
-                        "from": username,
-                        "msg": msg.get("msg", ""),
-                    })
+                    # Sanitize: trim, cap length, censor profanity. Drop empty.
+                    clean = sanitize(msg.get("msg", ""))
+                    if clean:
+                        await room._broadcast({
+                            "type": "chat",
+                            "from": username,
+                            "msg": clean,
+                        })
 
     except WebSocketDisconnect:
         if current_room_id:
             room = room_manager.get_room(current_room_id)
             if room:
-                room.remove_player(player_id)
+                await room_manager.leave_room(current_room_id, player_id)
                 await room._broadcast_room_update()
     except Exception as e:
         print(f"WS error for {username}: {e}")
     finally:
         if current_room_id:
-            room_manager.leave_room(current_room_id, player_id)
+            await room_manager.leave_room(current_room_id, player_id)
             room = room_manager.get_room(current_room_id)
             if room:
                 await room._broadcast_room_update()

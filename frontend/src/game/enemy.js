@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch } from './turret.js';
 import { applyHalfLambert } from './scene.js';
-import { BASE_MAX_SPEED } from './config.js';
+import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag } from './config.js';
 
 export const ENEMY_SCALE = {
   1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
@@ -409,9 +409,12 @@ class EnemyShip {
     }
 
     if ((this.state === 'chase' || this.state === 'orbit') && dist < ENEMY_DETECT_RANGE) {
-      // Lead prediction using INITIAL_SPEED (player-equivalent, 200 m/s)
-      const INITIAL_SPEED = 200;
-      const flightTime = dist / INITIAL_SPEED;
+      // Per-class muzzle speed: enemy ships fire the same trajectory as the
+      // player ship of the same class, so ranges match. (Static coastal
+      // turrets below keep their own ENEMY_FIRE_SPEED.)
+      const muzzleSpeed = getMuzzleSpeed(this.shipType);
+      const cannonDrag = getCannonDrag(this.shipType);
+      const flightTime = dist / muzzleSpeed;
       const leadX = playerPos.x + Math.sin(playerHeading) * playerSpeed * flightTime;
       const leadZ = playerPos.z + Math.cos(playerHeading) * playerSpeed * flightTime;
       const leadDx = leadX - this.mesh.position.x;
@@ -430,7 +433,7 @@ class EnemyShip {
       if (horizDist < 1) {
         pitch = Math.PI / 6;
       } else {
-        const v2 = INITIAL_SPEED * INITIAL_SPEED;
+        const v2 = muzzleSpeed * muzzleSpeed;
         const v4 = v2 * v2;
         const disc = v4 - GRAVITY * (GRAVITY * horizDist * horizDist + 2 * dy * v2);
         pitch = disc < 0
@@ -439,7 +442,7 @@ class EnemyShip {
         pitch = Math.max(-20 * Math.PI / 180, Math.min(80 * Math.PI / 180, pitch));
       }
 
-      pitch = compensateDragPitch(pitch, horizDist, INITIAL_SPEED);
+      pitch = compensateDragPitch(pitch, horizDist, muzzleSpeed);
 
       for (const b of this._turretBarrels) b.rotation.x = Math.PI / 2 - pitch;
 
@@ -470,7 +473,7 @@ class EnemyShip {
           muzzleVec.set(0, 0, halfLen);
           mesh.localToWorld(muzzleVec);
           const spreadDir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist, this.shipType);
-          projectileManager.fire(muzzleVec.clone(), spreadDir, this.damage, 'enemy');
+          projectileManager.fire(muzzleVec.clone(), spreadDir, this.damage, 'enemy', muzzleSpeed, cannonDrag);
         }
         this.turretCooldowns[i] = this.fireCooldown;
       }

@@ -39,8 +39,46 @@ DECEL_FRICTION = 0.98
 # Projectiles
 GRAVITY = 9.8
 PROJECTILE_INITIAL_SPEED = 200
-PROJECTILE_MAX_LIFETIME = 10
+PROJECTILE_MAX_LIFETIME = 20
 PROJECTILE_DRAG = 0.06        # speed decay per second (6%/s)
+
+# Per-class main-gun muzzle speed and per-second drag.
+# A shell's range is governed ballistically by muzzle speed, gravity, drag and
+# lifetime — there is no hard "range" cap. Each class gets its own (v0, drag) so
+# that range falls out of the trajectory naturally:
+#   battleship: slowest muzzle, lightest drag  -> ~3 km, retains energy far
+#   cruiser:    middle muzzle,   middle drag    -> ~3 km, balanced
+#   destroyer:  fastest muzzle,  heaviest drag  -> ~2 km, bleeds speed quickly
+# The values were reverse-engineered by simulating the discrete-tick trajectory
+# the server actually uses (DT=0.05, multiplicative drag, gravity, terminates on
+# y<=0 or lifetime>PROJECTILE_MAX_LIFETIME). Drag here is the per-second decay
+# rate, applied per tick as `v *= (1 - drag * DT)` — same model as the global
+# PROJECTILE_DRAG above.
+# Static coastal turrets (ServerTurret) keep using ENEMY_FIRE_SPEED/PROJECTILE_DRAG.
+CANNON_MUZZLE_SPEED = {
+    "destroyer":  346.85,
+    "cruiser":    284.44,
+    "battleship": 227.45,
+}
+CANNON_DRAG = {
+    "destroyer":  0.150,
+    "cruiser":    0.060,
+    "battleship": 0.030,
+}
+
+
+def get_muzzle_speed(ship_class):
+    """Main-gun muzzle speed for a ship class (defaults to the shared baseline)."""
+    if not ship_class:
+        return PROJECTILE_INITIAL_SPEED
+    return CANNON_MUZZLE_SPEED.get(ship_class, PROJECTILE_INITIAL_SPEED)
+
+
+def get_cannon_drag(ship_class):
+    """Main-gun per-second drag for a ship class (defaults to the shared baseline)."""
+    if not ship_class:
+        return PROJECTILE_DRAG
+    return CANNON_DRAG.get(ship_class, PROJECTILE_DRAG)
 
 # Cannon spread: elliptical scatter centered on aim point.
 # Long axis (sigma_v) is along the aim direction (pitch perturbation → range error).

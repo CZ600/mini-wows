@@ -2,6 +2,7 @@ import asyncio
 import time
 from game.config import MODE_CONFIG, ROOM_CLEANUP_DELAY
 from game.room import Room
+from game.protocol import encode
 
 
 class RoomManager:
@@ -30,9 +31,10 @@ class RoomManager:
                     elif now - room._empty_time > ROOM_CLEANUP_DELAY:
                         to_remove.append(rid)
             for rid in to_remove:
-                room = self.rooms.pop(rid, None)
-                if room:
-                    await room.cleanup()
+                # dissolve_room pops the room and cancels its background
+                # tasks (countdown / tick loop). Used here as a safety net for
+                # rooms that became empty outside the leave_room path.
+                await self.dissolve_room(rid)
 
     async def cleanup(self):
         if self._cleanup_task:
@@ -79,13 +81,30 @@ class RoomManager:
         room.add_player(player_id, username, ws, level, ship_class)
         return room, None
 
-    def leave_room(self, room_id, player_id):
+    async def leave_room(self, room_id, player_id):
         room = self.rooms.get(room_id)
         if not room:
             return
         room.remove_player(player_id)
         if room._connected_count() == 0:
-            room._empty_time = time.monotonic()
+            # 最后一名玩家离开 → 立即解散房间，释放资源并从列表移除，
+            # 不再等待 _cleanup_loop 的 30s 延迟。
+            await self.dissolve_room(room_id)
+        else:
+            # 房间仍有人在线，清除可能残留的空房计时标记。
+            room._empty_time = None
+
+    async def dissolve_room(self, room_id) -> bool:
+        """立即从注册表移除房间并取消其后台任务（倒计时/tick 循环）。
+
+        幂等：对不存在的 room_id 返回 False。供 leave_room（空房即时解散）、
+        _cleanup_loop（兜底）以及 force_close_room 复用。
+        """
+        room = self.rooms.pop(room_id, None)
+        if not room:
+            return False
+        await room.cleanup()
+        return True
 
     def get_room(self, room_id):
         return self.rooms.get(room_id)
@@ -142,22 +161,40 @@ class RoomManager:
             })
         return result
 
-    def force_close_room(self, room_id: str) -> bool:
-        """Force close a room."""
+    async def force_close_room(self, room_id: str) -> bool:
+        """管理员强制关闭房间：通知房内玩家后立即移除。
+
+        修复：原实现 `room.state.value = "ended"` 对 Enum 成员赋值会抛
+        AttributeError，导致接口 500 且房间从未被移除。现在通过 Room.close()
+        广播关闭消息并清理，再从注册表删除。
+        """
         room = self.rooms.get(room_id)
         if not room:
             return False
-        room.state.value = "ended"
+        await room.close()
+        self.rooms.pop(room_id, None)
         return True
 
-    def kick_player(self, room_id: str, player_id: int) -> bool:
-        """Kick a player from a room."""
+    async def kick_player(self, room_id: str, player_id: int) -> bool:
+        """管理员将玩家踢出房间。
+
+        先向被踢者发送提示（走前端已有的 error 处理路径），再复用统一的
+        leave_room 流程：房内其他人会收到 room_update；若踢出后房间变空则自动解散。
+        """
         room = self.rooms.get(room_id)
         if not room:
             return False
         if player_id not in room.players:
             return False
-        room.remove_player(player_id)
+        conn = room.players[player_id]
+        if conn.connected:
+            try:
+                await conn.ws.send_bytes(
+                    encode({"type": "error", "msg": "你已被管理员踢出房间"})
+                )
+            except Exception:
+                pass
+        await self.leave_room(room_id, player_id)
         return True
 
 

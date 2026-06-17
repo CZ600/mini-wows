@@ -1,10 +1,8 @@
 import pytest
-import asyncio
 from unittest.mock import MagicMock, AsyncMock
 
 from game.room_manager import RoomManager
 from game.room import Room, PlayerConn, RoomState
-
 
 class TestListAllRooms:
     """Test admin room listing - Bug: dict access on PlayerConn objects."""
@@ -204,3 +202,97 @@ class TestQuickMatch:
 
         result, err = rm.find_quick_match("pve", 2, "bob", MagicMock())
         assert result is None
+
+
+class TestAutoDissolveEmptyRoom:
+    """Feature: 房间内所有玩家退出后立即解散（不再等 30s 清理循环）。"""
+
+    async def test_leave_room_dissolves_when_empty(self):
+        rm = RoomManager()
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=MagicMock())
+        assert rm.list_all_rooms() != []
+
+        # 最后一名玩家离开 → 房间应立即从注册表移除
+        await rm.leave_room(room.room_id, 1)
+
+        assert rm.get_room(room.room_id) is None
+        assert rm.list_all_rooms() == []
+
+    async def test_leave_room_keeps_room_when_others_remain(self):
+        rm = RoomManager()
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=MagicMock())
+        rm.join_room(room.room_id, 2, "bob", MagicMock())
+
+        # 只有部分玩家离开时，房间仍应保留
+        await rm.leave_room(room.room_id, 1)
+
+        kept = rm.get_room(room.room_id)
+        assert kept is not None
+        assert kept._connected_count() == 1
+        assert any(r["roomId"] == room.room_id for r in rm.list_all_rooms())
+
+    async def test_dissolve_room_idempotent(self):
+        rm = RoomManager()
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=MagicMock())
+
+        assert await rm.dissolve_room(room.room_id) is True
+        # 第二次对同一 room_id 调用应返回 False（已不存在），不抛异常
+        assert await rm.dissolve_room(room.room_id) is False
+
+
+class TestAdminForceCloseRoom:
+    """Bug fix: 管理员关闭房间。原实现 `room.state.value = "ended"` 对 Enum
+    赋值会抛 AttributeError，导致接口 500 且房间从未被移除。"""
+
+    async def test_force_close_room_removes_room(self):
+        rm = RoomManager()
+        # close() 会向房内玩家广播 error，ws 的 send_bytes 必须可 await
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=AsyncMock())
+
+        success = await rm.force_close_room(room.room_id)
+
+        assert success is True
+        assert rm.get_room(room.room_id) is None
+        assert rm.list_all_rooms() == []
+
+    async def test_force_close_room_nonexistent(self):
+        rm = RoomManager()
+        success = await rm.force_close_room("r999")
+        assert success is False
+
+
+class TestAdminKickPlayer:
+    """Fix: 踢出玩家应真正让其离开房间（经 leave_room），且房空时自动解散。"""
+
+    async def test_kick_player_removes_player(self):
+        rm = RoomManager()
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=AsyncMock())
+        rm.join_room(room.room_id, 2, "bob", MagicMock())
+
+        # 踢出 alice；房间内仍有 bob，房间应保留
+        success = await rm.kick_player(room.room_id, 1)
+
+        assert success is True
+        kept = rm.get_room(room.room_id)
+        assert kept is not None
+        # remove_player 按设计只标记断线（保留重连宽限期），alice 应已断开；
+        # 房间在线人数降为 1（只剩 bob）。
+        assert kept.players[1].connected is False
+        assert kept._connected_count() == 1
+
+    async def test_kick_last_player_dissolves_room(self):
+        rm = RoomManager()
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=AsyncMock())
+
+        success = await rm.kick_player(room.room_id, 1)
+
+        assert success is True
+        # 踢出最后一名玩家后房间应自动解散
+        assert rm.get_room(room.room_id) is None
+
+    async def test_kick_player_not_in_room(self):
+        rm = RoomManager()
+        room, _ = rm.create_room("ffa", player_id=1, username="alice", ws=MagicMock())
+
+        success = await rm.kick_player(room.room_id, 999)
+        assert success is False

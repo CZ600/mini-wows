@@ -1,7 +1,8 @@
 import * as THREE from 'three';
+import { PROJECTILE_INITIAL_SPEED, getMuzzleSpeed } from './config.js';
 
 const GRAVITY = 9.8;
-const INITIAL_SPEED = 200;
+const INITIAL_SPEED = PROJECTILE_INITIAL_SPEED;
 const DRAG = 0.06;
 const MAX_YAW_SPEED = Math.PI / 3;
 const MIN_PITCH = 0;
@@ -14,7 +15,7 @@ export function compensateDragPitch(pitch, horizDist, muzzleSpeed) {
   return pitch + dragLoss * 0.4;
 }
 
-export function calcBallisticAngles(origin, target, shipHeading) {
+export function calcBallisticAngles(origin, target, shipHeading, muzzleSpeed = INITIAL_SPEED) {
   const dx = target.x - origin.x;
   const dz = target.z - origin.z;
   const dy = target.y - origin.y;
@@ -24,7 +25,7 @@ export function calcBallisticAngles(origin, target, shipHeading) {
     return { yaw: 0, pitch: Math.PI / 4 };
   }
 
-  const v2 = INITIAL_SPEED * INITIAL_SPEED;
+  const v2 = muzzleSpeed * muzzleSpeed;
   const v4 = v2 * v2;
   const disc = v4 - GRAVITY * (GRAVITY * horizDist * horizDist + 2 * dy * v2);
 
@@ -37,7 +38,7 @@ export function calcBallisticAngles(origin, target, shipHeading) {
 
   pitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, pitch));
 
-  pitch = compensateDragPitch(pitch, horizDist, INITIAL_SPEED);
+  pitch = compensateDragPitch(pitch, horizDist, muzzleSpeed);
 
   const worldYaw = Math.atan2(dx, dz);
   const localYaw = worldYaw - shipHeading;
@@ -77,6 +78,10 @@ const _aimOrigin = new THREE.Vector3();
 export function aimTurretsAtPoint(ship, aimTarget, dt) {
   if (!ship.turrets.length || !aimTarget) return null;
 
+  // Per-class muzzle speed: barrels must point along the same trajectory the
+  // server fires, otherwise the gun elevation won't match the actual shell arc.
+  const muzzleSpeed = getMuzzleSpeed(ship.shipClass);
+
   // Ship-centred local yaw, used only for the front/rear fire-arc check.
   const sdx = aimTarget.x - ship.mesh.position.x;
   const sdz = aimTarget.z - ship.mesh.position.z;
@@ -89,7 +94,7 @@ export function aimTurretsAtPoint(ship, aimTarget, dt) {
     // Each turret computes its own ballistic yaw/pitch from its own position,
     // so the barrels physically point at the target.
     turret.body.getWorldPosition(_aimOrigin);
-    const { yaw, pitch } = calcBallisticAngles(_aimOrigin, aimTarget, ship.heading);
+    const { yaw, pitch } = calcBallisticAngles(_aimOrigin, aimTarget, ship.heading, muzzleSpeed);
 
     // Clamp to this turret's arc, then slew toward it at a finite yaw rate.
     let diff = normalizeAngle(yaw - turret.yawCenter);

@@ -208,7 +208,7 @@ async def api_admin_rooms(admin: dict = Depends(require_admin)):
 @app.post("/api/admin/rooms/{room_id}/close")
 async def api_admin_close_room(room_id: str, admin: dict = Depends(require_admin)):
     from game.room_manager import room_manager
-    success = room_manager.force_close_room(room_id)
+    success = await room_manager.force_close_room(room_id)
     if not success:
         raise HTTPException(status_code=404, detail="房间不存在")
     return {"status": "ok"}
@@ -217,7 +217,7 @@ async def api_admin_close_room(room_id: str, admin: dict = Depends(require_admin
 @app.post("/api/admin/rooms/{room_id}/kick/{player_id}")
 async def api_admin_kick_player(room_id: str, player_id: int, admin: dict = Depends(require_admin)):
     from game.room_manager import room_manager
-    success = room_manager.kick_player(room_id, player_id)
+    success = await room_manager.kick_player(room_id, player_id)
     if not success:
         raise HTTPException(status_code=404, detail="玩家不在房间中")
     return {"status": "ok"}

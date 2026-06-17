@@ -61,6 +61,7 @@ export function GameProvider({ children }) {
   const [mpScoped, setMpScoped] = useState(false);
   const [mpEliminated, setMpEliminated] = useState(false);
   const [mpShipLabels, setMpShipLabels] = useState(null);
+  const [mpChat, setMpChat] = useState([]);
 
   // Game result
   const [gameResult, setGameResult] = useState({ score: 0, enemies: 0, level: 1 });
@@ -139,6 +140,15 @@ export function GameProvider({ children }) {
         navigateRef.current?.('/gameover');
       };
       mpEngine.onEliminated = () => setMpEliminated(true);
+      mpEngine.onChat = (msg) => {
+        // Append and cap history to keep memory bounded.
+        setMpChat((prev) => {
+          const entry = { from: msg.from, msg: msg.msg, ts: Date.now() };
+          if (msg.sys) entry.sys = true; // 系统消息（如击沉播报），单独样式
+          const next = [...prev, entry];
+          return next.length > 50 ? next.slice(next.length - 50) : next;
+        });
+      };
       mpEngine.onError = (msg) => {
         console.error('MP Error:', msg);
         alert(msg);
@@ -337,6 +347,13 @@ export function GameProvider({ children }) {
     mpEngine.ws.send({ type: 'set_ship_class', shipClass });
   };
 
+  // Send a chat message in multiplayer. Length capped on both sides;
+  // profanity is filtered by the server.
+  const handleSendMpChat = useCallback((text) => {
+    const mp = mpEngineRef.current;
+    if (mp && typeof mp.sendChat === 'function') mp.sendChat(text);
+  }, []);
+
   const handleLeaveRoom = () => {
     mpEngine.leaveRoom();
     setRoomInfo(null);
@@ -356,6 +373,7 @@ export function GameProvider({ children }) {
     setMpHudData(null);
     setMpMinimapData(null);
     setMpShipLabels(null);
+    setMpChat([]);
     nav('/');
   };
 
@@ -418,6 +436,7 @@ export function GameProvider({ children }) {
 
     // Multiplayer state
     roomInfo, mpHudData, mpCountdown, mpMinimapData, mpScoped, mpEliminated, mpShipLabels,
+    mpChat, handleSendMpChat,
 
     // Game result
     gameResult,

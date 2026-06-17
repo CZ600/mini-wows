@@ -118,18 +118,25 @@ class TorpedoManager:
 
                     ship.take_damage(t.damage)
                     t.alive = False
+                    # Torpedoes are 2D (water surface); impact Y = 0.
                     events.append({
                         "type": "hit",
                         "target": pid,
                         "damage": t.damage,
                         "attacker": t.owner,
                         "weapon": "torpedo",
+                        "x": round(t.x, 2),
+                        "y": 0.0,
+                        "z": round(t.z, 2),
                     })
                     if not ship.alive:
                         events.append({
                             "type": "entity_destroyed",
                             "target": pid,
                             "destroyed_by": t.owner,
+                            "x": round(t.x, 2),
+                            "y": 0.0,
+                            "z": round(t.z, 2),
                         })
                     break
 

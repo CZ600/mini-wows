@@ -1,9 +1,6 @@
 import * as THREE from 'three';
+import { GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG } from './config.js';
 
-const GRAVITY = 9.8;
-const INITIAL_SPEED = 200;
-const MAX_LIFETIME = 10;
-const DRAG = 0.06;
 const TRAIL_LENGTH = 30;
 
 export class ProjectileManager {
@@ -16,7 +13,7 @@ export class ProjectileManager {
     this._splashes = [];
   }
 
-  fire(origin, direction, damage, owner) {
+  fire(origin, direction, damage, owner, muzzleSpeed = PROJECTILE_INITIAL_SPEED, drag = PROJECTILE_DRAG) {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.3, 8, 8),
       new THREE.MeshBasicMaterial({ color: owner === 'player' ? 0xffaa00 : 0xff6644 })
@@ -41,10 +38,11 @@ export class ProjectileManager {
       trail,
       trailData: [],
       velocity: new THREE.Vector3(
-        direction.x * INITIAL_SPEED,
-        direction.y * INITIAL_SPEED,
-        direction.z * INITIAL_SPEED
+        direction.x * muzzleSpeed,
+        direction.y * muzzleSpeed,
+        direction.z * muzzleSpeed
       ),
+      drag,
       damage,
       owner,
       lifetime: 0,
@@ -55,7 +53,7 @@ export class ProjectileManager {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.lifetime += dt;
-      const drag = 1.0 - DRAG * dt;
+      const drag = 1.0 - (p.drag ?? PROJECTILE_DRAG) * dt;
       p.velocity.multiplyScalar(drag);
       p.velocity.y -= GRAVITY * dt;
       p.mesh.position.addScaledVector(p.velocity, dt);
@@ -159,7 +157,7 @@ export class ProjectileManager {
         }
       }
 
-      if (!hit && p.lifetime > MAX_LIFETIME) hit = true;
+      if (!hit && p.lifetime > PROJECTILE_MAX_LIFETIME) hit = true;
 
       if (hit) {
         this.scene.remove(p.mesh);
@@ -228,6 +226,13 @@ export class ProjectileManager {
   }
 
   _explode(position, color, maxSize) {
+    this.spawnExplosion(position, color, maxSize);
+  }
+
+  // Public entry point so other systems (e.g. the multiplayer engine reacting
+  // to server-authoritative hit events) can spawn an explosion at an arbitrary
+  // world position without owning a projectile object.
+  spawnExplosion(position, color = 0xff4400, maxSize = 6) {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(1, 8, 8),
       new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 })
