@@ -74,6 +74,7 @@ export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted 
   const { hp, maxHp, speed, level, score, enemyCount, wave, fps, turrets, currentThreshold, nextThreshold,
           weaponMode, torpedoTier, torpedoTubes, torpedoMaxCooldown, shipClass,
           availableTorpedoTiers, gear } = data;
+  const isTeam = data.mode === 'team';
   const gearIdx = gear == null ? 1 : gear;
 
   const frontTurrets = turrets ? turrets.filter(t => t.isFront) : [];
@@ -116,7 +117,8 @@ export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted 
           <div className="cross-v" />
         </div>
 
-        {/* Top Right - Level & Score */}
+        {/* Top Right - Level & Score (solo) / Team counts (team) */}
+        {!isTeam ? (
         <div id="hud-right">
           <div className="hud-row">
             <span className="hud-label">等级</span>
@@ -139,6 +141,35 @@ export default function HUD({ data, onOpenSettings, onExit, onToggleMute, muted 
           <div className="hud-row"><span className="hud-label">分数</span><span>{score}</span></div>
           <div className="hud-row"><span className="hud-label">敌人</span><span>{enemyCount}</span></div>
         </div>
+      ) : (
+        /* Team battle: show alive counts + wingmen HP instead of solo stats. */
+        <div id="hud-right">
+          <div className="hud-row">
+            <span className="hud-label">我方</span>
+            <span className={data.friendliesAlive > 0 ? 'team-alive' : 'team-dead'}>
+              {data.friendliesAlive}/{data.friendliesTotal}
+            </span>
+            <span className="hud-label" style={{ marginLeft: 12 }}>敌方</span>
+            <span className={data.redsAlive > 0 ? 'team-enemy' : 'team-dead'}>
+              {data.redsAlive}/{data.redsTotal}
+            </span>
+          </div>
+          {data.wingmen && data.wingmen.map((w, i) => {
+            const pct = w.maxHp > 0 ? (w.hp / w.maxHp) * 100 : 0;
+            return (
+              <div key={i} className="hud-row hud-row-small">
+                <span className="hud-label">队友{i + 1}</span>
+                <span className={w.alive ? '' : 'team-dead'}>{w.alive ? '存活' : '阵亡'}</span>
+                {w.alive && (
+                  <div className="level-bar-outer" style={{ flex: 1, marginLeft: 6 }}>
+                    <div className="level-bar-inner" style={{ width: pct + '%' }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       </div>
 
       {/* Bottom Bar - Three Column Layout */}

@@ -107,6 +107,125 @@ function LevelUpNotification({ info }) {
   );
 }
 
+// Floating hit/kill feedback for the single-player & multiplayer modes. The
+// engine pushes {type:'damage',amount} / {type:'kill',score} events; here we
+// render them as short-lived pop-ups. Damage numbers rise + fade near the
+// crosshair (multiple in a burst stagger horizontally); kills flash a gold
+// banner across the top.
+//
+// Robustness: each pop-up is purely CSS-animated (animationDuration = TTL) so
+// it stays visible for its whole life regardless of React re-renders. State is
+// only pruned by a setTimeout scheduled on each new event, which forces a
+// re-render after the longest pop-up would have expired. No shared rAF clock,
+// no render-time performance.now() reads — both of which previously caused the
+// pop-ups to never appear.
+const HIT_DAMAGE_TTL = 900;   // ms a damage number lives
+const HIT_KILL_TTL = 1500;    // ms a kill banner lives
+
+function HitFeedbackLayer({ events }) {
+  // Bump a counter to force a prune re-render shortly after the newest pop-up
+  // would have finished animating. Using events.length as the dep means a new
+  // hit reschedules the timer (so a burst never gets pruned mid-animation).
+  const [, bump] = useState(0);
+  const count = events ? events.length : 0;
+  useEffect(() => {
+    if (count === 0) return;
+    const id = setTimeout(() => bump((n) => n + 1), HIT_KILL_TTL + 50);
+    return () => clearTimeout(id);
+  }, [count]);
+
+  if (!events || events.length === 0) return null;
+
+  // Keep only the most recent 12; the setTimeout-driven re-render above prunes
+  // expired entries (they self-fade via CSS so we don't need to hide them at
+  // the exact expiry tick). No render-time performance.now() read keeps this
+  // pure (react-hooks/purity).
+  const list = events.length > 12 ? events.slice(events.length - 12) : events;
+
+  // Index-within-type so overlapping damage numbers fan out horizontally.
+  const visible = [];
+  let dmgIdx = 0;
+  let killIdx = 0;
+  for (const e of list) {
+    if (e.type === 'damage') {
+      visible.push({ ...e, ttl: HIT_DAMAGE_TTL, idxWithinType: dmgIdx++ });
+    } else {
+      visible.push({ ...e, ttl: HIT_KILL_TTL, idxWithinType: killIdx++ });
+    }
+  }
+
+  return (
+    <div id="hit-feedback-layer">
+      {visible.map((e) => {
+        if (e.type === 'kill') {
+          return (
+            <div
+              key={e.id}
+              className="hit-kill"
+              style={{ animationDuration: `${e.ttl}ms` }}
+            >
+              <span className="hit-kill-icon">💥</span>
+              <span className="hit-kill-text">击沉敌舰</span>
+              <span className="hit-kill-score">+{e.score}</span>
+            </div>
+          );
+        }
+        // Damage: stagger horizontally by within-type index, oldest furthest.
+        const offset = (e.idxWithinType % 5) - 2;   // -2..2 → -40px..40px
+        return (
+          <div
+            key={e.id}
+            className="hit-damage"
+            style={{
+              animationDuration: `${e.ttl}ms`,
+              '--hit-offset': `${offset * 20}px`,
+            }}
+          >
+            -{e.amount}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Team-mode wingmen HUD overlay. Each alive teammate shows a "队友N" tag + HP
+// bar above their hull, anchored at the screen position the engine projects.
+// Dead teammates are skipped (no floating tombstone). Label x/y come straight
+// from the engine's per-frame projection; entries are off-screen when x/y are
+// negative sentinels.
+function TeamLabels({ labels }) {
+  if (!labels || labels.length === 0) return null;
+  const shown = labels.filter((lb) => lb.alive && lb.x > -1000 && lb.y > -1000);
+  if (shown.length === 0) return null;
+  return (
+    <div id="team-labels">
+      {shown.map((lb) => {
+        const ratio = lb.maxHp > 0 ? Math.max(0, Math.min(1, lb.hp / lb.maxHp)) : 0;
+        // HP colour: blue family to match the wingman hull, darkening as HP drops.
+        const hpColor = ratio > 0.6 ? '#4db8ff'
+          : ratio > 0.3 ? '#2a7ad1'
+            : '#1a3f6e';
+        return (
+          <div
+            key={lb.id}
+            className="team-label"
+            style={{ left: lb.x, top: lb.y }}
+          >
+            <div className="team-label-name">队友{lb.slot + 1}</div>
+            <div className="team-label-bar-outer">
+              <div
+                className="team-label-bar-inner"
+                style={{ width: (ratio * 100).toFixed(1) + '%', background: hpColor }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Page Components ──
 
 function LoginPage() {
@@ -203,6 +322,8 @@ function SinglePlayPage() {
   const {
     engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,
     pendingStartRef, spStartedRef,
+    hitFeedback,
+    teamLabels,
     bgmVolume, sfxVolume, muted,
     handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
     handleExitSpToMenu,
@@ -210,6 +331,9 @@ function SinglePlayPage() {
   const navigate = useNavigate();
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // Team-mode flag comes from the HUD payload (the team loop sets mode:'team')
+  // rather than reading the start ref during render.
+  const isTeamMode = hudData?.mode === 'team';
 
   useEffect(() => {
     if (!pendingStartRef.current) {
@@ -217,9 +341,13 @@ function SinglePlayPage() {
       return;
     }
     if (spInitialized && pendingStartRef.current && !spStartedRef.current) {
-      const { level, shipClass } = pendingStartRef.current;
+      const { level, shipClass, mode } = pendingStartRef.current;
       spStartedRef.current = true;
-      engine.start(level, shipClass);
+      if (mode === 'team') {
+        engine.startTeam(level, shipClass);
+      } else {
+        engine.start(level, shipClass);
+      }
     }
   }, [spInitialized, engine, pendingStartRef, spStartedRef, navigate]);
 
@@ -238,6 +366,8 @@ function SinglePlayPage() {
         />
       )}
       {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
+      <HitFeedbackLayer events={hitFeedback} />
+      {isTeamMode && !scoped && <TeamLabels labels={teamLabels} />}
       {minimapData && !scoped && <Minimap data={minimapData} />}
       {scoped && <ScopeOverlay />}
       <ExitConfirmModal
@@ -267,6 +397,7 @@ function MultiCanvasLayout() {
     mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData,
     mpScoped, mpEliminated, mpShipLabels,
     mpChat, handleSendMpChat,
+    hitFeedback,
     bgmVolume, sfxVolume, muted,
     handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
     handleExitMpToMenu,
@@ -298,6 +429,7 @@ function MultiCanvasLayout() {
       {mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
       {mpShipLabels && !mpScoped && <ShipLabels labels={mpShipLabels} />}
       {mpScoped && <ScopeOverlay />}
+      <HitFeedbackLayer events={hitFeedback} />
       {mpEliminated && (
         <div id="gameover-screen">
           <div className="gameover-container">
@@ -335,6 +467,8 @@ function GameOverPage() {
       enemies={gameResult.enemies}
       level={gameResult.level}
       multiplayerResults={gameResult.multiplayerResults}
+      teamMode={gameResult.mode === 'team'}
+      teamResult={gameResult.result}
       onContinue={handleContinue}
       onRestart={handleRestart}
       onBackToLobby={handleBackToLobby}

@@ -1,4 +1,20 @@
-export default function GameOverScreen({ score, enemies, level, multiplayerResults, onContinue, onRestart, onBackToLobby }) {
+export default function GameOverScreen({ score, enemies, level, multiplayerResults, teamMode, teamResult, onContinue, onRestart, onBackToLobby }) {
+  if (teamMode) {
+    const win = teamResult === 'win';
+    return (
+      <div id="gameover-screen">
+        <div className="gameover-container">
+          <h1 style={{ color: win ? 'var(--success, #4caf50)' : 'var(--danger, #ff5e5e)' }}>
+            {win ? '胜利' : '失败'}
+          </h1>
+          <p>{win ? '敌方舰队已被全歼!' : '我方全军覆没。'}</p>
+          <p>击毁敌方: <strong>{enemies}</strong></p>
+          <button className="menu-btn" onClick={onRestart}>再战一场</button>
+        </div>
+      </div>
+    );
+  }
+
   if (multiplayerResults) {
     const sorted = [...multiplayerResults].sort((a, b) => (b.alive ? 1 : 0) - (a.alive ? 1 : 0));
     return (

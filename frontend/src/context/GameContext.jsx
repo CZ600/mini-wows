@@ -52,6 +52,12 @@ export function GameProvider({ children }) {
   const [scoped, setScoped] = useState(false);
   const [levelUpInfo, setLevelUpInfo] = useState(null);
   const [spInitialized, setSpInitialized] = useState(false);
+  // Floating hit/kill feedback pop-ups (solo). Each entry: {id, type, amount|score, ts}.
+  const [hitFeedback, setHitFeedback] = useState([]);
+  const hitFeedbackIdRef = useRef(0);
+  // Team-mode wingmen HUD labels (projected each frame). Entry:
+  // { id, slot, hp, maxHp, alive, x, y }.
+  const [teamLabels, setTeamLabels] = useState([]);
 
   // Multiplayer state
   const [roomInfo, setRoomInfo] = useState(null);
@@ -88,8 +94,8 @@ export function GameProvider({ children }) {
       savePlayerProgress(playerIdRef.current, info.newLevel).catch(() => {});
     }
   }, []);
-  const onGameOverSp = useCallback((score, level, enemies) => {
-    setGameResult({ score, enemies, level });
+  const onGameOverSp = useCallback((score, level, enemies, extra) => {
+    setGameResult({ score, enemies, level, ...(extra || {}) });
     if (document.pointerLockElement) document.exitPointerLock();
     if (gameIdRef.current) {
       finishGame(gameIdRef.current, score, level, enemies, 'sunk').catch(() => {});
@@ -98,6 +104,19 @@ export function GameProvider({ children }) {
   }, []);
   const onClassSelect = useCallback(() => {
     navigateRef.current?.('/class-select');
+  }, []);
+  // Append a single-player hit/kill event to the feedback queue with a unique
+  // id + timestamp (used by the pop-up layer to animate + expire it). Capped so
+  // a runaway burst can't grow unbounded.
+  const onHitFeedback = useCallback((event) => {
+    const id = ++hitFeedbackIdRef.current;
+    const entry = { id, type: event.type, ts: performance.now() };
+    if (event.type === 'damage') entry.amount = event.amount;
+    else if (event.type === 'kill') entry.score = event.score;
+    setHitFeedback((prev) => {
+      const next = [...prev, entry];
+      return next.length > 12 ? next.slice(next.length - 12) : next;
+    });
   }, []);
 
   // Lazily load + instantiate the game engines (three.js etc).
@@ -119,12 +138,17 @@ export function GameProvider({ children }) {
       engine.onLevelUp = onLevelUp;
       engine.onGameOver = onGameOverSp;
       engine.onClassSelect = onClassSelect;
+      engine.onHitFeedback = onHitFeedback;
+      engine.onTeamLabelsUpdate = setTeamLabels;
 
       // Multiplayer engine callbacks
       mpEngine.onHudUpdate = setMpHudData;
       mpEngine.onMinimapUpdate = setMpMinimapData;
       mpEngine.onScopeChange = setMpScoped;
       mpEngine.onShipLabelsUpdate = setMpShipLabels;
+      // Reuse the same feedback pipeline as single-player: only the LOCAL
+      // player's own hits/kills are emitted by the mp engine.
+      mpEngine.onHitFeedback = onHitFeedback;
       mpEngine.onRoomUpdate = (info) => {
         pendingRoomRef.current = false;
         setRoomInfo(info);
@@ -168,7 +192,7 @@ export function GameProvider({ children }) {
       setEnginesError(e);
       throw e;
     }
-  }, [onLevelUp, onGameOverSp, onClassSelect, bgmVolume, sfxVolume, muted]);
+  }, [onLevelUp, onGameOverSp, onClassSelect, onHitFeedback, bgmVolume, sfxVolume, muted]);
 
   // Auth check
   useEffect(() => {
@@ -235,7 +259,7 @@ export function GameProvider({ children }) {
     nav('/login');
   };
 
-  const handleStart = async (name, initialLevel = 1, initialClass = null) => {
+  const handleStart = async (name, initialLevel = 1, initialClass = null, mode = 'solo') => {
     try {
       const p = await createPlayer(name);
       playerIdRef.current = p.id;
@@ -250,7 +274,7 @@ export function GameProvider({ children }) {
     if (playerIdRef.current && initialClass) {
       setPlayerClass(playerIdRef.current, initialClass).catch(() => {});
     }
-    pendingStartRef.current = { level: initialLevel, shipClass: initialClass };
+    pendingStartRef.current = { level: initialLevel, shipClass: initialClass, mode };
     spStartedRef.current = false;
     setSpInitialized(false);
     nav('/loading?next=/play');
@@ -374,6 +398,7 @@ export function GameProvider({ children }) {
     setMpMinimapData(null);
     setMpShipLabels(null);
     setMpChat([]);
+    setHitFeedback([]);
     nav('/');
   };
 
@@ -407,6 +432,8 @@ export function GameProvider({ children }) {
     setHudData(null);
     setMinimapData(null);
     setScoped(false);
+    setHitFeedback([]);
+    setTeamLabels([]);
     setSpInitialized(false);
     pendingStartRef.current = null;
     spStartedRef.current = false;
@@ -433,6 +460,8 @@ export function GameProvider({ children }) {
 
     // Single player state
     hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,
+    hitFeedback, setHitFeedback,
+    teamLabels,
 
     // Multiplayer state
     roomInfo, mpHudData, mpCountdown, mpMinimapData, mpScoped, mpEliminated, mpShipLabels,

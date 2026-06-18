@@ -44,6 +44,12 @@ export class MultiplayerEngine {
     this.onCountdown = null;
     this.onScopeChange = null;
     this.onShipLabelsUpdate = null;
+    // Local-only hit/kill feedback (multiplayer). The engine emits
+    // { type: 'damage', amount } / { type: 'kill', score } for hits and kills
+    // the LOCAL player dealt, derived from server-authoritative snapshot events.
+    this.onHitFeedback = null;
+    this._dmgAccum = 0;
+    this._lastDmgEmit = 0;
     this._eliminated = false;
 
     this.scene = null;
@@ -457,6 +463,23 @@ export class MultiplayerEngine {
         const isDestroyed = evt.type === 'entity_destroyed';
         if (!isHit && !isDestroyed) continue;
 
+        // Who dealt this hit/kill. Computed once here and reused by both the
+        // feedback block and the local sound block below.
+        const attacker = String(evt.attacker ?? evt.destroyed_by ?? '');
+
+        // Track local-player-dealt hits for the floating feedback pop-up:
+        // accumulate damage from this player's own hits, and emit a kill event
+        // the moment one of this player's targets is destroyed. NPC enemy
+        // ("e_...") destructions are attributed to "player" by the server and
+        // carry a score; player kills carry destroyed_by = this player's id.
+        if (this.onHitFeedback && attacker === me) {
+          if (isHit && typeof evt.damage === 'number') {
+            this._dmgAccum += evt.damage;
+          } else if (isDestroyed) {
+            this.onHitFeedback({ type: 'kill', score: evt.score ?? 0 });
+          }
+        }
+
         // Hit detection runs server-side, so always trust the provided
         // coordinates. Fall back gracefully if a coordinate is missing
         // (older snapshots / ram events without coords).
@@ -477,13 +500,23 @@ export class MultiplayerEngine {
         // Sound is local-only to avoid an overwhelming cacophony from
         // distant fights.
         const target = String(evt.target ?? '');
-        const attacker = String(evt.attacker ?? evt.destroyed_by ?? '');
         if (target === me || attacker === me) {
           if (evt.weapon === 'torpedo') {
             this.audio.playTorpedoHit();
           } else {
             this.audio.playExplosion();
           }
+        }
+      }
+
+      // Flush aggregated damage feedback (≤10 emits/sec). Snapshots arrive at
+      // ~20Hz so this naturally batches multi-hit salvos.
+      if (this.onHitFeedback && this._dmgAccum > 0) {
+        const t = performance.now();
+        if (t - this._lastDmgEmit >= 100) {
+          this.onHitFeedback({ type: 'damage', amount: Math.round(this._dmgAccum) });
+          this._dmgAccum = 0;
+          this._lastDmgEmit = t;
         }
       }
     }
@@ -1214,6 +1247,10 @@ export class MultiplayerEngine {
 
   _cleanupGame() {
     if (this.audio) this.audio.stopAll();
+    // Reset damage-feedback accumulator so a stale snapshot can't emit after
+    // the round ends.
+    this._dmgAccum = 0;
+    this._lastDmgEmit = 0;
     if (this.terrain) {
       this.terrain.destroy?.();
       this.terrain = null;
@@ -1273,6 +1310,8 @@ export class MultiplayerEngine {
   destroy() {
     this._initDone = false;
     this.running = false;
+    // Detach callbacks so a queued snapshot can't fire stale feedback.
+    this.onHitFeedback = null;
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     if (this.audio) this.audio.stopAll();
     this.ws.disconnect();

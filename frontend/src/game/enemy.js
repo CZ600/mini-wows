@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
+import { LEVEL_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch } from './turret.js';
 import { applyHalfLambert } from './scene.js';
 import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag } from './config.js';
@@ -28,13 +28,31 @@ export const ENEMY_SHIP_SCALE = {
   8:  { hp: 640,  damage: 60, speed: 13,  score: 32 },
 };
 
-const ENEMY_FIRE_COOLDOWN = 8;
 const ENEMY_DETECT_RANGE = 600;
-const ENEMY_FIRE_SPEED = 150;
 const GRAVITY = 9.8;
 const SHIP_TURN_RATE = Math.PI / 3;
 
-class EnemyShip {
+// Single-player (solo) mode tuning.
+// Spawns land in the annulus [SPAWN_MIN_DIST, SPAWN_MAX_DIST] around the player
+// so enemies never appear within the keep-out radius but stay close enough to
+// reach the fight.
+const SOLO_SPAWN_MIN_DIST = 700;   // 700m keep-out radius (no spawn inside)
+const SOLO_SPAWN_MAX_DIST = 1500;  // 1.5km spawn radius (random within)
+const SOLO_SPAWN_MIN_SEP = 100;    // min spacing between spawned enemies
+
+// Orbit band: within ENEMY_ORBIT_RANGE the ship stops chasing and circles the
+// player, maintaining the orbit radius inside [ENEMY_ORBIT_MIN, ENEMY_ORBIT_MAX].
+const ENEMY_ORBIT_RANGE = 100;
+const ENEMY_ORBIT_MIN = 90;
+const ENEMY_ORBIT_MAX = 130;
+
+// Exported for reuse by team AI (team_ai.js).
+export {
+  ENEMY_DETECT_RANGE,
+  ENEMY_ORBIT_RANGE, ENEMY_ORBIT_MIN, ENEMY_ORBIT_MAX,
+};
+
+export class EnemyShip {
   constructor(scene, terrain, x, z, enemyLevel, shipType) {
     this.scene = scene;
     this.terrain = terrain;
@@ -79,6 +97,12 @@ class EnemyShip {
     this.patrolTargetZ = z;
     this.orbitDirection = Math.random() < 0.5 ? 1 : -1;
 
+    // Faction for team battle ('player' | 'enemy'); solo ships are 'enemy'.
+    // The fire target is whatever unit this ship currently aims at (defaults to
+    // the player; team-mode subclasses override via _decideAI).
+    this.faction = 'enemy';
+    this.fireTarget = null;
+
     this._buildMesh(cfg);
     this.mesh.position.set(x, 0, z);
     this.mesh.rotation.y = this.heading;
@@ -95,6 +119,10 @@ class EnemyShip {
     applyHalfLambert(turretMat);
     const barrelMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
     applyHalfLambert(barrelMat);
+    // Keep a ref to the hull material so subclasses (e.g. FriendlyAIShip) can
+    // retint the whole hull+deck+superstructure with one call. All hull-derived
+    // meshes below share this material.
+    this._hullMat = hullMat;
 
     const hullGeo = new THREE.CylinderGeometry(1, 1, cfg.height, 32);
     hullGeo.scale(cfg.width * 0.65, 1, cfg.length * 0.65);
@@ -240,16 +268,73 @@ class EnemyShip {
     this.hpBarBg.renderOrder = 999;
     this.mesh.add(this.hpBarBg);
 
+    // Fill geometry is left-anchored: translate it +hpWidth/2 in X so its left
+    // edge sits at the local origin. Then scaling X shrinks it from the right
+    // (left edge stays put) instead of contracting from both ends toward the
+    // centre. Combined with the position offset each frame, the fill depletes
+    // cleanly from one end.
+    const fillGeo = new THREE.PlaneGeometry(hpWidth, 1.2);
+    fillGeo.translate(hpWidth / 2, 0, 0);
     this.hpBarFill = new THREE.Mesh(
-      new THREE.PlaneGeometry(hpWidth, 1.2),
+      fillGeo,
       new THREE.MeshBasicMaterial({ color: 0x44cc44, depthTest: false, transparent: true })
     );
+    // Start the fill at the LEFT edge of the background (background spans
+    // [-hpWidth/2, +hpWidth/2]; the fill's own left edge is at its origin, so
+    // place the origin at -hpWidth/2).
+    this.hpBarFill.position.x = -hpWidth / 2;
     this.hpBarFill.position.y = deckY + cfg.height + 3;
     this.hpBarFill.renderOrder = 1000;
     this.mesh.add(this.hpBarFill);
 
     this._hpWidth = hpWidth;
+    this._applyFactionColors();   // tint HP bar by faction (player=blue / enemy=red)
     this._deckY = deckY;
+  }
+
+  // Retint the hull/deck/superstructure (all share _hullMat). Used by team-mode
+  // wingmen to paint themselves a distinct faction colour so they read as
+  // allies at a glance instead of looking like red enemies.
+  _tintHull(hex) {
+    if (this._hullMat) this._hullMat.color.setHex(hex);
+  }
+
+  // Faction-tinted HP bar so wingmen (player side) and reds (enemy side) are
+  // visually distinct in team battles. The background bar carries the faction
+  // identity colour; the fill is re-tinted each frame by _updateHpBar().
+  // Wingmen (faction 'player') hide the in-world 3D bar entirely: the team-mode
+  // HUD overlay (TeamLabels) already draws a "队友N + 血条" label above them, so
+  // keeping the 3D bar would show two bars stacked on the same ship.
+  _applyFactionColors() {
+    if (this.faction === 'player') {
+      // Ally: blue family, but hide the in-world bar (overlay handles it).
+      this.hpBarBg.visible = false;
+      this.hpBarFill.visible = false;
+      this.hpBarBg.material.color.setHex(0x113355);
+      this.hpBarFill.material.color.setHex(0x33ccff);
+    } else {
+      // Enemy (and solo-mode enemies): red family.
+      this.hpBarBg.visible = true;
+      this.hpBarFill.visible = true;
+      this.hpBarBg.material.color.setHex(0x331111);
+      this.hpBarFill.material.color.setHex(0xff5544);
+    }
+  }
+
+  // Recolour the HP fill each frame by HP fraction, staying within the unit's
+  // faction hue band so allies always read blue and enemies always read red:
+  //   ally  : full=cyan, mid=blue,   low=deep blue
+  //   enemy : full=orange-red, mid=red, low=dark red
+  _updateHpBarColor(hpPercent) {
+    if (this.faction === 'player') {
+      if (hpPercent > 0.6) this.hpBarFill.material.color.setHex(0x33ccff);   // bright cyan
+      else if (hpPercent > 0.3) this.hpBarFill.material.color.setHex(0x3388dd); // blue
+      else this.hpBarFill.material.color.setHex(0x224488);                    // deep blue
+    } else {
+      if (hpPercent > 0.6) this.hpBarFill.material.color.setHex(0xff7744);   // orange-red
+      else if (hpPercent > 0.3) this.hpBarFill.material.color.setHex(0xdd3322); // red
+      else this.hpBarFill.material.color.setHex(0x882222);                    // dark red
+    }
   }
 
   _addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, z, deckY, yOffset = 0) {
@@ -327,26 +412,25 @@ class EnemyShip {
     this.patrolTargetZ = this.spawnZ + Math.sin(angle) * r;
   }
 
-  updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager) {
-    // Update turret cooldowns
-    for (let i = 0; i < this.turretCooldowns.length; i++) {
-      if (this.turretCooldowns[i] > 0) {
-        this.turretCooldowns[i] = Math.max(0, this.turretCooldowns[i] - dt);
-      }
-    }
-    this.torpedoCooldown -= dt;
-
-    const dx = playerPos.x - this.mesh.position.x;
-    const dz = playerPos.z - this.mesh.position.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-
-    if (dist < 50) {
+  // AI decision core. Returns { targetHeading, targetSpeed } and sets this.state.
+  // The base implementation is the solo-mode behaviour (idle/chase/orbit around
+  // the player). Team-mode subclasses override this with their own logic and
+  // set this.fireTarget to whatever unit they want to shoot at.
+  _decideAI(dt, playerPos, dist, dx, dz) {
+    if (dist < ENEMY_ORBIT_RANGE) {
       this.state = 'orbit';
     } else if (dist < ENEMY_DETECT_RANGE) {
       this.state = 'chase';
     } else if (this.state !== 'idle') {
       this.state = 'idle';
     }
+
+    // In solo mode the ship always fires at the player.
+    this.fireTarget = {
+      x: playerPos.x, z: playerPos.z,
+      heading: playerPos.heading ?? 0,
+      speed: playerPos.speed ?? 0,
+    };
 
     let targetHeading;
     let targetSpeed;
@@ -364,21 +448,42 @@ class EnemyShip {
       targetHeading = Math.atan2(dx, dz);
       targetSpeed = this.maxSpeed * 0.7;
     } else {
+      // Orbit the player: steer along the tangent, with a small radial blend
+      // that pushes the ship back toward the orbit band [ENEMY_ORBIT_MIN,
+      // ENEMY_ORBIT_MAX] when it drifts outside it.
       const nx = dx / dist;
       const nz = dz / dist;
       let tx = -nz * this.orbitDirection;
       let tz = nx * this.orbitDirection;
 
-      if (dist > 60) {
-        tx += nx * 0.3;
-        tz += nz * 0.3;
-      } else if (dist < 40) {
-        tx -= nx * 0.3;
-        tz -= nz * 0.3;
+      if (dist > ENEMY_ORBIT_MAX) {
+        tx += nx * 0.4;
+        tz += nz * 0.4;
+      } else if (dist < ENEMY_ORBIT_MIN) {
+        tx -= nx * 0.4;
+        tz -= nz * 0.4;
       }
       targetHeading = Math.atan2(tx, tz);
       targetSpeed = this.maxSpeed * 0.5;
     }
+
+    return { targetHeading, targetSpeed };
+  }
+
+  updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager) {
+    // Update turret cooldowns
+    for (let i = 0; i < this.turretCooldowns.length; i++) {
+      if (this.turretCooldowns[i] > 0) {
+        this.turretCooldowns[i] = Math.max(0, this.turretCooldowns[i] - dt);
+      }
+    }
+    this.torpedoCooldown -= dt;
+
+    const dx = playerPos.x - this.mesh.position.x;
+    const dz = playerPos.z - this.mesh.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+
+    const { targetHeading, targetSpeed } = this._decideAI(dt, playerPos, dist, dx, dz);
 
     this._rotateToward(targetHeading, dt);
     this.speed = targetSpeed;
@@ -389,6 +494,10 @@ class EnemyShip {
     if (this.terrain && this.terrain.isLand(newX, newZ)) {
       this.heading += Math.PI * 0.5;
       if (this.state === 'idle') this._pickPatrolTarget();
+      // Team-mode reds patrol their own area; re-pick a waypoint on land hit.
+      if (this.state === 'patrol' && typeof this._pickPatrolAreaTarget === 'function') {
+        this._pickPatrolAreaTarget();
+      }
     } else {
       const half = 5000;
       this.mesh.position.x = Math.max(-half, Math.min(half, newX));
@@ -399,24 +508,33 @@ class EnemyShip {
 
     if (camera) {
       const hpPercent = this.hp / this.maxHp;
-      this.hpBarFill.scale.x = Math.max(0.001, hpPercent);
-      this.hpBarFill.position.x = -(1 - hpPercent) * this._hpWidth / 2;
-      if (hpPercent > 0.6) this.hpBarFill.material.color.setHex(0x44cc44);
-      else if (hpPercent > 0.3) this.hpBarFill.material.color.setHex(0xccaa22);
-      else this.hpBarFill.material.color.setHex(0xff3333);
+      // Fill is left-anchored (geometry translated +hpWidth/2, origin at the
+      // background's left edge). Scaling X depletes it from the right while the
+      // left edge stays put — no per-frame position nudging needed.
+      this.hpBarFill.scale.x = Math.max(0.0001, hpPercent);
+      this._updateHpBarColor(hpPercent);
       this.hpBarBg.lookAt(camera.position);
       this.hpBarFill.lookAt(camera.position);
     }
 
-    if ((this.state === 'chase' || this.state === 'orbit') && dist < ENEMY_DETECT_RANGE) {
-      // Per-class muzzle speed: enemy ships fire the same trajectory as the
-      // player ship of the same class, so ranges match. (Static coastal
-      // turrets below keep their own ENEMY_FIRE_SPEED.)
+    // Resolve the fire target: team units set this.fireTarget themselves; in
+    // solo mode _decideAI defaults it to the player.
+    const ft = this.fireTarget || { x: playerPos.x, z: playerPos.z, heading: 0, speed: 0 };
+    const ftDx = ft.x - this.mesh.position.x;
+    const ftDz = ft.z - this.mesh.position.z;
+    const ftDist = Math.sqrt(ftDx * ftDx + ftDz * ftDz);
+
+    // Fire whenever there is a valid fire target within detect range. This is
+    // state-agnostic so both the solo FSM (chase/orbit) and the team FSMs
+    // (engage/kite/focus_fire/suppress/etc.) all shoot when they have a target.
+    if (this.fireTarget && ftDist < ENEMY_DETECT_RANGE && this.state !== 'idle' && this.state !== 'reposition') {
+      // Per-class muzzle speed: ships fire the same trajectory as the player
+      // ship of the same class, so ranges match.
       const muzzleSpeed = getMuzzleSpeed(this.shipType);
       const cannonDrag = getCannonDrag(this.shipType);
-      const flightTime = dist / muzzleSpeed;
-      const leadX = playerPos.x + Math.sin(playerHeading) * playerSpeed * flightTime;
-      const leadZ = playerPos.z + Math.cos(playerHeading) * playerSpeed * flightTime;
+      const flightTime = ftDist / muzzleSpeed;
+      const leadX = ft.x + Math.sin(ft.heading) * ft.speed * flightTime;
+      const leadZ = ft.z + Math.cos(ft.heading) * ft.speed * flightTime;
       const leadDx = leadX - this.mesh.position.x;
       const leadDz = leadZ - this.mesh.position.z;
       const leadDist = Math.sqrt(leadDx * leadDx + leadDz * leadDz);
@@ -427,7 +545,7 @@ class EnemyShip {
 
       const fireOriginY = this._deckY + 1;
       const horizDist = leadDist;
-      const dy = playerPos.y - fireOriginY;
+      const dy = (ft.y ?? 0) - fireOriginY;
 
       let pitch;
       if (horizDist < 1) {
@@ -442,7 +560,7 @@ class EnemyShip {
         pitch = Math.max(-20 * Math.PI / 180, Math.min(80 * Math.PI / 180, pitch));
       }
 
-      pitch = compensateDragPitch(pitch, horizDist, muzzleSpeed);
+      pitch = compensateDragPitch(pitch, horizDist, muzzleSpeed, cannonDrag);
 
       for (const b of this._turretBarrels) b.rotation.x = Math.PI / 2 - pitch;
 
@@ -473,17 +591,19 @@ class EnemyShip {
           muzzleVec.set(0, 0, halfLen);
           mesh.localToWorld(muzzleVec);
           const spreadDir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist, this.shipType);
-          projectileManager.fire(muzzleVec.clone(), spreadDir, this.damage, 'enemy', muzzleSpeed, cannonDrag);
+          // Tag the projectile with this ship's faction so friendly-fire can be
+          // filtered on hit ('enemy' for red-side ships, 'player' for friendlies).
+          projectileManager.fire(muzzleVec.clone(), spreadDir, this.damage, this.faction, muzzleSpeed, cannonDrag);
         }
         this.turretCooldowns[i] = this.fireCooldown;
       }
     }
 
     if (this.shipType === 'cruiser' && torpedoManager &&
-        (this.state === 'chase' || this.state === 'orbit') &&
-        dist < 400 && this.torpedoCooldown <= 0) {
-      const aimHeading = Math.atan2(dx, dz);
-      torpedoManager.fire(this.mesh.position, aimHeading, 1, this.enemyLevel, 2, 'narrow', 'enemy');
+        this.fireTarget && this.state !== 'idle' && this.state !== 'reposition' &&
+        ftDist < 400 && this.torpedoCooldown <= 0) {
+      const aimHeading = Math.atan2(ftDx, ftDz);
+      torpedoManager.fire(this.mesh.position, aimHeading, 1, this.enemyLevel, 2, 'narrow', this.faction);
       this.torpedoCooldown = 15;
     }
   }
@@ -491,6 +611,9 @@ class EnemyShip {
   takeDamage(amount) {
     this.hp -= amount;
     if (this.hp < 0) this.hp = 0;
+    // Optional hook so callers (e.g. the solo engine) can collect per-hit
+    // feedback. team-mode units don't set this, so it stays a no-op there.
+    if (this.onDamaged) this.onDamaged(amount, this);
   }
 }
 
@@ -502,236 +625,63 @@ export class EnemyManager {
     this.explosions = [];
   }
 
+  // Pick a water position in the annulus [SOLO_SPAWN_MIN_DIST, SOLO_SPAWN_MAX_DIST]
+  // around the player, avoiding land and keeping SOLO_SPAWN_MIN_SEP from already-
+  // placed enemies. Returns {x, z} or null if no valid spot was found in 20 tries.
+  _findSpawnPos(playerPos) {
+    for (let attempts = 0; attempts < 20; attempts++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = SOLO_SPAWN_MIN_DIST + Math.random() * (SOLO_SPAWN_MAX_DIST - SOLO_SPAWN_MIN_DIST);
+      const x = playerPos.x + Math.cos(angle) * dist;
+      const z = playerPos.z + Math.sin(angle) * dist;
+
+      if (this.terrain && this.terrain.isLand(x, z)) continue;
+
+      const tooClose = this.enemies.some(e => {
+        const edx = e.mesh.position.x - x;
+        const edz = e.mesh.position.z - z;
+        return Math.sqrt(edx * edx + edz * edz) < SOLO_SPAWN_MIN_SEP;
+      });
+      if (tooClose) continue;
+
+      return { x, z };
+    }
+    return null;
+  }
+
+  // Single-player (solo) enemy wave spawn. Turrets have been removed entirely;
+  // every wave is now pure EnemyShip fleet. Counts are unchanged:
+  //   level < 3  -> ENEMY_SCALE[level].count  ships (was that many turrets)
+  //   level >= 3 -> 10 ships                   (was 5 turrets + 10 ships)
+  // Spawn positions use the [700m, 1500m] annulus so enemies never appear
+  // within the keep-out radius but stay within 1.5km of the player.
   spawn(playerPos, level = 1) {
     this.clear();
     const scale = ENEMY_SCALE[level] || ENEMY_SCALE[10];
-    const size = scale.size;
+    const count = level < 3 ? scale.count : 10;
+    const enemyShipLevel = Math.max(1, level - 1);
 
-    if (level < 3) {
-      for (let i = 0; i < scale.count; i++) {
-        let x, z, attempts = 0;
-        do {
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 100 + Math.random() * 400;
-          x = playerPos.x + Math.cos(angle) * dist;
-          z = playerPos.z + Math.sin(angle) * dist;
-          attempts++;
-        } while (this.terrain && this.terrain.isLand(x, z) && attempts < 20);
-        if (attempts >= 20) continue;
+    for (let i = 0; i < count; i++) {
+      const pos = this._findSpawnPos(playerPos);
+      if (!pos) continue;
 
-        const tooClose = this.enemies.some(e => {
-          const edx = e.mesh.position.x - x;
-          const edz = e.mesh.position.z - z;
-          return Math.sqrt(edx * edx + edz * edz) < 100;
-        });
-        if (tooClose) continue;
-
-        const enemyData = this._createTurret(x, z, size, scale);
-        if (enemyData) this.enemies.push(enemyData);
-      }
-    } else {
-      for (let i = 0; i < 5; i++) {
-        let x, z, attempts = 0;
-        do {
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 100 + Math.random() * 400;
-          x = playerPos.x + Math.cos(angle) * dist;
-          z = playerPos.z + Math.sin(angle) * dist;
-          attempts++;
-        } while (this.terrain && this.terrain.isLand(x, z) && attempts < 20);
-        if (attempts >= 20) continue;
-
-        const enemyData = this._createTurret(x, z, size, scale);
-        if (enemyData) this.enemies.push(enemyData);
+      let shipType = null;
+      if (enemyShipLevel >= 4) {
+        shipType = Math.random() < 0.5 ? 'cruiser' : 'battleship';
       }
 
-      const enemyShipLevel = Math.max(1, level - 1);
-      for (let i = 0; i < 10; i++) {
-        let x, z, attempts = 0;
-        do {
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 200 + Math.random() * 1800;
-          x = playerPos.x + Math.cos(angle) * dist;
-          z = playerPos.z + Math.sin(angle) * dist;
-          attempts++;
-        } while (this.terrain && this.terrain.isLand(x, z) && attempts < 20);
-        if (attempts >= 20) continue;
-
-        const tooClose = this.enemies.some(e => {
-          const edx = e.mesh.position.x - x;
-          const edz = e.mesh.position.z - z;
-          return Math.sqrt(edx * edx + edz * edz) < 100;
-        });
-        if (tooClose) continue;
-
-        let shipType = null;
-        if (enemyShipLevel >= 4) {
-          shipType = Math.random() < 0.5 ? 'cruiser' : 'battleship';
-        }
-
-        const ship = new EnemyShip(this.scene, this.terrain, x, z, enemyShipLevel, shipType);
-        this.enemies.push(ship);
-      }
+      const ship = new EnemyShip(this.scene, this.terrain, pos.x, pos.z, enemyShipLevel, shipType);
+      this.enemies.push(ship);
     }
-  }
-
-  _createTurret(x, z, size, scale) {
-    const group = new THREE.Group();
-
-    const r = Math.max(0.5, 0.83 - scale.size * 0.03);
-    const g = Math.max(0.3, 0.53 - scale.size * 0.02);
-    const b = Math.max(0.3, 0.44 - scale.size * 0.015);
-
-    const baseMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(r * 0.8, g * 0.8, b * 0.8) });
-    applyHalfLambert(baseMat);
-    const base = new THREE.Mesh(
-      new THREE.BoxGeometry(size, 2, size),
-      baseMat
-    );
-    base.position.y = 1;
-    group.add(base);
-
-    const underwaterMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(r * 0.4, g * 0.4, b * 0.4) });
-    applyHalfLambert(underwaterMat);
-    const underwaterHull = new THREE.Mesh(
-      new THREE.BoxGeometry(size * 1.1, 3, size * 1.1),
-      underwaterMat
-    );
-    underwaterHull.position.y = -1.5;
-    group.add(underwaterHull);
-
-    const bodyMat = new THREE.MeshPhongMaterial({ color: new THREE.Color(r, g, b) });
-    applyHalfLambert(bodyMat);
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(size, size, size),
-      bodyMat
-    );
-    body.position.y = size / 2 + 2;
-    group.add(body);
-
-    const turretBarrelMat = new THREE.MeshPhongMaterial({ color: 0x553333 });
-    applyHalfLambert(turretBarrelMat);
-    const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.4, 0.4, size * 0.8, 8),
-      turretBarrelMat
-    );
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0, size * 0.6);
-    body.add(barrel);
-
-    const hpBarBg = new THREE.Mesh(
-      new THREE.PlaneGeometry(size * 0.8, 1),
-      new THREE.MeshBasicMaterial({ color: 0x333333, depthTest: false, transparent: true })
-    );
-    hpBarBg.position.y = size + 8;
-    hpBarBg.renderOrder = 999;
-    group.add(hpBarBg);
-
-    const hpBarFill = new THREE.Mesh(
-      new THREE.PlaneGeometry(size * 0.8, 0.8),
-      new THREE.MeshBasicMaterial({ color: 0x44cc44, depthTest: false, transparent: true })
-    );
-    hpBarFill.position.y = size + 8;
-    hpBarFill.renderOrder = 1000;
-    group.add(hpBarFill);
-
-    group.position.set(x, 0, z);
-    this.scene.add(group);
-
-    const enemyHp = scale.hp;
-    const enemyDamage = scale.damage;
-    const enemyScore = scale.score;
-
-    return {
-      mesh: group, body, barrel, hpBarBg, hpBarFill,
-      type: 'turret',
-      hp: enemyHp, maxHp: enemyHp, alive: true,
-      size, damage: enemyDamage, scoreValue: enemyScore,
-      cooldown: ENEMY_FIRE_COOLDOWN * (0.5 + Math.random() * 0.5),
-      takeDamage(amount) {
-        this.hp -= amount;
-        if (this.hp < 0) this.hp = 0;
-      },
-    };
   }
 
   update(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager) {
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
 
-      if (enemy.type === 'ship') {
-        enemy.updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager);
-        continue;
-      }
-
-      enemy.cooldown -= dt;
-
-      const size = enemy.size;
-
-      if (camera) {
-        const hpPercent = enemy.hp / enemy.maxHp;
-        enemy.hpBarFill.scale.x = Math.max(0.001, hpPercent);
-        enemy.hpBarFill.position.x = -(1 - hpPercent) * size * 0.4;
-        if (hpPercent > 0.6) enemy.hpBarFill.material.color.setHex(0x44cc44);
-        else if (hpPercent > 0.3) enemy.hpBarFill.material.color.setHex(0xccaa22);
-        else enemy.hpBarFill.material.color.setHex(0xff3333);
-        enemy.hpBarBg.lookAt(camera.position);
-        enemy.hpBarFill.lookAt(camera.position);
-      }
-
-      const dx = playerPos.x - enemy.mesh.position.x;
-      const dz = playerPos.z - enemy.mesh.position.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-
-      if (dist < ENEMY_DETECT_RANGE) {
-        // Lead prediction
-        const flightTime = dist / ENEMY_FIRE_SPEED;
-        const leadX = playerPos.x + Math.sin(playerHeading) * playerSpeed * flightTime;
-        const leadZ = playerPos.z + Math.cos(playerHeading) * playerSpeed * flightTime;
-        const leadDx = leadX - enemy.mesh.position.x;
-        const leadDz = leadZ - enemy.mesh.position.z;
-        const leadDist = Math.sqrt(leadDx * leadDx + leadDz * leadDz);
-
-        const targetYaw = Math.atan2(leadDx, leadDz);
-        enemy.body.rotation.y = targetYaw;
-
-        const fireOriginY = enemy.mesh.position.y + size / 2 + 2;
-        const horizDist = leadDist;
-        const dy = playerPos.y - fireOriginY;
-
-        let pitch;
-        if (horizDist < 1) {
-          pitch = Math.PI / 6;
-        } else {
-          const v2 = ENEMY_FIRE_SPEED * ENEMY_FIRE_SPEED;
-          const v4 = v2 * v2;
-          const disc = v4 - GRAVITY * (GRAVITY * horizDist * horizDist + 2 * dy * v2);
-          if (disc < 0) {
-            pitch = Math.PI / 6;
-          } else {
-            pitch = Math.atan((v2 - Math.sqrt(disc)) / (GRAVITY * horizDist));
-          }
-          pitch = Math.max(-20 * Math.PI / 180, Math.min(80 * Math.PI / 180, pitch));
-        }
-
-        pitch = compensateDragPitch(pitch, horizDist, ENEMY_FIRE_SPEED);
-
-        enemy.barrel.rotation.x = Math.PI / 2 - pitch;
-
-        if (enemy.cooldown <= 0) {
-          const firePos = new THREE.Vector3(
-            enemy.mesh.position.x,
-            fireOriginY,
-            enemy.mesh.position.z
-          );
-          const dirX = Math.sin(targetYaw) * Math.cos(pitch);
-          const dirY = Math.sin(pitch);
-          const dirZ = Math.cos(targetYaw) * Math.cos(pitch);
-          const dir = applyCannonSpread({ x: dirX, y: dirY, z: dirZ }, horizDist);
-          projectileManager.fire(firePos, dir, enemy.damage, 'enemy');
-          enemy.cooldown = ENEMY_FIRE_COOLDOWN;
-        }
-      }
+      // All enemies are ships now (turrets removed); drive each through its
+      // own AI state machine.
+      enemy.updateShip(dt, playerPos, playerHeading, playerSpeed, projectileManager, camera, torpedoManager);
     }
 
     for (let i = this.explosions.length - 1; i >= 0; i--) {
