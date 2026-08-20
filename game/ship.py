@@ -1,7 +1,7 @@
 import math
 from game.config import (
     BASE_MAX_SPEED, ACCEL, DECEL_FRICTION, MAP_HALF,
-    get_ship_config, get_drift_config,
+    get_ship_config, get_drift_config, SUBMARINE,
 )
 from game.skills import ShipSkills
 
@@ -34,6 +34,17 @@ class ServerShip:
 
         self.turret_cooldowns = [0.0] * (cfg["front_turrets"] + cfg["back_turrets"])
         self.skills = ShipSkills()
+
+        # Submarine dive state. Fields exist on every ship (always surfaced) so
+        # callers don't need to special-case non-submarines. Mirrors frontend
+        # ship.js Ship.updateDiveTransition.
+        self.submerged = False        # target dive state
+        self.dive_depth = 0.0         # current depth in m (0=surfaced)
+        self.dive_transition = 0.0    # 0=surfaced, 1=submerged (eased)
+        self.surface_max_speed = self.max_speed
+        self.underwater_max_speed = self.max_speed * SUBMARINE["underwater_speed_mul"]
+        self.surface_turn_radius = self.turn_radius
+        self.underwater_turn_radius = self.turn_radius * SUBMARINE["underwater_turn_mul"]
 
     def update(self, dt, keys, terrain=None):
         if not self.alive:
@@ -78,6 +89,38 @@ class ServerShip:
 
         self.pos_x = new_x
         self.pos_z = new_z
+
+        self.update_dive_transition(dt)
+
+    def update_dive_transition(self, dt):
+        """Advance dive state for submarines, swapping speed/turn profiles.
+        No-op (besides a no-op return) for non-submarines."""
+        if self.ship_class != "submarine":
+            return
+
+        target = 1.0 if self.submerged else 0.0
+        rate = 1.0 / SUBMARINE["transition_time"]
+        if self.dive_transition < target:
+            self.dive_transition = min(target, self.dive_transition + rate * dt)
+        elif self.dive_transition > target:
+            self.dive_transition = max(target, self.dive_transition - rate * dt)
+        self.dive_depth = self.dive_transition * SUBMARINE["dive_depth"]
+
+        t = self.dive_transition
+        self.max_speed = self.surface_max_speed + (self.underwater_max_speed - self.surface_max_speed) * t
+        self.turn_radius = self.surface_turn_radius + (self.underwater_turn_radius - self.surface_turn_radius) * t
+
+    def toggle_dive(self):
+        """Toggle the submarine's target dive state. No-op for non-submarines."""
+        if self.ship_class != "submarine" or not self.alive:
+            return False
+        self.submerged = not self.submerged
+        return True
+
+    @property
+    def fully_submerged(self):
+        return (self.ship_class == "submarine"
+                and self.dive_depth >= SUBMARINE["shell_immunity_depth"])
 
     def _apply_drift(self, dt):
         drift_cfg = get_drift_config(self.ship_class)
@@ -156,4 +199,8 @@ class ServerShip:
             "lvl": self.level,
             "shipClass": self.ship_class,
             "skl": self.skills.to_snapshot(),
+            # Submarine dive state (0 = surfaced, >0 = current depth in m).
+            # Clients use this to hide the mesh of enemy submarines that are
+            # fully submerged and to skip their minimap blip.
+            "dive": round(self.dive_depth, 2),
         }

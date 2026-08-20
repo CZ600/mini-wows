@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { LEVEL_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch } from './turret.js';
 import { applyHalfLambert } from './scene.js';
-import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag, SUBMARINE } from './config.js';
+import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag } from './config.js';
 
 export const ENEMY_SCALE = {
   1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
@@ -35,12 +35,10 @@ const SHIP_TURN_RATE = Math.PI / 3;
 // Single-player (solo) mode tuning.
 // Spawns land in the annulus [SPAWN_MIN_DIST, SPAWN_MAX_DIST] around the player
 // so enemies never appear within the keep-out radius but stay close enough to
-// reach the fight. The keep-out radius shrinks for early levels so low-level
-// fights don't force long chases to close 700m before engaging.
-const SOLO_SPAWN_MIN_DIST_LOW = 600;   // < level 4: 600m keep-out radius
-const SOLO_SPAWN_MIN_DIST = 700;       // >= level 4: 700m keep-out radius
-const SOLO_SPAWN_MAX_DIST = 1500;      // 1.5km spawn radius (random within)
-const SOLO_SPAWN_MIN_SEP = 100;        // min spacing between spawned enemies
+// reach the fight.
+const SOLO_SPAWN_MIN_DIST = 700;   // 700m keep-out radius (no spawn inside)
+const SOLO_SPAWN_MAX_DIST = 1500;  // 1.5km spawn radius (random within)
+const SOLO_SPAWN_MIN_SEP = 100;    // min spacing between spawned enemies
 
 // Orbit band: within ENEMY_ORBIT_RANGE the ship stops chasing and circles the
 // player, maintaining the orbit radius inside [ENEMY_ORBIT_MIN, ENEMY_ORBIT_MAX].
@@ -60,7 +58,6 @@ export class EnemyShip {
     this.terrain = terrain;
     this.enemyLevel = enemyLevel;
     this.shipType = shipType;
-    this.shipClass = shipType;   // duck-type used by ASW target selection
     this.type = 'ship';
     this.alive = true;
 
@@ -71,11 +68,9 @@ export class EnemyShip {
     this.shipHeight = cfg.height || 2.5;
     this._hasBridge = cfg.hasBridge || false;
 
-    // Use player-equivalent stats instead of ENEMY_SHIP_SCALE. Early-game enemy
-    // ships are tuned down so level 1 is approachable: their HP is halved.
-    const hpMul = enemyLevel === 1 ? 0.5 : 1.0;
-    this.hp = Math.max(1, Math.round(cfg.hp * hpMul));
-    this.maxHp = this.hp;
+    // Use player-equivalent stats instead of ENEMY_SHIP_SCALE
+    this.hp = cfg.hp;
+    this.maxHp = cfg.hp;
     this.damage = cfg.damage;
     this.maxSpeed = cfg.maxSpeed || BASE_MAX_SPEED;
     this.fireCooldown = cfg.fireCooldown;
@@ -107,12 +102,6 @@ export class EnemyShip {
     // the player; team-mode subclasses override via _decideAI).
     this.faction = 'enemy';
     this.fireTarget = null;
-
-    // Submarine dive state (only meaningful for shipType === 'submarine'). An
-    // enemy sub dives once it gets close, becoming fullySubmerged (immune to
-    // shells, vulnerable only to depth charges). Mirrors Ship.fullySubmerged.
-    this.submerged = false;
-    this.diveDepth = 0;
 
     this._buildMesh(cfg);
     this.mesh.position.set(x, 0, z);
@@ -279,23 +268,21 @@ export class EnemyShip {
     this.hpBarBg.renderOrder = 999;
     this.mesh.add(this.hpBarBg);
 
-    // Fill geometry stays CENTRED on the mesh origin (do NOT translate it). This
-    // is critical: the fill is billboarded each frame via lookAt(camera) while
-    // being non-uniformly scaled in X (scale.x = hpPercent). three.js's lookAt
-    // does not support non-uniform scaling on an object whose geometry centre
-    // is offset from its origin — translating the geometry caused the plane to
-    // skew/shear and its right edge to read as "missing" even at full HP. By
-    // keeping the geometry centred and adjusting position.x per frame instead
-    // (see updateShip), the billboard stays a clean rectangle at every HP.
+    // Fill geometry is left-anchored: translate it +hpWidth/2 in X so its left
+    // edge sits at the local origin. Then scaling X shrinks it from the right
+    // (left edge stays put) instead of contracting from both ends toward the
+    // centre. Combined with the position offset each frame, the fill depletes
+    // cleanly from one end.
     const fillGeo = new THREE.PlaneGeometry(hpWidth, 1.2);
+    fillGeo.translate(hpWidth / 2, 0, 0);
     this.hpBarFill = new THREE.Mesh(
       fillGeo,
       new THREE.MeshBasicMaterial({ color: 0x44cc44, depthTest: false, transparent: true })
     );
-    // Centred (position.x = 0); updateShip nudges it left as HP drops so the
-    // left edge aligns with the background's left edge and the bar depletes
-    // from the right.
-    this.hpBarFill.position.x = 0;
+    // Start the fill at the LEFT edge of the background (background spans
+    // [-hpWidth/2, +hpWidth/2]; the fill's own left edge is at its origin, so
+    // place the origin at -hpWidth/2).
+    this.hpBarFill.position.x = -hpWidth / 2;
     this.hpBarFill.position.y = deckY + cfg.height + 3;
     this.hpBarFill.renderOrder = 1000;
     this.mesh.add(this.hpBarFill);
@@ -521,15 +508,10 @@ export class EnemyShip {
 
     if (camera) {
       const hpPercent = this.hp / this.maxHp;
-      // Fill geometry is centred on the origin (see _buildMesh), so to deplete
-      // from the RIGHT we both shrink it (scale.x) and shift its centre left so
-      // its left edge stays flush with the background's left edge. Background
-      // spans [-hpWidth/2, +hpWidth/2]; at full HP scale=1 and position.x=0
-      // reproduces that exactly. As HP drops the fill narrows and its right
-      // edge retracts toward the left, leaving the background visible behind.
-      const w = Math.max(0.0001, hpPercent);
-      this.hpBarFill.scale.x = w;
-      this.hpBarFill.position.x = -(1 - w) * this._hpWidth / 2;
+      // Fill is left-anchored (geometry translated +hpWidth/2, origin at the
+      // background's left edge). Scaling X depletes it from the right while the
+      // left edge stays put — no per-frame position nudging needed.
+      this.hpBarFill.scale.x = Math.max(0.0001, hpPercent);
       this._updateHpBarColor(hpPercent);
       this.hpBarBg.lookAt(camera.position);
       this.hpBarFill.lookAt(camera.position);
@@ -624,20 +606,6 @@ export class EnemyShip {
       torpedoManager.fire(this.mesh.position, aimHeading, 1, this.enemyLevel, 2, 'narrow', this.faction);
       this.torpedoCooldown = 15;
     }
-
-    // Enemy submarine: dive when close (handled in _updateEnemyDive) and launch
-    // homing torpedoes. Torpedoes work submerged, so the sub attacks from
-    // stealth — only depth charges (ASW) can answer it.
-    if (this.shipType === 'submarine' && torpedoManager &&
-        this.fireTarget && this.state !== 'idle' && this.state !== 'reposition' &&
-        ftDist < 700 && this.torpedoCooldown <= 0) {
-      const aimHeading = Math.atan2(ftDx, ftDz);
-      torpedoManager.fire(this.mesh.position, aimHeading, 2, this.enemyLevel, 4, 'narrow', this.faction);
-      this.torpedoCooldown = 12;
-    }
-
-    // Advance dive state (sinks the mesh + sets fullySubmerged for ASW).
-    this._updateEnemyDive(dt);
   }
 
   takeDamage(amount) {
@@ -646,43 +614,6 @@ export class EnemyShip {
     // Optional hook so callers (e.g. the solo engine) can collect per-hit
     // feedback. team-mode units don't set this, so it stays a no-op there.
     if (this.onDamaged) this.onDamaged(amount, this);
-  }
-
-  // An enemy submarine counts as fully submerged (shell-immune, ASW-vulnerable)
-  // once its diveDepth clears the shell-immunity threshold. Non-subs never are.
-  // Mirrors Ship.fullySubmerged so the existing depth_charge / shell logic in
-  // projectile.js applies unchanged.
-  get fullySubmerged() {
-    return this.shipClass === 'submarine' && this.diveDepth >= SUBMARINE.shellImmunityDepth;
-  }
-
-  // Advance an enemy submarine's dive state: dive when close to its fire target,
-  // surface otherwise. Updates diveDepth + sinks the mesh like Ship does. No-op
-  // for non-submarines so updateShip can call it unconditionally.
-  _updateEnemyDive(dt) {
-    if (this.shipClass !== 'submarine') {
-      this.mesh.position.y = 0;
-      return;
-    }
-    // Dive when within torpedo range of the target so the sub can attack from
-    // stealth; surface to reposition when far.
-    const tgt = this.fireTarget;
-    const tx = tgt ? tgt.x : null;
-    const tz = tgt ? tgt.z : null;
-    const close = (tx != null)
-      ? Math.hypot(tx - this.mesh.position.x, tz - this.mesh.position.z) < 500
-      : false;
-    this.submerged = close;
-    const target = close ? 1 : 0;
-    const rate = 1 / SUBMARINE.transitionTime;
-    if (this.diveDepth / SUBMARINE.diveDepth < target) {
-      this.diveDepth = Math.min(target * SUBMARINE.diveDepth, this.diveDepth + SUBMARINE.diveDepth * rate * dt);
-    } else {
-      this.diveDepth = Math.max(target * SUBMARINE.diveDepth, this.diveDepth - SUBMARINE.diveDepth * rate * dt);
-    }
-    this.mesh.position.y = -this.diveDepth;
-    // A submerged sub is hidden (no minimap blip / mesh) like the player sub.
-    this.mesh.visible = this.diveDepth < SUBMARINE.shellImmunityDepth || !close;
   }
 }
 
@@ -694,15 +625,13 @@ export class EnemyManager {
     this.explosions = [];
   }
 
-  // Pick a water position in the annulus [minDist, SOLO_SPAWN_MAX_DIST]
+  // Pick a water position in the annulus [SOLO_SPAWN_MIN_DIST, SOLO_SPAWN_MAX_DIST]
   // around the player, avoiding land and keeping SOLO_SPAWN_MIN_SEP from already-
   // placed enemies. Returns {x, z} or null if no valid spot was found in 20 tries.
-  // minDist lowers for early levels (< 4) so enemies spawn closer to the player.
-  _findSpawnPos(playerPos, level = 1) {
-    const minDist = level < 4 ? SOLO_SPAWN_MIN_DIST_LOW : SOLO_SPAWN_MIN_DIST;
+  _findSpawnPos(playerPos) {
     for (let attempts = 0; attempts < 20; attempts++) {
       const angle = Math.random() * Math.PI * 2;
-      const dist = minDist + Math.random() * (SOLO_SPAWN_MAX_DIST - minDist);
+      const dist = SOLO_SPAWN_MIN_DIST + Math.random() * (SOLO_SPAWN_MAX_DIST - SOLO_SPAWN_MIN_DIST);
       const x = playerPos.x + Math.cos(angle) * dist;
       const z = playerPos.z + Math.sin(angle) * dist;
 
@@ -724,8 +653,8 @@ export class EnemyManager {
   // every wave is now pure EnemyShip fleet. Counts are unchanged:
   //   level < 3  -> ENEMY_SCALE[level].count  ships (was that many turrets)
   //   level >= 3 -> 10 ships                   (was 5 turrets + 10 ships)
-  // Spawn positions use the [600m/700m, 1500m] annulus (keep-out radius drops to
-  // 600m for levels < 4) so enemies never appear too close but stay within reach.
+  // Spawn positions use the [700m, 1500m] annulus so enemies never appear
+  // within the keep-out radius but stay within 1.5km of the player.
   spawn(playerPos, level = 1) {
     this.clear();
     const scale = ENEMY_SCALE[level] || ENEMY_SCALE[10];
@@ -733,22 +662,12 @@ export class EnemyManager {
     const enemyShipLevel = Math.max(1, level - 1);
 
     for (let i = 0; i < count; i++) {
-      const pos = this._findSpawnPos(playerPos, level);
+      const pos = this._findSpawnPos(playerPos);
       if (!pos) continue;
 
-      // Class assignment tracks the PLAYER's level, not enemyShipLevel:
-      // getClassConfig(shipType, lvl) is only valid for lvl >= 4, so cruisers
-      // (which get torpedoes from their class config) first appear at player
-      // level 4. The old `enemyShipLevel >= 4` check gated this one level too
-      // late, so level-4 cruisers were never created and never fired torpedoes.
       let shipType = null;
-      if (level >= 4) {
-        // Mix cruisers / battleships, with an occasional submarine so the
-        // player's ASW (depth charges) has a target to hunt.
-        const r = Math.random();
-        if (r < 0.20) shipType = 'submarine';
-        else if (r < 0.60) shipType = 'cruiser';
-        else shipType = 'battleship';
+      if (enemyShipLevel >= 4) {
+        shipType = Math.random() < 0.5 ? 'cruiser' : 'battleship';
       }
 
       const ship = new EnemyShip(this.scene, this.terrain, pos.x, pos.z, enemyShipLevel, shipType);

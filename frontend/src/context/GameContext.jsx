@@ -52,6 +52,12 @@ export function GameProvider({ children }) {
   const [scoped, setScoped] = useState(false);
   const [levelUpInfo, setLevelUpInfo] = useState(null);
   const [spInitialized, setSpInitialized] = useState(false);
+  // Carrier patrol map overlay (M key). Toggled by engine.onCarrierMapToggle.
+  const [carrierMapOpen, setCarrierMapOpen] = useState(false);
+  // Solo 3→4 class-select overlay. Rendered as an in-game overlay (NOT a route)
+  // so the game <canvas> stays mounted and the engine can resume after the
+  // pick — navigating away would unmount the canvas and orphan the ship.
+  const [classSelectPending, setClassSelectPending] = useState(false);
   // Floating hit/kill feedback pop-ups (solo). Each entry: {id, type, amount|score, ts}.
   const [hitFeedback, setHitFeedback] = useState([]);
   const hitFeedbackIdRef = useRef(0);
@@ -97,25 +103,63 @@ export function GameProvider({ children }) {
   const onGameOverSp = useCallback((score, level, enemies, extra) => {
     setGameResult({ score, enemies, level, ...(extra || {}) });
     if (document.pointerLockElement) document.exitPointerLock();
+    // Stop the round's ambient/BGM so it doesn't keep playing on the results
+    // screen. This also prevents overlap: the multiplayer engine owns a SEPARATE
+    // AudioManager whose startBGM() guard only dedupes within its own instance,
+    // so leftover single-player BGM would stack on top of a multiplayer match's
+    // BGM if the player launches one from the lobby.
+    if (engineRef.current?.audio) engineRef.current.audio.stopAll();
     if (gameIdRef.current) {
       finishGame(gameIdRef.current, score, level, enemies, 'sunk').catch(() => {});
     }
     navigateRef.current?.('/gameover');
   }, []);
   const onClassSelect = useCallback(() => {
-    navigateRef.current?.('/class-select');
+    // Show the class-select as an in-game overlay (kept inside SinglePlayPage),
+    // NOT a routed page: routing away would unmount the <canvas> and orphan the
+    // ship, since engine.init() on the remounted canvas never recreates it.
+    if (document.pointerLockElement) document.exitPointerLock();
+    setClassSelectPending(true);
   }, []);
   // Append a single-player hit/kill event to the feedback queue with a unique
   // id + timestamp (used by the pop-up layer to animate + expire it). Capped so
   // a runaway burst can't grow unbounded.
   const onHitFeedback = useCallback((event) => {
     const id = ++hitFeedbackIdRef.current;
-    const entry = { id, type: event.type, ts: performance.now() };
+    const now = performance.now();
+    const entry = { id, type: event.type, ts: now };
     if (event.type === 'damage') entry.amount = event.amount;
     else if (event.type === 'kill') entry.score = event.score;
+    // Drop any pop-ups whose TTL already elapsed while adding the new one. This
+    // guarantees stale DOM nodes (frozen at their "forwards" end keyframe) are
+    // unmounted even during a rapid burst, where the prune timer keeps getting
+    // rescheduled and would otherwise leave expired entries mounted.
+    const DAMAGE_TTL = 900;
+    const KILL_TTL = 1500;
     setHitFeedback((prev) => {
-      const next = [...prev, entry];
+      const kept = prev.filter((e) => {
+        const ttl = e.type === 'kill' ? KILL_TTL : DAMAGE_TTL;
+        return now - e.ts < ttl;
+      });
+      const next = [...kept, entry];
       return next.length > 12 ? next.slice(next.length - 12) : next;
+    });
+  }, []);
+
+  // Drop pop-ups whose TTL has elapsed so the events array stays bounded and
+  // stale DOM nodes (left frozen at their CSS "forwards" keyframe, i.e.
+  // invisible) actually unmount. Called by HitFeedbackLayer on a timer.
+  const pruneHitFeedback = useCallback(() => {
+    const now = performance.now();
+    const DAMAGE_TTL = 900;
+    const KILL_TTL = 1500;
+    setHitFeedback((prev) => {
+      if (prev.length === 0) return prev;
+      const next = prev.filter((e) => {
+        const ttl = e.type === 'kill' ? KILL_TTL : DAMAGE_TTL;
+        return now - e.ts < ttl + 50;
+      });
+      return next.length === prev.length ? prev : next;
     });
   }, []);
 
@@ -140,6 +184,7 @@ export function GameProvider({ children }) {
       engine.onClassSelect = onClassSelect;
       engine.onHitFeedback = onHitFeedback;
       engine.onTeamLabelsUpdate = setTeamLabels;
+      engine.onCarrierMapToggle = () => setCarrierMapOpen((v) => !v);
 
       // Multiplayer engine callbacks
       mpEngine.onHudUpdate = setMpHudData;
@@ -304,6 +349,20 @@ export function GameProvider({ children }) {
   };
 
   const handleRestart = async () => {
+    // Team-battle rematch: keep the SAME level + ship class as the failed battle
+    // (the player wants to retry that fight, not drop back to solo level 1). For
+    // solo, the original "reset to level 1" behaviour is preserved.
+    if (gameResult && gameResult.mode === 'team') {
+      pendingStartRef.current = {
+        level: gameResult.level || 6,
+        shipClass: gameResult.shipClass || null,
+        mode: 'team',
+      };
+      spStartedRef.current = false;
+      setSpInitialized(false);
+      nav('/loading?next=/play');
+      return;
+    }
     if (playerIdRef.current) {
       resetPlayerProgress(playerIdRef.current).catch(() => {});
     }
@@ -320,14 +379,16 @@ export function GameProvider({ children }) {
   };
 
   const handleClassSelect = async (shipClass) => {
+    // Resume the live engine: selectClass() rebuilds the ship at level 4 with
+    // the chosen class and restarts its RAF loop. The canvas is still mounted
+    // (the overlay was rendered in-page), so we must NOT navigate/re-init —
+    // doing so would drop the player's existing ship and enemies.
     engine.selectClass(shipClass);
-    pendingStartRef.current = { level: engine.level || 4, shipClass };
-    spStartedRef.current = true;
     if (playerIdRef.current) {
       setPlayerClass(playerIdRef.current, shipClass).catch(() => {});
       savePlayerProgress(playerIdRef.current, 4).catch(() => {});
     }
-    nav('/loading?next=/play');
+    setClassSelectPending(false);
   };
 
   const handleMultiplayer = async () => {
@@ -403,6 +464,10 @@ export function GameProvider({ children }) {
   };
 
   const handleBackToLobby = () => {
+    // Defense-in-depth: game_end already calls stopAll(), but if the round
+    // somehow ended without that message reaching us (disconnect, race), the
+    // BGM would otherwise keep looping on top of whatever the player does next.
+    if (mpEngineRef.current?.audio) mpEngineRef.current.audio.stopAll();
     setMpEliminated(false);
     setRoomInfo(null);
     setMpCountdown(null);
@@ -460,8 +525,10 @@ export function GameProvider({ children }) {
 
     // Single player state
     hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,
-    hitFeedback, setHitFeedback,
+    hitFeedback, setHitFeedback, pruneHitFeedback,
     teamLabels,
+    classSelectPending,
+    carrierMapOpen, setCarrierMapOpen,
 
     // Multiplayer state
     roomInfo, mpHudData, mpCountdown, mpMinimapData, mpScoped, mpEliminated, mpShipLabels,

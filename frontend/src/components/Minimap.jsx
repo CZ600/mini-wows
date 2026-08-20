@@ -60,6 +60,25 @@ export default function Minimap({ data }) {
       }
     }
 
+    // Optional secondary blip (the carrier hull, drawn while the player flies
+    // the squadron so they can find their way home). Drawn before the player
+    // marker so the player marker stays on top.
+    if (d.followPos) {
+      const fx = (d.followPos.x - d.playerPos.x) * scale + SIZE / 2;
+      const fz = (d.followPos.z - d.playerPos.z) * scale + SIZE / 2;
+      if (fx >= 0 && fx <= SIZE && fz >= 0 && fz <= SIZE) {
+        ctx.fillStyle = '#6ec8ff';
+        ctx.beginPath();
+        ctx.arc(fx, fz, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#6ec8ff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(fx, fz, 6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
     ctx.save();
     ctx.translate(SIZE / 2, SIZE / 2);
     ctx.rotate(Math.PI - d.playerHeading);

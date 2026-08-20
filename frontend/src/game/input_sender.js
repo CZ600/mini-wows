@@ -79,6 +79,92 @@ export class InputSender {
     this.ws.send(msg);
   }
 
+  sendDive() {
+    this.seq++;
+    const msg = {
+      type: 'dive',
+      seq: this.seq,
+      ts: Date.now(),
+    };
+    this._pendingInputs.push(msg);
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
+  // Carrier squadron control. toggle_view switches ship<->squadron; fly_input
+  // streams held keys each tick; drop releases one ordinance point.
+  sendToggleView() {
+    this.seq++;
+    const msg = {
+      type: 'toggle_view',
+      seq: this.seq,
+      ts: Date.now(),
+    };
+    this._pendingInputs.push(msg);
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
+  // Carrier air-group launch / switch (keys 5/6). `group` is 'torpedo' or
+  // 'bomber'. The server launches the squadron (if steering) and arms that
+  // group, or just switches the active group if already flying.
+  sendLaunch(group) {
+    this.seq++;
+    const msg = {
+      type: 'launch_squadron',
+      seq: this.seq,
+      ts: Date.now(),
+      group,
+    };
+    this._pendingInputs.push(msg);
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
+  // Carrier squadron auto-pilot (auto-attack) toggle. Server-authoritative:
+  // when on, the server Squadron flies + drops itself; the client mirrors it.
+  sendAutoPilotToggle() {
+    this.seq++;
+    const msg = {
+      type: 'toggle_autopilot',
+      seq: this.seq,
+      ts: Date.now(),
+    };
+    this._pendingInputs.push(msg);
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
+  sendFlyInput(keys) {
+    this.seq++;
+    const msg = {
+      type: 'fly_input',
+      seq: this.seq,
+      ts: Date.now(),
+      w: keys.w ? 1 : 0,
+      a: keys.a ? 1 : 0,
+      s: keys.s ? 1 : 0,
+      d: keys.d ? 1 : 0,
+    };
+    // Aircraft position is fully server-authoritative; don't track fly inputs
+    // in pendingInputs (no rollback needed for them).
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
+  sendDrop(kind) {
+    this.seq++;
+    const msg = {
+      type: 'drop',
+      seq: this.seq,
+      ts: Date.now(),
+      kind,
+    };
+    this._pendingInputs.push(msg);
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
   sendTorpedo(heading, tier, spread) {
     this.seq++;
     const msg = {

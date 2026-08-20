@@ -4,6 +4,8 @@ const SHIP_CLASSES = [
   { id: 'destroyer', name: '驱逐舰', icon: '⚡' },
   { id: 'cruiser', name: '巡洋舰', icon: '🛡️' },
   { id: 'battleship', name: '战列舰', icon: '🏰' },
+  { id: 'submarine', name: '潜艇', icon: '🫧' },
+  { id: 'carrier', name: '航母', icon: '✈️' },
 ];
 
 export default function RoomScreen({ roomInfo, userId, onReady, onLeave, onSelectClass }) {

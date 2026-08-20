@@ -18,6 +18,7 @@ import ShipLabels from './components/ShipLabels.jsx';
 import GameOverScreen from './components/GameOverScreen.jsx';
 import LeaderboardPanel from './components/LeaderboardPanel.jsx';
 import ClassSelectScreen from './components/ClassSelectScreen.jsx';
+import CarrierMap from './components/CarrierMap.jsx';
 import TutorialPage from './components/TutorialPage.jsx';
 import ExitConfirmModal from './components/ExitConfirmModal.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
@@ -113,33 +114,36 @@ function LevelUpNotification({ info }) {
 // crosshair (multiple in a burst stagger horizontally); kills flash a gold
 // banner across the top.
 //
-// Robustness: each pop-up is purely CSS-animated (animationDuration = TTL) so
-// it stays visible for its whole life regardless of React re-renders. State is
-// only pruned by a setTimeout scheduled on each new event, which forces a
-// re-render after the longest pop-up would have expired. No shared rAF clock,
-// no render-time performance.now() reads — both of which previously caused the
-// pop-ups to never appear.
+// Lifecycle: each pop-up is purely CSS-animated (animationDuration = TTL) and
+// mounts fresh per event id, so the animation always runs from 0%. The parent
+// (GameContext) owns the events array; this layer requests a prune once every
+// pop-up would have expired so the array never grows unbounded. Crucially, we
+// only ever render entries whose TTL has NOT elapsed — keeping a stale entry
+// in the list would reuse its DOM node (same key) and leave the pop-up frozen
+// at its final "forwards" keyframe (invisible), which is what previously made
+// damage numbers vanish.
 const HIT_DAMAGE_TTL = 900;   // ms a damage number lives
 const HIT_KILL_TTL = 1500;    // ms a kill banner lives
 
-function HitFeedbackLayer({ events }) {
-  // Bump a counter to force a prune re-render shortly after the newest pop-up
-  // would have finished animating. Using events.length as the dep means a new
-  // hit reschedules the timer (so a burst never gets pruned mid-animation).
-  const [, bump] = useState(0);
+function HitFeedbackLayer({ events, onPrune }) {
+  // Drive expiry from an effect (not during render): once the oldest pop-up
+  // would have expired, ask the parent to prune stale entries. We re-schedule
+  // on every change to `events` so a fresh hit always resets the timer and a
+  // burst never gets pruned mid-animation. The parent's pruner drops entries
+  // whose TTL elapsed, which unmounts the DOM node — keeping a stale node
+  // around would leave it frozen at its CSS "forwards" end keyframe (invisible)
+  // and, worse, its id could be reused by a new hit that then never animates.
   const count = events ? events.length : 0;
   useEffect(() => {
-    if (count === 0) return;
-    const id = setTimeout(() => bump((n) => n + 1), HIT_KILL_TTL + 50);
+    if (count === 0 || !onPrune) return;
+    const id = setTimeout(onPrune, HIT_KILL_TTL + 50);
     return () => clearTimeout(id);
-  }, [count]);
+  }, [count, onPrune]);
 
   if (!events || events.length === 0) return null;
 
-  // Keep only the most recent 12; the setTimeout-driven re-render above prunes
-  // expired entries (they self-fade via CSS so we don't need to hide them at
-  // the exact expiry tick). No render-time performance.now() read keeps this
-  // pure (react-hooks/purity).
+  // Keep only the most recent 12. The events array is already pruned of expired
+  // entries by the parent (see onPrune), so everything left here is live.
   const list = events.length > 12 ? events.slice(events.length - 12) : events;
 
   // Index-within-type so overlapping damage numbers fan out horizontally.
@@ -147,10 +151,10 @@ function HitFeedbackLayer({ events }) {
   let dmgIdx = 0;
   let killIdx = 0;
   for (const e of list) {
-    if (e.type === 'damage') {
-      visible.push({ ...e, ttl: HIT_DAMAGE_TTL, idxWithinType: dmgIdx++ });
-    } else {
+    if (e.type === 'kill') {
       visible.push({ ...e, ttl: HIT_KILL_TTL, idxWithinType: killIdx++ });
+    } else {
+      visible.push({ ...e, ttl: HIT_DAMAGE_TTL, idxWithinType: dmgIdx++ });
     }
   }
 
@@ -322,8 +326,10 @@ function SinglePlayPage() {
   const {
     engine, hudData, minimapData, scoped, levelUpInfo, spInitialized, setSpInitialized,
     pendingStartRef, spStartedRef,
-    hitFeedback,
+    hitFeedback, pruneHitFeedback,
     teamLabels,
+    classSelectPending, handleClassSelect,
+    carrierMapOpen, setCarrierMapOpen,
     bgmVolume, sfxVolume, muted,
     handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
     handleExitSpToMenu,
@@ -334,6 +340,16 @@ function SinglePlayPage() {
   // Team-mode flag comes from the HUD payload (the team loop sets mode:'team')
   // rather than reading the start ref during render.
   const isTeamMode = hudData?.mode === 'team';
+
+  // When the carrier patrol map (M key) opens, release the pointer lock so the
+  // cursor is free to click waypoints immediately — otherwise the player has to
+  // press Esc first. Closing the map and clicking the canvas re-locks on its own
+  // (Controls._onClick -> requestPointerLock), so no matching lock-on-close here.
+  useEffect(() => {
+    if (carrierMapOpen && document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }, [carrierMapOpen]);
 
   useEffect(() => {
     if (!pendingStartRef.current) {
@@ -366,10 +382,27 @@ function SinglePlayPage() {
         />
       )}
       {levelUpInfo && <LevelUpNotification info={levelUpInfo} />}
-      <HitFeedbackLayer events={hitFeedback} />
+      <HitFeedbackLayer events={hitFeedback} onPrune={pruneHitFeedback} />
       {isTeamMode && !scoped && <TeamLabels labels={teamLabels} />}
       {minimapData && !scoped && <Minimap data={minimapData} />}
       {scoped && <ScopeOverlay />}
+      {/* Solo 3→4 class pick: rendered in-page so the canvas stays mounted and
+          the engine resumes cleanly after the pick. */}
+      {classSelectPending && <ClassSelectScreen onSelect={handleClassSelect} />}
+      {/* Carrier patrol map (M key). Full-screen overlay; only for carriers. */}
+      {carrierMapOpen && (
+        <CarrierMap
+          terrainImage={minimapData?.terrainImage}
+          carrierPos={minimapData?.playerPos ? { x: minimapData.playerPos.x, z: minimapData.playerPos.z } : null}
+          carrierHeading={minimapData?.playerHeading ?? 0}
+          enemies={(minimapData?.enemies || []).filter(e => e && e.alive && e.mesh).map(e => ({ x: e.mesh.position.x, z: e.mesh.position.z }))}
+          onConfirm={(points) => {
+            engine?.setCarrierPatrol?.(points);
+            setCarrierMapOpen(false);
+          }}
+          onClose={() => setCarrierMapOpen(false)}
+        />
+      )}
       <ExitConfirmModal
         visible={showExitConfirm}
         onConfirm={handleExitSpToMenu}
@@ -397,7 +430,7 @@ function MultiCanvasLayout() {
     mpEngine, mpCanvasRef, mpInitializedRef, mpHudData, mpMinimapData,
     mpScoped, mpEliminated, mpShipLabels,
     mpChat, handleSendMpChat,
-    hitFeedback,
+    hitFeedback, pruneHitFeedback,
     bgmVolume, sfxVolume, muted,
     handleBgmVolumeChange, handleSfxVolumeChange, handleMutedChange,
     handleExitMpToMenu,
@@ -429,7 +462,7 @@ function MultiCanvasLayout() {
       {mpMinimapData && !mpScoped && <Minimap data={mpMinimapData} />}
       {mpShipLabels && !mpScoped && <ShipLabels labels={mpShipLabels} />}
       {mpScoped && <ScopeOverlay />}
-      <HitFeedbackLayer events={hitFeedback} />
+      <HitFeedbackLayer events={hitFeedback} onPrune={pruneHitFeedback} />
       {mpEliminated && (
         <div id="gameover-screen">
           <div className="gameover-container">
@@ -466,6 +499,7 @@ function GameOverPage() {
       score={gameResult.score}
       enemies={gameResult.enemies}
       level={gameResult.level}
+      shipClass={gameResult.shipClass}
       multiplayerResults={gameResult.multiplayerResults}
       teamMode={gameResult.mode === 'team'}
       teamResult={gameResult.result}
@@ -474,11 +508,6 @@ function GameOverPage() {
       onBackToLobby={handleBackToLobby}
     />
   );
-}
-
-function ClassSelectPage() {
-  const { handleClassSelect } = useGame();
-  return <ClassSelectScreen onSelect={handleClassSelect} />;
 }
 
 function AdminPage() {
@@ -526,7 +555,6 @@ function AppRoutes() {
       <Route path="/admin" element={<AuthRoute><AdminRoute><AdminPage /></AdminRoute></AuthRoute>} />
       <Route path="/play" element={<AuthRoute><SinglePlayPage /></AuthRoute>} />
       <Route path="/gameover" element={<AuthRoute><GameOverPage /></AuthRoute>} />
-      <Route path="/class-select" element={<AuthRoute><ClassSelectPage /></AuthRoute>} />
       <Route path="/loading" element={<AuthRoute><LoadingScreen /></AuthRoute>} />
       <Route path="/tutorial" element={<TutorialPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />

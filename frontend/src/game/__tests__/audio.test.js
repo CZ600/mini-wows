@@ -435,3 +435,124 @@ describe('AudioManager volume scales', () => {
     expect(bgm.volume).toBeCloseTo(0.05, 4);
   });
 });
+
+describe('AudioManager distance attenuation', () => {
+  it('无 distance 参数时保持满音量（向后兼容）', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion();
+    // EXPLOSION_VOLUME=0.25，不衰减
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+
+  it('distance=0 与缺省等价：满音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(0);
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+
+  it('100m 内（FULL_VOLUME_DIST）不衰减', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(100);
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+
+  it('800m（HALF_VOLUME_DIST）约半音量', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(800);
+    // 0.25 * 0.5 = 0.125
+    expect(created[0].volume).toBeCloseTo(0.125, 3);
+  });
+
+  it('1500m 处明显衰减但仍有声响', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(1500);
+    // 衰减系数 = 1/(1+(1500/800)^2) ≈ 0.2212，0.25 * 0.2212 ≈ 0.0553
+    expect(created[0].volume).toBeLessThan(0.25 * 0.5);
+    expect(created[0].volume).toBeGreaterThan(0.02);
+  });
+
+  it('超远距离不低于 MIN_VOLUME_RATIO 保底', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(5000);
+    // 0.25 * MIN_VOLUME_RATIO(0.08) = 0.02
+    expect(created[0].volume).toBeCloseTo(0.02, 4);
+  });
+
+  it('playTorpedoHit 同样按距离衰减', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playTorpedoHit(800);
+    // TORPEDO_HIT_VOLUME=0.6 * 0.5 = 0.3
+    expect(created[0].volume).toBeCloseTo(0.3, 3);
+  });
+
+  it('playFire 同样按距离衰减', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playFire('destroyer', 1500);
+    // FIRE_VOLUME=0.7 * 衰减(1500)≈0.2212 ≈ 0.1548
+    expect(created[0].volume).toBeLessThan(0.7 * 0.5);
+    expect(created[0].volume).toBeGreaterThan(0.7 * 0.08);
+  });
+
+  it('静音 + 远距离：静音优先级最高', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setMuted(true);
+    created.length = 0;
+    am.playExplosion(2000);
+    expect(created[0].volume).toBe(0);
+  });
+
+  it('距离衰减与 sfxVolume 叠加', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    am.setSfxVolume(0.5);
+    created.length = 0;
+    am.playExplosion(800);
+    // 0.25 * 衰减(0.5) * sfx(0.5) = 0.0625
+    expect(created[0].volume).toBeCloseTo(0.0625, 4);
+  });
+
+  it('无效距离 null 视为不衰减', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(null);
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+
+  it('无效距离 NaN 视为不衰减', async () => {
+    const { AudioManager } = await reload();
+    const am = new AudioManager();
+    am.init();
+    created.length = 0;
+    am.playExplosion(NaN);
+    expect(created[0].volume).toBeCloseTo(0.25, 4);
+  });
+});

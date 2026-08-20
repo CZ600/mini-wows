@@ -72,6 +72,9 @@ export class FriendlyAIShip extends EnemyShip {
   constructor(scene, terrain, x, z, enemyLevel, shipType, slot, playerRef) {
     super(scene, terrain, x, z, enemyLevel, shipType);
     this.faction = 'player';
+    this.isWingman = true;   // duck-type flag: identifies wingmen without relying on
+                             // instanceof (which can fail across duplicated module
+                             // identities under some bundler/hot-reload setups).
     this._applyFactionColors();   // re-tint HP bar now that faction is 'player'
     this._tintHull(FRIENDLY_HULL_COLOR);  // paint the hull blue to match the friendly faction
     this.slot = slot;
@@ -347,9 +350,12 @@ export class EnemyTeamShip extends EnemyShip {
 
 // Convenience: select a ship type for red ships so the 10 aren't all identical.
 // At level 4+ all three classes are available - pick uniformly at random for a
-// mixed fleet. Below level 4 no class is selected (plain hull).
+// mixed fleet. Submarines are included occasionally so ASW has a target.
+// Below level 4 no class is selected (plain hull).
 export function pickTeamShipType(level) {
   if (level >= 4) {
+    const r = Math.random();
+    if (r < 0.15) return 'submarine';
     const types = ['destroyer', 'cruiser', 'battleship'];
     return types[Math.floor(Math.random() * types.length)];
   }

@@ -11,6 +11,25 @@ export class Controls {
     this.wantsFire = false;
     this.locked = false;
     this.skillActivations = [];
+    // Submarine dive toggle requests (edge-triggered, consumed by the engine).
+    this.diveToggleRequests = [];
+    // Carrier view mode: 'ship' (steer the carrier) or 'squadron' (fly the
+    // aircraft). The engine flips camera subject + input routing on change.
+    this.viewMode = 'ship';
+    this.viewToggleRequests = [];
+    // Carrier air-group launch requests. Each entry is 'torpedo' (鱼雷机) or
+    // 'bomber' (轰炸机): the engine launches/switches to that group on consume.
+    // Bound to keys 5/6 (the bottom weapon bar slots).
+    this.squadronLaunchRequests = [];
+    // Carrier squadron auto-pilot toggle requests (edge-triggered, consumed by
+    // the engine). Bound to Y. Ignored by non-carriers.
+    this.autoPilotToggleRequests = [];
+    // Carrier map toggle requests (edge-triggered). Bound to M; opens the
+    // full-screen carrier patrol map (React layer renders it).
+    this.carrierMapToggleRequests = [];
+    // Carrier active-squadron switch requests (edge-triggered). Bound to Tab;
+    // swaps control/camera between the torpedo and bomber squadrons while flying.
+    this.squadronSwitchRequests = [];
     this.sensitivity = 0.002;
     this.scopedSensitivity = 0.0006;
     this.scoped = false;
@@ -33,11 +52,21 @@ export class Controls {
     this.torpedoTier = 1;
     this.torpedoSpread = 'narrow';
     this._availableTiers = [1, 2, 3];
+    // ASW (anti-submarine depth charges) capability for the current ship. Set
+    // from the resolved class config; the Q-key weapon switch is a no-op when
+    // the ship has no ASW fit (e.g. carrier / submarine).
+    this._hasAsw = false;
 
     this._onKeyDown = (e) => {
       if (e.key == null) return;
       const k = e.key.toLowerCase();
+      // Steering + altitude keys are captured unconditionally (not gated on
+      // pointer lock) so flying the squadron stays responsive even if the lock
+      // dropped (e.g. after opening the M-key map). A/D steer, W/S dive/climb.
       if (k === 'a' || k === 'd') this.keys[k] = true;
+      if (this.viewMode === 'squadron' && (k === 'w' || k === 's')) {
+        this.keys[k] = true;
+      }
 
       if (this.locked) {
         // Skills (no-repeat to prevent spam)
@@ -50,6 +79,15 @@ export class Controls {
         } else if (k === 'h' && !e.repeat) {
           this.skillActivations.push('precision');
           e.preventDefault();
+        } else if (k === 'q' && !e.repeat && !this.scoped) {
+          // ASW (depth-charge) weapon toggle. Only ships with an ASW fit can
+          // select this mode; pressing Q again returns to the main gun so the
+          // player can swap back quickly. (While scoped, Q instead trims the
+          // scope height — see the next branch.)
+          if (this._hasAsw) {
+            this.weaponMode = this.weaponMode === 'asw' ? 'gun' : 'asw';
+            e.preventDefault();
+          }
         } else if (k === 'q' && !e.repeat && this.scoped) {
           const step = this.heightOffset > 0
             ? this.heightOffset * 0.25 + 3
@@ -64,13 +102,22 @@ export class Controls {
           this.heightOffset = Math.max(this._minHeight, this.heightOffset - step);
           if (this.audio) this.audio.playScopeAdjust();
           e.preventDefault();
-        } else if (k === 'w' && !e.repeat) {
-          this.gear = Math.min(GEAR_RATIOS.length - 1, this.gear + 1);
-          if (this.audio) this.audio.playGearShift();
+        } else if (k === 'w') {
+          if (this.viewMode === 'squadron') {
+            // Aircraft throttle: held = accelerate.
+            this.keys.w = true;
+          } else if (!e.repeat) {
+            this.gear = Math.min(GEAR_RATIOS.length - 1, this.gear + 1);
+            if (this.audio) this.audio.playGearShift();
+          }
           e.preventDefault();
-        } else if (k === 's' && !e.repeat) {
-          this.gear = Math.max(0, this.gear - 1);
-          if (this.audio) this.audio.playGearShift();
+        } else if (k === 's') {
+          if (this.viewMode === 'squadron') {
+            this.keys.s = true;
+          } else if (!e.repeat) {
+            this.gear = Math.max(0, this.gear - 1);
+            if (this.audio) this.audio.playGearShift();
+          }
           e.preventDefault();
         } else if (k === '1') {
           this.weaponMode = 'gun';
@@ -105,13 +152,43 @@ export class Controls {
             }
           }
           e.preventDefault();
+        } else if ((k === '5' || k === '6') && !e.repeat) {
+          // Carrier air-group launch / switch. 5 = torpedo bombers (鱼雷机),
+          // 6 = dive bombers (轰炸机). Ignored by non-carriers in the engine.
+          this.squadronLaunchRequests.push(k === '5' ? 'torpedo' : 'bomber');
+          e.preventDefault();
+        } else if (k === 'y' && !e.repeat) {
+          // Carrier squadron auto-pilot toggle (auto-attack). Ignored by
+          // non-carriers in the engine.
+          this.autoPilotToggleRequests.push(true);
+          e.preventDefault();
+        } else if (k === 'm' && !e.repeat) {
+          // Carrier patrol map toggle (full-screen). Ignored by non-carriers.
+          this.carrierMapToggleRequests.push(true);
+          e.preventDefault();
+        } else if (k === 'tab' && !e.repeat) {
+          // Carrier active-squadron switch (torpedo <-> bomber) while flying.
+          // Prevent the browser from moving keyboard focus away from the canvas.
+          this.squadronSwitchRequests.push(true);
+          e.preventDefault();
+        } else if (k === 'b' && !e.repeat) {
+          // Submarine dive toggle (ignored by non-submarines in the engine).
+          this.diveToggleRequests.push(true);
+          e.preventDefault();
+        } else if (k === 't' && !e.repeat) {
+          // Carrier view toggle: switch between steering the ship and flying
+          // the squadron. Ignored by non-carriers in the engine.
+          this.viewToggleRequests.push(true);
+          e.preventDefault();
         }
       }
     };
     this._onKeyUp = (e) => {
       if (e.key == null) return;
       const k = e.key.toLowerCase();
+      // A/D always release; W/S release in squadron view (altitude keys).
       if (k === 'a' || k === 'd') this.keys[k] = false;
+      if (this.viewMode === 'squadron' && (k === 'w' || k === 's')) this.keys[k] = false;
     };
 
     this._onClick = () => {
@@ -201,6 +278,19 @@ export class Controls {
     this._availableTiers = availableTiers;
   }
 
+  setAswCapability(hasAsw) {
+    this._hasAsw = !!hasAsw;
+    // If the ship lost its ASW fit (e.g. class change), drop out of ASW mode so
+    // left-click doesn't try to fire depth charges it can't launch.
+    if (!this._hasAsw && this.weaponMode === 'asw') {
+      this.weaponMode = 'gun';
+    }
+  }
+
+  get hasAsw() {
+    return this._hasAsw;
+  }
+
   setAudioManager(audio) {
     this.audio = audio;
   }
@@ -237,6 +327,61 @@ export class Controls {
     const skills = [...this.skillActivations];
     this.skillActivations = [];
     return skills;
+  }
+
+  consumeDiveToggle() {
+    if (this.diveToggleRequests.length > 0) {
+      this.diveToggleRequests = [];
+      return true;
+    }
+    return false;
+  }
+
+  consumeViewToggle() {
+    if (this.viewToggleRequests.length > 0) {
+      this.viewToggleRequests = [];
+      return true;
+    }
+    return false;
+  }
+
+  // Pop the next carrier air-group launch request ('torpedo' | 'bomber'), or
+  // null. Only the most recent group matters (rapid 5+6 = switch to bomber).
+  consumeSquadronLaunch() {
+    if (this.squadronLaunchRequests.length > 0) {
+      const group = this.squadronLaunchRequests[this.squadronLaunchRequests.length - 1];
+      this.squadronLaunchRequests = [];
+      return group;
+    }
+    return null;
+  }
+
+  // Pop a carrier squadron auto-pilot toggle request (returns true if pending).
+  consumeAutoPilotToggle() {
+    if (this.autoPilotToggleRequests.length > 0) {
+      this.autoPilotToggleRequests = [];
+      return true;
+    }
+    return false;
+  }
+
+  // Pop a carrier patrol map toggle request (returns true if pending).
+  consumeCarrierMapToggle() {
+    if (this.carrierMapToggleRequests.length > 0) {
+      this.carrierMapToggleRequests = [];
+      return true;
+    }
+    return false;
+  }
+
+  // Pop a carrier active-squadron switch request (returns true if pending).
+  // Bound to Tab — swaps the torpedo/bomber squadron the player flies.
+  consumeSquadronSwitch() {
+    if (this.squadronSwitchRequests.length > 0) {
+      this.squadronSwitchRequests = [];
+      return true;
+    }
+    return false;
   }
 
   destroy() {

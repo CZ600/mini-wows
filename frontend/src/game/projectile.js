@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG } from './config.js';
+import { GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG, AA_HIT_RADIUS, ASW_BLAST_RADIUS } from './config.js';
 
 const TRAIL_LENGTH = 30;
 
@@ -13,7 +13,7 @@ export class ProjectileManager {
     this._splashes = [];
   }
 
-  fire(origin, direction, damage, owner, muzzleSpeed = PROJECTILE_INITIAL_SPEED, drag = PROJECTILE_DRAG) {
+  fire(origin, direction, damage, owner, muzzleSpeed = PROJECTILE_INITIAL_SPEED, drag = PROJECTILE_DRAG, weapon = 'shell') {
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.3, 8, 8),
       new THREE.MeshBasicMaterial({ color: owner === 'player' ? 0xffaa00 : 0xff6644 })
@@ -45,11 +45,12 @@ export class ProjectileManager {
       drag,
       damage,
       owner,
+      weapon,
       lifetime: 0,
     });
   }
 
-  update(dt, ship, enemies) {
+  update(dt, ship, enemies, squadrons = []) {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.lifetime += dt;
@@ -62,8 +63,16 @@ export class ProjectileManager {
 
       let hit = false;
 
-      // Water — splash only, no explosion sound (a miss into the sea is silent).
-      if (p.mesh.position.y <= 0) {
+      // Depth-charge detonation: when a depth charge reaches the water it
+      // detonates with an AoE that damages every submarine within blast radius
+      // — including fully-submerged ones (which are otherwise shell-immune).
+      // The submerged-immunity bypass for `weapon='depth_charge'` is already
+      // wired in the ship-hit branch below; this handles the AoE spread.
+      if (p.weapon === 'depth_charge' && p.mesh.position.y <= 0) {
+        this._detonateDepthCharge(p, ship);
+        hit = true;
+      } else if (p.mesh.position.y <= 0) {
+        // Water — splash only, no explosion sound (a miss into the sea is silent).
         this._createSplash(p.mesh.position.clone());
         hit = true;
       }
@@ -73,7 +82,7 @@ export class ProjectileManager {
         const th = this.terrain.getHeightAt(p.mesh.position.x, p.mesh.position.z);
         if (th > 0 && p.mesh.position.y <= th) {
           this._explode(p.mesh.position.clone(), 0xff6622, 5);
-          if (p.owner === 'player' && this.audio) this.audio.playExplosion();
+          if (p.owner === 'player' && this.audio) this.audio.playExplosion(this._distToPlayer(p.mesh.position, ship));
           hit = true;
         }
       }
@@ -98,13 +107,17 @@ export class ProjectileManager {
         const sh = ship.shipHeight || 2.5;
         const ts = ship.turretSize || 1.0;
         const turretTop = (sh + 1) + 0.15 + ts * 0.9;
-        if (Math.abs(localX) < ship.shipWidth / 2 + 0.5 &&
+        // Fully-submerged submarines are immune to ordinary shells (they pass
+        // overhead through the water column). Depth-charge weapons bypass this.
+        const immune = ship.fullySubmerged && p.weapon !== 'depth_charge';
+        if (!immune &&
+            Math.abs(localX) < ship.shipWidth / 2 + 0.5 &&
             Math.abs(localZ) < ship.shipLength / 2 + 0.5 &&
             p.mesh.position.y >= sp.y - 1 &&
             p.mesh.position.y <= sp.y + turretTop + 0.5) {
           ship.takeDamage(p.damage);
           this._explode(p.mesh.position.clone(), 0xff4400, 5);
-          if (this.audio) this.audio.playExplosion();
+          if (this.audio) this.audio.playExplosion(this._distToPlayer(p.mesh.position, ship));
           hit = true;
         }
       }
@@ -150,7 +163,33 @@ export class ProjectileManager {
           if (hitEnemy) {
             enemy.takeDamage(p.damage);
             this._explode(p.mesh.position.clone(), 0xff4400, 6);
-            if (this.audio) this.audio.playExplosion();
+            if (this.audio) this.audio.playExplosion(this._distToPlayer(p.mesh.position, ship));
+            hit = true;
+            break;
+          }
+        }
+      }
+
+      // Flak vs aircraft: a flak shell detonates within AA_HIT_RADIUS (3D) of a
+      // squadron's position, damaging it. Mirrors the server projectile.py flak
+      // branch. Only hostile squadrons are hit (owner faction check); friendly
+      // fire is skipped by never matching the squadron's owner faction.
+      if (!hit && p.weapon === 'flak' && squadrons.length > 0) {
+        const pos = p.mesh.position;
+        const r2 = AA_HIT_RADIUS * AA_HIT_RADIUS;
+        for (const sq of squadrons) {
+          if (!sq || !sq.alive) continue;
+          // Faction filter: player flak only hits enemy squadrons, enemy flak
+          // only hits the player's. Squadron.owner is the faction string.
+          if (sq.owner === p.owner) continue;
+          const sp = sq.position;
+          const dx = sp.x - pos.x;
+          const dy = sp.y - pos.y;
+          const dz = sp.z - pos.z;
+          if (dx * dx + dy * dy + dz * dz <= r2) {
+            sq.takeDamage(p.damage);
+            this._explode(pos.clone(), 0xffe14a, 4);
+            if (this.audio && p.owner === 'player') this.audio.playExplosion(this._distToPlayer(pos, ship));
             hit = true;
             break;
           }
@@ -227,6 +266,54 @@ export class ProjectileManager {
 
   _explode(position, color, maxSize) {
     this.spawnExplosion(position, color, maxSize);
+  }
+
+  // ASW AoE targets: every submarine that depth charges can damage. Set each
+  // frame by the engine (player ship + enemy subs +, in multiplayer, other
+  // players' subs). Each entry must expose { position, shipClass, alive,
+  // takeDamage } — same duck-type as Ship / EnemyShip.
+  setAswTargets(subs) {
+    this._aswTargets = Array.isArray(subs) ? subs : [];
+  }
+
+  // Detonate a depth charge: AoE-damage every submarine within ASW_BLAST_RADIUS
+  // (horizontal). Fully-submerged subs are included (the depth_charge weapon
+  // bypasses shell immunity server-side). A big underwater burst is rendered
+  // at the detonation point.
+  _detonateDepthCharge(p, playerShip) {
+    const pos = p.mesh.position;
+    const targets = this._aswTargets || [];
+    const r2 = ASW_BLAST_RADIUS * ASW_BLAST_RADIUS;
+    for (const s of targets) {
+      if (!s || !s.alive) continue;
+      if (s.shipClass !== 'submarine') continue;
+      // Don't hit the shooter's own sub (player depth-charging their own hull).
+      if (s === playerShip && p.owner === 'player') continue;
+      const sp = s.position || (s.mesh && s.mesh.position);
+      if (!sp) continue;
+      const dx = sp.x - pos.x;
+      const dz = sp.z - pos.z;
+      if (dx * dx + dz * dz <= r2) {
+        s.takeDamage(p.damage);
+      }
+    }
+    // Big underwater detonation burst (lighter, wider than a shell hit).
+    this._explode(pos.clone(), 0x66ccff, 9);
+    this._createSplash(pos.clone());
+    if (this.audio && p.owner === 'player') this.audio.playExplosion(this._distToPlayer(pos, playerShip));
+  }
+
+  // Horizontal distance from an impact point to the player ship, in meters.
+  // Used to attenuate impact sound volume with distance. The player ship keeps
+  // both a mesh position and a `.position` Vector3 in sync; prefer `.position`
+  // (set directly by the engine) and fall back to mesh if absent.
+  _distToPlayer(point, ship) {
+    if (!ship) return 0;
+    const sp = ship.position || (ship.mesh && ship.mesh.position);
+    if (!sp) return 0;
+    const dx = point.x - sp.x;
+    const dz = point.z - sp.z;
+    return Math.sqrt(dx * dx + dz * dz);
   }
 
   // Public entry point so other systems (e.g. the multiplayer engine reacting

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { applyHalfLambert } from './scene.js';
+import { SUBMARINE, getClassAa } from './config.js';
 
 export const LEVEL_CONFIG = {
   // Hull height scaled to ~60% of the original freeboard so ships sit lower
@@ -47,6 +48,35 @@ export const CLASS_CONFIG = {
     9:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 1 },
     10: { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 2 },
   },
+  // Submarine: very fragile, slow on the surface, relies on torpedoes.
+  // A single deck gun (frontTurrets=1, backTurrets=0) keeps DPM low.
+  // getClassConfig() holds salvo DPM constant vs BASE_TURRET_COUNT (4 single
+  // barrels at Lv4), so a 1-turret ship gets a 4x per-shot multiplier;
+  // damageMul=0.1 keeps the resulting single-gun DPM (~0.4x of a destroyer
+  // gun) clearly inferior. Mid/long-range torpedo tiers only. Surface speed
+  // here; underwater speed handled in stage 2 (dive mechanic).
+  submarine: {
+    4:  { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 4, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+    5:  { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 4, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+    6:  { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 4, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+    7:  { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 5, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+    8:  { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 5, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+    9:  { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 6, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+    10: { hpMul: 0.4, speedMul: 0.6, turnMul: 0.6, damageMul: 0.1, cooldownMul: 1.0, torpedoTiers: [2, 3], torpedoTubeCount: 6, sizeMul: 0.5, turretMul: 0.5, spacingMul: 0.7, barrels: 1, frontTurrets: 1, backTurrets: 0 },
+  },
+  // Carrier: tough hull (2nd to battleship), slow & unwieldy, weak
+  // self-defense guns, no torpedoes. Its real power is aircraft (stage 3);
+  // stage 1 ships it as a heavy, under-armed platform so it can be picked and
+  // fought while the aircraft system is built out.
+  carrier: {
+    4:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    5:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    6:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    7:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    8:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    9:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    10: { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+  },
 };
 
 // Reference turret count before per-class multi-barrel / A-B-X overrides.
@@ -60,6 +90,11 @@ export const DRIFT_CONFIG = {
   destroyer:  { recovery_base: 2.5, speed_factor: 0.10, max_angle: 0.65 },
   cruiser:    { recovery_base: 2.5, speed_factor: 0.14, max_angle: 0.45 },
   battleship: { recovery_base: 2.0, speed_factor: 0.05, max_angle: 0.25 },
+  // Submarine: low freeboard and slow surface speed → minimal drift; underwater
+  // handling (stage 2) will use a separate profile.
+  submarine:  { recovery_base: 2.0, speed_factor: 0.08, max_angle: 0.30 },
+  // Carrier: largest, most unwieldy hull — tightest drift recovery.
+  carrier:    { recovery_base: 1.8, speed_factor: 0.04, max_angle: 0.20 },
 };
 
 export function getDriftConfig(shipClass) {
@@ -277,6 +312,17 @@ export class Ship {
     this.sinkTimer = 0;
     this.turrets = [];
 
+    // Submarine dive state. Only meaningful for shipClass === 'submarine' but
+    // the fields exist on every ship (always surfaced) so callers don't need
+    // to special-case non-submarines.
+    this.submerged = false;          // target dive state
+    this.diveDepth = 0;              // current depth in m (0=surfaced)
+    this.diveTransition = 0;         // 0=surfaced, 1=submerged (eased)
+    this.surfaceMaxSpeed = this.maxSpeed;       // cached surfaced speed
+    this.underwaterMaxSpeed = this.maxSpeed * SUBMARINE.underwaterSpeedMul;
+    this.surfaceTurnRadius = this.turnRadius;
+    this.underwaterTurnRadius = this.turnRadius * SUBMARINE.underwaterTurnMul;
+
     this._buildMesh(cfg);
     this.scene.add(this.mesh);
     this._initWake();
@@ -307,7 +353,11 @@ export class Ship {
     deck.position.set(0, deckY, 0);
     this.mesh.add(deck);
 
-    if (cfg.hasBridge) {
+    if (this.shipClass === 'submarine') {
+      this._buildSubmarineSuperstructure(cfg, deckY, hullMat);
+    } else if (this.shipClass === 'carrier') {
+      this._buildCarrierSuperstructure(cfg, deckY, hullMat);
+    } else if (cfg.hasBridge) {
       // Long-island superstructure: a low deckhouse runs fore-aft, with a
       // forward bridge block (carrying the mast) and an aft funnel.
       //
@@ -487,6 +537,191 @@ export class Ship {
         isFront: def.isFront,
       });
     }
+
+    // AA mounts: small caliber gun clusters scattered along the deck sides,
+    // purely cosmetic (AA fire is authoritative/simulated). Count comes from the
+    // class AA fit; submarines have none. They read as clutter on the deck so a
+    // cruiser/battleship visibly looks like it bristles with AA.
+    this._buildAaMounts(cfg, deckY, turretMat, barrelMat);
+  }
+
+  // Scatter small AA gun tubs along both deck rails. Each is a low base + a
+  // tiny twin-barrel cluster — far smaller than main-battery turrets. Kept off
+  // the centerline so they don't clash with the bridge island / main turrets.
+  _buildAaMounts(cfg, deckY, turretMat, barrelMat) {
+    const aa = getClassAa(this.shipClass);
+    if (!aa || aa.mounts <= 0) return;
+    // AA mount size tracks the ship's main-turret size (smaller for DDs).
+    const mainTurretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
+    const mountSize = Math.max(0.35, mainTurretSize * 0.32);
+    const halfL = cfg.length / 2;
+    const railX = cfg.width * 0.34;     // just inboard of the deck edge
+    const barrelLen = mountSize * 1.1;
+    for (let i = 0; i < aa.mounts; i++) {
+      // Alternate port/starboard, spread fore-aft along the deck.
+      const side = (i % 2 === 0) ? 1 : -1;
+      const t = aa.mounts === 1 ? 0.5 : i / (aa.mounts - 1);
+      const z = halfL * 0.7 - t * halfL * 1.2;   // fore -> aft
+      const mount = new THREE.Group();
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(mountSize * 0.5, mountSize * 0.6, mountSize * 0.3, 6),
+        turretMat,
+      );
+      mount.add(base);
+      const housing = new THREE.Mesh(
+        new THREE.BoxGeometry(mountSize, mountSize * 0.8, mountSize),
+        turretMat,
+      );
+      housing.position.y = mountSize * 0.4;
+      mount.add(housing);
+      // Twin stub barrels pointing up/out (AA guns elevate).
+      for (let b = 0; b < 2; b++) {
+        const barrel = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.06, 0.06, barrelLen, 6),
+          barrelMat,
+        );
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set((b - 0.5) * mountSize * 0.35, mountSize * 0.4, barrelLen / 2);
+        barrel.rotation.x = Math.PI / 2 - 0.6;   // elevated ~35°
+        housing.add(barrel);
+      }
+      mount.position.set(side * railX, deckY + 0.15, z);
+      this.mesh.add(mount);
+    }
+  }
+
+  // Submarine silhouette: a low slick hull already built by _buildMesh; this
+  // adds a small conning tower, a periscope mast and a tiny aft flagpole so it
+  // reads as a submarine at a glance. The deck gun is added by the shared
+  // turret loop afterwards. scopedCameraHeight sits at the periscope top.
+  _buildSubmarineSuperstructure(cfg, deckY, hullMat) {
+    const towerW = cfg.width * 0.45;
+    const towerL = cfg.length * 0.12;
+    const towerH = cfg.height * 1.1;
+
+    const tower = new THREE.Mesh(
+      new THREE.BoxGeometry(towerW, towerH, towerL),
+      hullMat
+    );
+    tower.position.set(0, deckY + towerH / 2 + 0.1, 0);
+    this.mesh.add(tower);
+
+    // Conning-tower window strip (submarines have a small bridge viewport).
+    const windowMat = new THREE.MeshPhongMaterial({ color: 0xaaddff });
+    applyHalfLambert(windowMat);
+    const towerWindows = new THREE.Mesh(
+      new THREE.BoxGeometry(towerW * 0.9, towerH * 0.3, towerL + 0.05),
+      windowMat
+    );
+    towerWindows.position.y = towerH * 0.15;
+    tower.add(towerWindows);
+
+    // Periscope mast — a thin tall cylinder atop the tower.
+    const periscopeH = cfg.height * 2.4;
+    const periscope = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, periscopeH, 6),
+      hullMat
+    );
+    periscope.position.set(0, towerH / 2 + periscopeH / 2, 0);
+    tower.add(periscope);
+
+    // Aft rudder/fin for profile recognition.
+    const finH = cfg.height * 0.8;
+    const fin = new THREE.Mesh(
+      new THREE.BoxGeometry(cfg.width * 0.1, finH, cfg.length * 0.08),
+      hullMat
+    );
+    fin.position.set(0, deckY + finH / 2, -cfg.length * 0.4);
+    this.mesh.add(fin);
+
+    this.scopedCameraHeight = deckY + towerH + periscopeH + 1.0;
+    this.hasBridge = false;
+  }
+
+  // Carrier silhouette: a long flat flight deck over the hull, with an
+  // off-center starboard island (bridge + funnel + mast) — the classic
+  // carrier profile. self-defense guns are placed by the shared turret loop.
+  _buildCarrierSuperstructure(cfg, deckY, hullMat) {
+    // Flight deck: wide and long, slightly raised above the hull deck.
+    const fdW = cfg.width * 0.98;
+    const fdL = cfg.length * 0.95;
+    const fdH = 0.4;
+    const flightDeck = new THREE.Mesh(
+      new THREE.BoxGeometry(fdW, fdH, fdL),
+      hullMat
+    );
+    flightDeck.position.set(0, deckY + fdH / 2 + 0.1, 0);
+    this.mesh.add(flightDeck);
+
+    // Deck centerline stripe — subtle, just to read as a flight deck.
+    const stripeMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    applyHalfLambert(stripeMat);
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(fdW * 0.04, 0.05, fdL * 0.9),
+      stripeMat
+    );
+    stripe.position.set(0, fdH / 2 + 0.03, 0);
+    flightDeck.add(stripe);
+
+    // Starboard island: bridge block + funnel + mast, offset to +x.
+    const islandX = fdW * 0.32;
+    const islandW = cfg.width * 0.22;
+    const islandL = cfg.length * 0.18;
+    const islandH = cfg.height * 1.6;
+
+    const island = new THREE.Mesh(
+      new THREE.BoxGeometry(islandW, islandH, islandL),
+      hullMat
+    );
+    island.position.set(islandX, deckY + fdH + islandH / 2 + 0.1, -cfg.length * 0.05);
+    this.mesh.add(island);
+
+    // Island window strip.
+    const windowMat = new THREE.MeshPhongMaterial({ color: 0xaaddff });
+    applyHalfLambert(windowMat);
+    const islandWindows = new THREE.Mesh(
+      new THREE.BoxGeometry(islandW * 0.92, islandH * 0.3, islandL + 0.1),
+      windowMat
+    );
+    islandWindows.position.y = islandH * 0.1;
+    island.add(islandWindows);
+
+    // Funnel block aft of the bridge, slightly shorter.
+    const funnelH = islandH * 0.7;
+    const funnel = new THREE.Mesh(
+      new THREE.BoxGeometry(islandW * 0.6, funnelH, islandL * 0.3),
+      hullMat
+    );
+    funnel.position.set(0, islandH / 2 - funnelH / 2, -islandL * 0.4);
+    island.add(funnel);
+
+    const funnelTopMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+    applyHalfLambert(funnelTopMat);
+    const funnelTop = new THREE.Mesh(
+      new THREE.BoxGeometry(islandW * 0.55, funnelH * 0.12, islandL * 0.32),
+      funnelTopMat
+    );
+    funnelTop.position.y = funnelH / 2 - funnelH * 0.06;
+    funnel.add(funnelTop);
+
+    // Mast atop the bridge block.
+    const mastH = islandH * 0.9;
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.2, mastH, 6),
+      hullMat
+    );
+    mast.position.set(0, islandH / 2 + mastH / 2, islandL * 0.3);
+    island.add(mast);
+
+    const crossarm = new THREE.Mesh(
+      new THREE.BoxGeometry(islandW * 0.5, 0.12, 0.12),
+      hullMat
+    );
+    crossarm.position.set(0, mastH * 0.35, 0);
+    mast.add(crossarm);
+
+    this.scopedCameraHeight = deckY + fdH + islandH + mastH + 1.5;
+    this.hasBridge = true;
   }
 
   _initWake() {
@@ -656,6 +891,11 @@ export class Ship {
     this.barrels = cfg.barrels || 1;
     this.torpedoTubes = getTorpedoTubes(this.shipClass, newLevel);
     this.turrets = [];
+    // Re-cache dive profiles for the new level's speed/turn.
+    this.surfaceMaxSpeed = this.maxSpeed;
+    this.underwaterMaxSpeed = this.maxSpeed * SUBMARINE.underwaterSpeedMul;
+    this.surfaceTurnRadius = this.turnRadius;
+    this.underwaterTurnRadius = this.turnRadius * SUBMARINE.underwaterTurnMul;
 
     this._buildMesh(cfg);
     this._initWake();
@@ -719,7 +959,9 @@ export class Ship {
       }
     }
 
-    this.mesh.position.set(this.position.x, 0, this.position.z);
+    // Advance the dive transition (handles speed/turn swap + mesh sink).
+    this.updateDiveTransition(dt);
+
     this.mesh.rotation.y = this.heading;
 
     if (Math.abs(this.speed) > 1) {
@@ -734,6 +976,47 @@ export class Ship {
     for (const t of this.turrets) {
       if (t.cooldown > 0) t.cooldown -= dt;
     }
+  }
+
+  // Toggle the submarine's target dive state. No-op for non-submarines so the
+  // engine can call it unconditionally. Returns true if a toggle was accepted.
+  toggleDive() {
+    if (this.shipClass !== 'submarine' || !this.alive) return false;
+    this.submerged = !this.submerged;
+    return true;
+  }
+
+  // Advance diveDepth / diveTransition toward the target state, swap maxSpeed
+  // and turnRadius between surfaced/submerged profiles, and sink the mesh to
+  // reflect depth. Called once per update tick while alive.
+  updateDiveTransition(dt) {
+    if (this.shipClass !== 'submarine') {
+      this.mesh.position.set(this.position.x, 0, this.position.z);
+      return;
+    }
+
+    // Ease diveTransition toward 0 (surfaced) or 1 (submerged).
+    const target = this.submerged ? 1 : 0;
+    const rate = 1 / SUBMARINE.transitionTime;
+    if (this.diveTransition < target) {
+      this.diveTransition = Math.min(target, this.diveTransition + rate * dt);
+    } else if (this.diveTransition > target) {
+      this.diveTransition = Math.max(target, this.diveTransition - rate * dt);
+    }
+    this.diveDepth = this.diveTransition * SUBMARINE.diveDepth;
+
+    // Lerp speed/turn profiles by the transition.
+    this.maxSpeed = this.surfaceMaxSpeed + (this.underwaterMaxSpeed - this.surfaceMaxSpeed) * this.diveTransition;
+    this.turnRadius = this.surfaceTurnRadius + (this.underwaterTurnRadius - this.surfaceTurnRadius) * this.diveTransition;
+
+    // Mesh y follows depth (negative = below water plane).
+    this.mesh.position.set(this.position.x, -this.diveDepth, this.position.z);
+  }
+
+  // A submarine is "fully submerged" (hidden + shell-immune) once its current
+  // depth clears the shell-immunity threshold. Non-submarines never are.
+  get fullySubmerged() {
+    return this.shipClass === 'submarine' && this.diveDepth >= SUBMARINE.shellImmunityDepth;
   }
 
   _applyDrift(dt) {

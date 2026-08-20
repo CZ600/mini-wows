@@ -22,6 +22,20 @@ const SHIP_CLASSES = [
     traits: ['高血量 / 低航速', '重甲厚血', '无鱼雷', '火炮伤害最高'],
     color: '#ff9800',
   },
+  {
+    id: 'submarine',
+    name: '潜艇',
+    icon: '🫧',
+    traits: ['极低血量 / 慢速', '鱼雷: 中/远程', '仅轻甲板炮', '下潜隐蔽（阶段2）'],
+    color: '#9c27b0',
+  },
+  {
+    id: 'carrier',
+    name: '航母',
+    icon: '✈️',
+    traits: ['厚血 / 笨重', '自卫炮弱', '无鱼雷', '飞机打击（阶段3）'],
+    color: '#00bcd4',
+  },
 ];
 
 export default function SingleSetupScreen({ user, onStart, onBack }) {

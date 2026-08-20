@@ -12,6 +12,12 @@ import { Controls } from './controls.js';
 import { AudioManager } from './audio.js';
 import { ShipSkills } from './skills.js';
 import { getMuzzleSpeed, getCannonDrag } from './config.js';
+import { Squadron, CarrierAirWing, SquadronManager } from './aircraft.js';
+import { CARRIER, getAirGroupConfig } from './config.js';
+import {
+  getClassAa, getAaTier, AA_DRAG,
+  getClassAsw, getAswTier, ASW_MUZZLE_SPEED, ASW_DRAG, GRAVITY as CFG_GRAVITY,
+} from './config.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -21,7 +27,7 @@ const FOV_SCOPED = 15;
 const RAYCASTER = new THREE.Raycaster();
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
 
-const LEVEL_THRESHOLDS = [0, 10, 50, 85, 150, 250, 380, 560, 780, 1050];
+const LEVEL_THRESHOLDS = [0, 5, 15, 43, 103, 207, 343, 532, 740, 1028];
 
 export class GameEngine {
   constructor() {
@@ -37,6 +43,9 @@ export class GameEngine {
     this.onGameOver = null;
     this.onScopeChange = null;
     this.onLevelUp = null;
+    // Carrier patrol map toggle (M). React renders the full-screen map when
+    // this fires. Ignored for non-carriers.
+    this.onCarrierMapToggle = null;
     // Single-player hit/kill feedback (solo only). The engine emits
     // { type: 'damage', amount } / { type: 'kill', score } events; the React
     // layer turns them into floating pop-ups.
@@ -60,6 +69,102 @@ export class GameEngine {
     this.friendlies = [];               // player-side units (player adapter + wingmen)
     this.reds = [];                     // 10 EnemyTeamShip
     this.teamResult = null;             // 'win' | 'lose' | null
+
+    // Carrier state: when the player is a carrier and toggles to squadron view,
+    // the camera + input route to the air wing instead of the ship. A carrier
+    // fields TWO squadrons (torpedo + bomber) at once; the player flies the
+    // ACTIVE one and switches with Tab. The ship keeps cruising under autopilot.
+    this.playerView = 'ship';           // 'ship' | 'squadron'
+    this.airWing = null;                // active CarrierAirWing (aircraft.js) or null
+    this.squadronManager = null;        // owns air wings for this engine
+    // Carrier patrol path (M-key map). null = manual control; otherwise the
+    // carrier autopilots along this closed waypoint loop.
+    this.carrierPatrol = null;
+    // AA / ASW state. _aaCooldowns is per-mount flak cooldowns for the player's
+    // ship; _aswCooldown is the player's depth-charge release cooldown.
+    // _enemySquadrons holds hostile squadrons (enemy carriers' wings) that the
+    // player's AA + flak-hit detection target.
+    this._aaCooldowns = null;
+    this._aswCooldown = 0;
+    this._enemySquadrons = [];
+  }
+
+  // The object the camera follows + input routes to. Ship or the active
+  // squadron of the air wing.
+  _cameraSubject() {
+    if (this.playerView === 'squadron' && this.airWing) return this.airWing.active;
+    return this.ship;
+  }
+
+  // ---- Carrier patrol path (M-key map) ----
+  // When set, the carrier autopilots along a closed loop of waypoints,
+  // freeing the player to fly aircraft or just observe. Engine feeds synthetic
+  // WASD keys toward the next waypoint; any player WASD/gear cancels patrol.
+  // API: setCarrierPatrol(points|null) + _carrierPatrolKeys() overrides shipKeys.
+  setCarrierPatrol(points) {
+    if (!points || points.length === 0) {
+      this.carrierPatrol = null;
+      return;
+    }
+    if (this.shipClass !== 'carrier') return;
+    this.carrierPatrol = { points: points.map(p => ({ x: p.x, z: p.z })), idx: 0 };
+  }
+  clearCarrierPatrol() { this.carrierPatrol = null; }
+
+  // Synthetic keys steering the carrier toward its current patrol waypoint.
+  // Returns null when not patrolling (caller uses player keys then).
+  _carrierPatrolKeys() {
+    if (!this.carrierPatrol || !this.ship || !this.ship.alive) return null;
+    const pat = this.carrierPatrol;
+    const tgt = pat.points[pat.idx];
+    const dx = tgt.x - this.ship.position.x;
+    const dz = tgt.z - this.ship.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    // Reached waypoint -> advance to next (closed loop).
+    if (dist < 40) {
+      pat.idx = (pat.idx + 1) % pat.points.length;
+      return { w: true, a: false, s: false, d: false };
+    }
+    const desired = Math.atan2(dx, dz);
+    let err = desired - this.ship.heading;
+    while (err > Math.PI) err -= 2 * Math.PI;
+    while (err < -Math.PI) err += 2 * Math.PI;
+    return { w: true, a: err > 0.02, s: false, d: err < -0.02 };
+  }
+
+  // Compute the keys that should drive the SHIP this frame, taking patrol mode
+  // + squadron view into account. Patrol is cancelled if the player provides
+  // manual input (W/A/S/D / gear) so they can retake control instantly.
+  _shipKeysForFrame() {
+    if (this.playerView === 'squadron') {
+      // While flying, the ship autopilots: keep patrol if set, else idle.
+      return this._carrierPatrolKeys() || { w: false, a: false, s: false, d: false };
+    }
+    if (this.carrierPatrol) {
+      // Any manual steering input cancels patrol.
+      const k = this.controls.keys;
+      if (k.w || k.a || k.s || k.d) {
+        this.carrierPatrol = null;
+      } else {
+        return this._carrierPatrolKeys();
+      }
+    }
+    return this.controls.keys;
+  }
+
+  // Minimap centre + heading: follows the active squadron while flying so the
+  // map is aircraft-centric. Returns { pos, heading, followPos } where followPos
+  // is an optional extra blip to draw (the carrier hull, while the player flies).
+  _minimapCenter() {
+    if (this.playerView === 'squadron' && this.airWing && this.airWing.active.alive) {
+      const sq = this.airWing.active;
+      return {
+        pos: sq.position,
+        heading: sq.heading,
+        followPos: this.ship ? this.ship.position : null,
+      };
+    }
+    return { pos: this.ship.position, heading: this.ship.heading, followPos: null };
   }
 
   init(canvas) {
@@ -108,6 +213,9 @@ export class GameEngine {
     if (this.projectileManager) this.projectileManager.destroy();
     if (this.torpedoManager) this.torpedoManager.destroy();
     if (this.enemyManager) this.enemyManager.clear();
+    // Drop any carrier air-wing from the previous round (squadron meshes +
+    // view state) so a fresh match starts clean.
+    this._resetCarrierState();
     // Clear leftover team-mode units from a previous team battle.
     for (const u of this.teamUnits) {
       if (u.mesh) this.scene.remove(u.mesh);
@@ -192,6 +300,9 @@ export class GameEngine {
     if (this.ship) this.ship.destroy();
     if (this.projectileManager) this.projectileManager.destroy();
     if (this.torpedoManager) this.torpedoManager.destroy();
+    // Drop any carrier air-wing from the previous round (squadron meshes +
+    // view state) so a fresh match starts clean.
+    this._resetCarrierState();
     // Tear down any prior team units.
     for (const u of this.teamUnits) {
       if (u.mesh) this.scene.remove(u.mesh);
@@ -205,9 +316,33 @@ export class GameEngine {
     this.audio.startBGM();
 
     this.ship = new Ship(this.scene, this.level, this.shipClass);
-    // Friendly team spawns in a line, 100m apart, on water.
-    const friendlyLine = this._findTeamSpawnLine(4, 100);
-    const fp0 = friendlyLine[0];
+    // Friendly team spawns in a forward echelon (inverted-V) with the player as
+    // the rear point, all facing the enemy region. The wingmen sit AHEAD of the
+    // player (toward the enemy), spread in a shallow arc — this keeps them in
+    // the camera's forward view at spawn so their teammate HP labels render.
+    // (The earlier "line abreast perpendicular to facing" put them 90° off the
+    // camera's view axis → off-screen → labels never showed.)
+    // Pick a water centre for the formation, then offset the player and each
+    // wingman from it along (forward) / across (beam) the facing heading.
+    // All angles use the engine's heading convention (heading=0 → +Z, move via
+    // sin(h)*x, cos(h)*z).
+    const faceHeading = Math.random() * Math.PI * 2;
+    // Formation layout (player + 3 wingmen) in "ahead" / "beam" metres, where
+    // ahead>0 is forward (toward the enemy) and beam>0 is to the formation's
+    // right. _findTeamFormation resolves these to world coords along faceHeading.
+    //   player : ahead 0,   beam 0
+    //   wing 0 : ahead 90,  beam 0    (destroyer, centre, slightly ahead)
+    //   wing 1 : ahead 130, beam 70   (cruiser, right flank)
+    //   wing 2 : ahead 130, beam -70  (battleship, left flank)
+    const layout = [
+      { ahead: 0,   beam: 0   },   // player
+      { ahead: 90,  beam: 0   },   // destroyer
+      { ahead: 130, beam: 70  },   // cruiser
+      { ahead: 130, beam: -70 },   // battleship
+    ];
+    const formation = this._findTeamFormation(faceHeading, layout);
+    const fp0 = formation.points[0];              // player
+    const lineCenter = formation.points[Math.floor(formation.points.length / 2)];
     this.ship.position.set(fp0.x, 0, fp0.z);
     this.projectileManager = new ProjectileManager(this.scene, this.terrain, this.audio);
     this.torpedoManager = new TorpedoManager(this.scene, this.terrain, this.audio);
@@ -216,21 +351,35 @@ export class GameEngine {
     this.friendlies.push(playerAdapter);
 
     // Three wingmen: a fixed destroyer + cruiser + battleship trio, all at the
-    // player's level. ("护卫" maps to the lightest available class, destroyer.)
-    // They line up behind the player at 100m spacing.
+    // player's level. Spawned ahead of / flanking the player per `layout`.
     const wingClasses = ['destroyer', 'cruiser', 'battleship'];
     for (let i = 0; i < 3; i++) {
-      const wp = friendlyLine[i + 1];
+      const wp = formation.points[i + 1];
       const wing = new FriendlyAIShip(this.scene, this.terrain, wp.x, wp.z, this.level, wingClasses[i], i, playerAdapter);
       this.friendlies.push(wing);
       this.teamUnits.push(wing);
     }
 
     // Enemy team spawns in its own region: a patrol area centred >= 500m away
-    // from the friendly line, on water. Reds are spread out with a generous
-    // minimum spacing so they don't clump and concentrate fire. They patrol
-    // here until they detect the friendly team, then engage.
-    const enemyArea = this._findEnemyArea(friendlyLine[0], 500, 2200);
+    // from the friendly line, on water. Place it straight down the facing
+    // heading so the formation actually points at it. _findEnemyArea uses its
+    // own cos/sin bearing convention (dir = (cos b, sin b)); a heading of h has
+    // direction (sin h, cos h), so the equivalent bearing is π/2 - h. Reds are
+    // spread out with a generous minimum spacing so they don't clump and
+    // concentrate fire. They patrol here until they detect the friendly team,
+    // then engage.
+    const enemyBearing = Math.PI / 2 - faceHeading;
+    const enemyArea = this._findEnemyArea(lineCenter, 500, 2200, enemyBearing);
+    // Point every friendly hull (player ship + wingmen) at the enemy region and
+    // sync the mesh rotation so they spawn already in formation facing forward.
+    this.ship.heading = faceHeading;
+    this.ship.velocityHeading = faceHeading;
+    this.ship.mesh.rotation.y = faceHeading;
+    for (const u of this.teamUnits) {
+      u.heading = faceHeading;
+      u.velocityHeading = faceHeading;
+      u.mesh.rotation.y = faceHeading;
+    }
     const placedReds = [];
     for (let i = 0; i < 10; i++) {
       const ep = this._findWaterPosInArea(enemyArea.cx, enemyArea.cz, enemyArea.radius, placedReds, 280);
@@ -262,7 +411,13 @@ export class GameEngine {
     this.controls.keys = { w: false, a: false, s: false, d: false };
     this.controls.gear = 1;
 
-    this.camera.position.set(this.ship.position.x, CAM_HEIGHT, this.ship.position.z - CAM_DIST);
+    // Place the camera directly behind the player (opposite the enemy region)
+    // so the player starts looking toward the enemy spawn area.
+    this.camera.position.set(
+      this.ship.position.x - Math.sin(this.ship.heading) * CAM_DIST,
+      CAM_HEIGHT,
+      this.ship.position.z - Math.cos(this.ship.heading) * CAM_DIST
+    );
     if (document.pointerLockElement) document.exitPointerLock();
 
     // Stop the solo loop that init() started, then start the team loop.
@@ -271,6 +426,16 @@ export class GameEngine {
     this.lastTime = performance.now();
     this._loopTeam = this._loopTeam.bind(this);
     this.animFrameId = requestAnimationFrame(this._loopTeam);
+  }
+
+  // Horizontal distance from a world point to the player ship, in meters,
+  // used to attenuate impact-sound volume with distance.
+  _distToPlayer(x, z) {
+    const sp = this.ship && this.ship.position;
+    if (!sp) return 0;
+    const dx = x - sp.x;
+    const dz = z - sp.z;
+    return Math.sqrt(dx * dx + dz * dz);
   }
 
   // OBB hit test for a team AI ship (same shape logic as projectile.js uses for
@@ -310,7 +475,7 @@ export class GameEngine {
         if (this._pointHitsTeamUnit(u, px, py, pz)) {
           u.takeDamage(damage);
           this.projectileManager._explode(new THREE.Vector3(px, py, pz), 0xff4400, 5);
-          if (this.audio) this.audio.playExplosion();
+          if (this.audio) this.audio.playExplosion(this._distToPlayer(px, pz));
           return true;
         }
       }
@@ -378,7 +543,12 @@ export class GameEngine {
     if (!width || !height) return labels;
 
     const v = this._labelTempVec;
-    const wingmen = this.friendlies.filter(u => u instanceof FriendlyAIShip);
+    // Identify wingmen by the duck-type isWingman flag (set in FriendlyAIShip's
+    // ctor) rather than `instanceof FriendlyAIShip`: the latter can fail across
+    // duplicated module identities under some bundler/hot-reload setups, which
+    // would silently empty this list (and the HUD wingmen list) so teammate
+    // labels never appear. Fall back to instanceof for older units just in case.
+    const wingmen = this.friendlies.filter(u => u && (u.isWingman || u instanceof FriendlyAIShip));
     for (const w of wingmen) {
       if (!w.mesh || !w.alive) {
         labels.push({ id: w.slot, slot: w.slot, hp: w.hp, maxHp: w.maxHp, alive: false, x: 0, y: 0 });
@@ -428,6 +598,10 @@ export class GameEngine {
       this.water.material.uniforms['uCameraPos'].value.copy(this.camera.position);
     }
 
+    // 云的漂移时钟与水波共用同一累计值
+    const skyDome = this.scene.userData.skyDome;
+    if (skyDome) skyDome.material.uniforms.time.value = this.water.material.uniforms['time'].value;
+
     if (!this.ship) {
       this.renderer.render(this.scene, this.camera);
       this.animFrameId = requestAnimationFrame(this._loopTeam);
@@ -439,24 +613,109 @@ export class GameEngine {
       this.renderer.render(this.scene, this.camera);
       if (!this._gameOverFired && this.onGameOver) {
         this._gameOverFired = true;
-        this.onGameOver(this.score, this.level, this.enemiesDestroyed, { mode: 'team', result: this.teamResult });
+        // Pass the team settings (level + ship class) so the React layer can
+        // offer a "rematch" that restarts the same battle instead of defaulting
+        // back to solo level 1.
+        this.onGameOver(this.score, this.level, this.enemiesDestroyed, {
+          mode: 'team',
+          result: this.teamResult,
+          shipClass: this.shipClass,
+        });
       }
       this.animFrameId = requestAnimationFrame(this._loopTeam);
       return;
     }
 
-    this.controls.updateMotionKeys(this.ship.speed, this.ship.maxSpeed);
-    this.ship.update(dt, this.controls.keys, this.terrain);
+    // In squadron view the carrier autopilots; keys drive the squadron.
+    const shipKeys = this._shipKeysForFrame();
+    // updateMotionKeys rewrites keys.w/keys.s from the carrier's gear/speed —
+    // that's for steering the ship. In squadron view the player's W/S are
+    // altitude controls instead, so we must NOT clobber them here (the ship
+    // drives itself via _carrierPatrolKeys and ignores controls.keys anyway).
+    if (this.playerView !== 'squadron') {
+      this.controls.updateMotionKeys(this.ship.speed, this.ship.maxSpeed);
+    }
+    this.ship.update(dt, shipKeys, this.terrain);
     this.skills.update(dt, this.ship);
     const skillActs = this.controls.consumeSkillActivations();
     for (const name of skillActs) this.skills.activate(name, this.ship);
+
+    // Submarine dive toggle (no-op for other classes).
+    if (this.controls.consumeDiveToggle()) {
+      this.ship.toggleDive();
+    }
+
+    // Carrier view toggle + squadron phase.
+    if (this.controls.consumeViewToggle()) {
+      this._toggleCarrierView();
+    }
+    const launchGroup = this.controls.consumeSquadronLaunch();
+    if (launchGroup && this.shipClass === 'carrier') {
+      if (this.playerView !== 'squadron') {
+        this._enterSquadronView(launchGroup);
+      } else {
+        // Already flying: 5/6 hands control to that squadron (activates it).
+        if (this.airWing) this.airWing.setActive(launchGroup);
+      }
+    }
+    // Tab: switch the active squadron (torpedo <-> bomber).
+    if (this.controls.consumeSquadronSwitch() && this.playerView === 'squadron' && this.airWing) {
+      this.airWing.switchActive();
+      this._resetSquadronOrbit();
+    }
+    if (this.controls.consumeAutoPilotToggle() && this.shipClass === 'carrier') {
+      if (!this.airWing) this._enterSquadronView('torpedo');
+      if (this.airWing) {
+        // Toggle the active squadron's auto-pilot.
+        const sq = this.airWing.active;
+        sq.autoPilot = !sq.autoPilot;
+        sq._autoTarget = null;
+      }
+    }
+    // Carrier patrol map toggle (M) — hand off to React for rendering.
+    if (this.controls.consumeCarrierMapToggle() && this.shipClass === 'carrier' && this.onCarrierMapToggle) {
+      this.onCarrierMapToggle();
+    }
+    // Squadron phase: both squadrons update; the active one takes player keys,
+    // the inactive one cruises (or runs its own auto-pilot). autoPilot drops are
+    // released for whichever squadron requested one this frame.
+    const squadCtx = {
+      carrierPos: this.ship ? this.ship.position : null,
+      enemies: this.reds,
+      terrain: this.terrain,
+    };
+    if (this.airWing) {
+      const inView = this.playerView === 'squadron';
+      this.airWing.update(dt, inView ? this.controls.keys : { w: false, a: false, s: false, d: false }, squadCtx);
+      // Auto-pilot drops: each squadron may have requested its own-type drop.
+      for (const sq of [this.airWing.torpedo, this.airWing.bomber]) {
+        if (sq.autoPilot && sq.autoDrop) {
+          this._release(sq, sq.type);
+          sq.autoDrop = false;
+        }
+      }
+      // Crashed active squadron -> fall back to ship view (see solo loop).
+      if (inView && !this.airWing.active.alive) {
+        this.playerView = 'ship';
+        this.controls.viewMode = 'ship';
+        if (this.onSquadronCrash) this.onSquadronCrash(this.airWing.activeType);
+      }
+      if (this.playerView === 'squadron') {
+        this.airWing.updateGuides();
+        this._updateSquadronFire();
+      } else {
+        this.airWing.torpedo.updateGuides(false);
+        this.airWing.bomber.updateGuides(false);
+      }
+    }
 
     this.audio.updateEngineBySpeed(this.ship.alive ? this.ship.speed : 0, this.ship.maxSpeed);
 
     this._updateCameraAndScope();
 
-    // Player firing (same flow as solo).
-    if (this.ship.alive) {
+    // Player firing — only when steering the ship (squadron mode handles its
+    // own fire in _updateSquadronFire above).
+    if (this.ship.alive && this.playerView === 'ship') {
       this._teamPlayerFire(dt);
     }
 
@@ -467,7 +726,12 @@ export class GameEngine {
     // is same-faction and should be ignored) are resolved centrally in
     // _applyTeamDamage. Enemy-tagged shots still hit the player via the
     // player-hit branch of projectileManager.update.
-    this.projectileManager.update(dt, this.ship, this.reds);
+    // AA auto-defense + ASW target setup (mirror the solo loop).
+    this._updateAaDefense(dt);
+    if (this._aswCooldown > 0) this._aswCooldown = Math.max(0, this._aswCooldown - dt);
+    this._refreshAswTargets();
+
+    this.projectileManager.update(dt, this.ship, this.reds, this._collectAllSquadrons());
     if (this.torpedoManager) {
       this.torpedoManager.update(dt, this.ship, this.reds);
       const isTorpedoMode = this.controls.weaponMode === 'torpedo';
@@ -492,6 +756,8 @@ export class GameEngine {
       if (!u.alive) continue;
       u.updateShip(dt, ppos, playerAdapter.heading, playerAdapter.speed, this.projectileManager, this.camera, this.torpedoManager);
     }
+    // Enemy strike aircraft (the AA target) — same as the solo loop.
+    this._updateEnemySquadrons(dt);
 
     // Central friendly-fire / cross-faction damage resolution.
     this._applyTeamDamage();
@@ -514,7 +780,7 @@ export class GameEngine {
 
     if (this.onHudUpdate) {
       const friendliesAlive = (this.ship && this.ship.alive ? 1 : 0) +
-        this.friendlies.filter(u => u instanceof FriendlyAIShip && u.alive).length;
+        this.friendlies.filter(u => u && (u.isWingman || u instanceof FriendlyAIShip) && u.alive).length;
       this.onHudUpdate({
         fps: Math.round(this._fps),
         hp: this.ship.hp,
@@ -525,6 +791,11 @@ export class GameEngine {
         weaponMode: this.controls.weaponMode,
         torpedoTier: this.controls.torpedoTier,
         torpedoSpread: this.controls.torpedoSpread,
+        turrets: this.ship.turrets.map(t => ({
+          cooldown: t.cooldown,
+          maxCooldown: this.ship.fireCooldown,
+          isFront: t.isFront,
+        })),
         torpedoTubes: this._torpedoCooldowns.map((cd, i) => ({
           index: i, cooldown: cd,
           side: this.ship.torpedoTubes[i]?.side || 'port', ready: cd <= 0,
@@ -534,6 +805,7 @@ export class GameEngine {
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
         gear: this.controls.gear,
         skills: this.skills.toSnapshot(),
+        squadron: this._squadronHud(),
         // Team-specific.
         mode: 'team',
         friendliesAlive,
@@ -541,15 +813,17 @@ export class GameEngine {
         redsAlive: this.reds.filter(r => r.alive).length,
         redsTotal: 10,
         wingmen: this.friendlies
-          .filter(u => u instanceof FriendlyAIShip)
+          .filter(u => u && (u.isWingman || u instanceof FriendlyAIShip))
           .map(u => ({ alive: u.alive, hp: u.hp, maxHp: u.maxHp })),
       });
     }
 
     if (this.onMinimapUpdate) {
+      const mc = this._minimapCenter();
       this.onMinimapUpdate({
-        playerPos: this.ship.position,
-        playerHeading: this.ship.heading,
+        playerPos: mc.pos,
+        playerHeading: mc.heading,
+        followPos: mc.followPos,
         enemies: this.reds,
         terrainImage: this._minimapTerrain,
       });
@@ -559,8 +833,14 @@ export class GameEngine {
     // (编号 + 血条). Hidden while scoped (player is aiming, labels would
     // clutter the scope view) — consistent with how minimap/labels behave.
     if (this.onTeamLabelsUpdate) {
+      // Keep BOTH matrices fresh before projecting screen-space labels:
+      // _updateCameraAndScope (above) may have changed fov this frame, and
+      // v.project() reads camera.projectionMatrix. Without this, labels can
+      // project to stale/off-screen coords on fov transitions.
       this.camera.updateMatrixWorld();
-      this.onTeamLabelsUpdate(this.controls.scoped ? [] : this._computeTeamLabels());
+      this.camera.updateProjectionMatrix();
+      const labels = this.controls.scoped ? [] : this._computeTeamLabels();
+      this.onTeamLabelsUpdate(labels);
     }
 
     // Emit aggregated player-dealt damage feedback (throttled to ≤10/sec).
@@ -581,10 +861,13 @@ export class GameEngine {
       currentAimYaw = aimTurretsAtPoint(this.ship, aimTarget, dt) ?? 0;
     }
 
-    if (this.controls.consumeFire()) {
+    if (this.playerView === 'ship' && this.controls.consumeFire()) {
       if (this.controls.weaponMode === 'torpedo' && this.ship.torpedoTubes.length > 0) {
         this._fireTorpedoes();
-      } else {
+      } else if (this.controls.weaponMode === 'asw') {
+        this._fireDepthCharges(aimTarget);
+      } else if (!this.ship.fullySubmerged) {
+        // Submerged submarines cannot fire their deck gun (it's underwater).
         let anyFired = false;
         const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
         const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
@@ -643,12 +926,17 @@ export class GameEngine {
   _updateControlsCapabilities() {
     if (!this.shipClass || this.level < 4) {
       this.controls.setTorpedoCapabilities({ availableTiers: [] });
+      this.controls.setAswCapability(false);
       return;
     }
     const cc = CLASS_CONFIG[this.shipClass]?.[this.level];
     if (cc) {
       this.controls.setTorpedoCapabilities({ availableTiers: cc.torpedoTiers });
     }
+    // ASW availability is per-class (not per-level): a ship can lob depth
+    // charges iff its class has an ASW fit. AA needs no capability flag (it's
+    // automatic point-defense).
+    this.controls.setAswCapability(!!getClassAsw(this.shipClass));
   }
 
   _findSafeSpawn() {
@@ -664,64 +952,84 @@ export class GameEngine {
     return pos;
   }
 
-  // Team-mode friendly spawn: a straight line of `count` water points, `spacing`
-  // metres apart along a random heading, all over water. Returns array of {x,z}.
-  _findTeamSpawnLine(count, spacing) {
+  // Place the friendly formation so every slot is on water. `faceHeading` is
+  // the direction the formation faces (toward the enemy); `layout` is an array
+  // of { ahead, beam } offsets in metres where ahead>0 is forward (toward the
+  // enemy) and beam>0 is to the formation's right. Returns { points } in the
+  // same order as `layout`, in world coords. Sweeps candidate centres until the
+  // whole formation lands on water.
+  _findTeamFormation(faceHeading, layout) {
     const terrain = this.terrain;
     const isWater = (x, z) => !terrain || !terrain.isLand(x, z);
-    const tryLine = (cx, cz, ang) => {
+    const fwdX = Math.sin(faceHeading), fwdZ = Math.cos(faceHeading);
+    const beamX = Math.cos(faceHeading), beamZ = -Math.sin(faceHeading); // 90° right of fwd
+    const buildAt = (cx, cz) => {
       const pts = [];
-      const dx = Math.sin(ang), dz = Math.cos(ang);
-      // Centre the line on (cx,cz): index offsets span both directions.
-      const off0 = -((count - 1) / 2) * spacing;
-      for (let i = 0; i < count; i++) {
-        const t = off0 + i * spacing;
-        pts.push({ x: cx + dx * t, z: cz + dz * t });
+      for (const L of layout) {
+        pts.push({
+          x: cx + fwdX * L.ahead + beamX * L.beam,
+          z: cz + fwdZ * L.ahead + beamZ * L.beam,
+        });
       }
       return pts.every(p => isWater(p.x, p.z)) ? pts : null;
     };
 
-    // First try around map centre, then sweep outward.
     for (let r = 0; r <= 3000; r += 150) {
       for (let a = 0; a < Math.PI * 2; a += Math.PI / 5) {
         const cx = Math.cos(a) * r;
         const cz = Math.sin(a) * r;
-        // Try a few line orientations at each candidate centre.
-        for (let la = 0; la < Math.PI; la += Math.PI / 4) {
-          const pts = tryLine(cx, cz, la);
-          if (pts) return pts;
-        }
+        const pts = buildAt(cx, cz);
+        if (pts) return { points: pts };
       }
     }
-    // Fallback: a degenerate line at the safe spawn.
+    // Fallback: build the formation around the safe spawn.
     const s = this._findSafeSpawn();
-    const pts = [];
-    for (let i = 0; i < count; i++) pts.push({ x: s.x + i * spacing, z: s.z });
-    return pts;
+    return { points: buildAt(s.x, s.z) || layout.map(L => ({
+      x: s.x + fwdX * L.ahead + beamX * L.beam,
+      z: s.z + fwdZ * L.ahead + beamZ * L.beam,
+    })) };
   }
 
   // Pick an enemy patrol area: a circle of `areaRadius` centred at a water
-  // point that is at least `minGap` metres from `friendlyPos`. Returns
+  // point that is at least `minGap` metres from `friendlyPos`. If `bearing`
+  // (a compass angle in this fn's cos/sin convention: dir=(cos b, sin b)) is
+  // supplied, the area is placed straight down that bearing when possible so
+  // the friendly formation's facing heading points at it. Returns
   // {cx, cz, radius}.
-  _findEnemyArea(friendlyPos, minGap, areaDiameter) {
+  _findEnemyArea(friendlyPos, minGap, areaDiameter, bearing = null) {
     const radius = areaDiameter / 2;
     const terrain = this.terrain;
     const isWater = (x, z) => !terrain || !terrain.isLand(x, z);
-    // Direction away from origin, then place the area centre at friendly + gap + radius.
+
+    // Helper: place the area centre at distance r along a given bearing and
+    // validate it (water + min gap from the friendly line).
+    const tryAt = (a, r) => {
+      const cx = friendlyPos.x + Math.cos(a) * r;
+      const cz = friendlyPos.z + Math.sin(a) * r;
+      const nearestEdge = Math.hypot(cx - friendlyPos.x, cz - friendlyPos.z) - radius;
+      if (nearestEdge < minGap) return null;
+      if (!isWater(cx, cz)) return null;
+      return { cx, cz, radius };
+    };
+
+    // Preferred bearing first: scan out along it, widening the search if the
+    // chosen line is blocked by land.
+    if (bearing != null) {
+      for (let r = minGap + radius; r <= minGap + radius + 3000; r += 200) {
+        const hit = tryAt(bearing, r);
+        if (hit) return hit;
+      }
+    }
+
+    // Otherwise scan all bearings.
     for (let r = minGap + radius; r <= minGap + radius + 3000; r += 200) {
       for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
-        const cx = friendlyPos.x + Math.cos(a) * r;
-        const cz = friendlyPos.z + Math.sin(a) * r;
-        // The area centre and its edge nearest the friendlies must both be water
-        // and the centre must keep >= minGap from the friendly line.
-        const nearestEdge = Math.hypot(cx - friendlyPos.x, cz - friendlyPos.z) - radius;
-        if (nearestEdge < minGap) continue;
-        if (!isWater(cx, cz)) continue;
-        return { cx, cz, radius };
+        const hit = tryAt(a, r);
+        if (hit) return hit;
       }
     }
     // Fallback: straight out from the friendly spawn.
-    const ang = Math.atan2(friendlyPos.z, friendlyPos.x) + Math.PI;
+    const ang = bearing != null ? bearing : (Math.atan2(friendlyPos.z, friendlyPos.x) + Math.PI);
     return {
       cx: friendlyPos.x + Math.cos(ang) * (minGap + radius),
       cz: friendlyPos.z + Math.sin(ang) * (minGap + radius),
@@ -791,33 +1099,70 @@ export class GameEngine {
 
   // Shared camera + scope handling for both solo and team loops.
   _updateCameraAndScope() {
+    // Squadron (carrier aircraft) view: a high trailing chase cam behind the
+    // ACTIVE squadron. The camera POSITION locks to the plane's heading (so the
+    // plane stays ahead of the camera), but the camera's LOOK direction is free
+    // — the mouse (orbitYaw/orbitPitch) lets the player look around without
+    // dragging the plane off course. No scope in this view.
+    if (this.playerView === 'squadron' && this.airWing) {
+      const subj = this.airWing.active;
+      const headingYaw = subj.cameraHeading;
+      const camDist = 35;
+      const camHeight = 25;
+      const targetCamPos = new THREE.Vector3(
+        subj.position.x - Math.sin(headingYaw) * camDist,
+        subj.position.y + camHeight,
+        subj.position.z - Math.cos(headingYaw) * camDist
+      );
+      this.camera.position.lerp(targetCamPos, 0.12);
+
+      const targetFov = this.controls.normalFov || FOV_NORMAL;
+      this._currentFov += (targetFov - this._currentFov) * 0.12;
+      this.camera.fov = this._currentFov;
+      this.camera.updateProjectionMatrix();
+
+      if (this.onScopeChange) this.onScopeChange(false);
+
+      // Free-look: heading + mouse orbit offset for direction; pitch from mouse.
+      const worldYaw = headingYaw + this.controls.orbitYaw;
+      const pitch = Math.max(-1.2, Math.min(0.4, this.controls.orbitPitch));
+      const lookDir = new THREE.Vector3(
+        Math.sin(worldYaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.cos(worldYaw) * Math.cos(pitch)
+      );
+      this.camera.lookAt(this.camera.position.clone().add(lookDir.multiplyScalar(1000)));
+      return;
+    }
+
+    const ship = this.ship;
     const scoped = this.controls.scoped;
     // 进入开镜的边沿：把当前世界朝向锚定为绝对方向，之后船身转向
     // 不再带动瞄准镜；只有鼠标移动会改 scopedWorldYaw。
     if (scoped && !this.controls._wasScoped) {
-      this.controls.scopedWorldYaw = this.ship.heading + this.controls.orbitYaw;
+      this.controls.scopedWorldYaw = ship.heading + this.controls.orbitYaw;
     }
     this.controls._wasScoped = scoped;
     const worldYaw = scoped
       ? this.controls.scopedWorldYaw
-      : this.ship.heading + this.controls.orbitYaw;
-    const shipScale = this.ship.shipLength / 10;
+      : ship.heading + this.controls.orbitYaw;
+    const shipScale = ship.shipLength / 10;
     let targetCamPos;
     const hOff = this.controls.heightOffset || 0;
     if (scoped) {
-      const scopedH = (this.ship.scopedCameraHeight || CAM_HEIGHT_SCOPED) + hOff;
+      const scopedH = (ship.scopedCameraHeight || CAM_HEIGHT_SCOPED) + hOff;
       targetCamPos = new THREE.Vector3(
-        this.ship.position.x,
-        this.ship.position.y + scopedH,
-        this.ship.position.z
+        ship.position.x,
+        ship.position.y + scopedH,
+        ship.position.z
       );
     } else {
       const camDist = CAM_DIST + shipScale * 5;
       const camHeight = CAM_HEIGHT + shipScale * 3 + hOff;
       targetCamPos = new THREE.Vector3(
-        this.ship.position.x - Math.sin(worldYaw) * camDist,
-        this.ship.position.y + camHeight,
-        this.ship.position.z - Math.cos(worldYaw) * camDist
+        ship.position.x - Math.sin(worldYaw) * camDist,
+        ship.position.y + camHeight,
+        ship.position.z - Math.cos(worldYaw) * camDist
       );
     }
     const camLerp = scoped ? 0.15 : 0.12;
@@ -857,19 +1202,112 @@ export class GameEngine {
       this.water.material.uniforms['uCameraPos'].value.copy(this.camera.position);
     }
 
+    // 云的漂移时钟与水波共用同一累计值
+    const skyDome = this.scene.userData.skyDome;
+    if (skyDome) skyDome.material.uniforms.time.value = this.water.material.uniforms['time'].value;
+
     if (!this.ship) {
       this.renderer.render(this.scene, this.camera);
       return;
     }
 
-    this.controls.updateMotionKeys(this.ship.speed, this.ship.maxSpeed);
-    this.ship.update(dt, this.controls.keys, this.terrain);
+    // In squadron view the carrier keeps cruising under autopilot (no WASD);
+    // the player's keys drive the squadron instead. Skip updateMotionKeys so
+    // it doesn't overwrite the player's W/S altitude inputs (see team loop).
+    const shipKeys = this._shipKeysForFrame();
+    if (this.playerView !== 'squadron') {
+      this.controls.updateMotionKeys(this.ship.speed, this.ship.maxSpeed);
+    }
+    this.ship.update(dt, shipKeys, this.terrain);
 
     // Process skills
     this.skills.update(dt, this.ship);
     const skillActs = this.controls.consumeSkillActivations();
     for (const name of skillActs) {
       this.skills.activate(name, this.ship);
+    }
+
+    // Submarine dive toggle (no-op for other classes).
+    if (this.controls.consumeDiveToggle()) {
+      this.ship.toggleDive();
+    }
+
+    // Carrier view toggle: T returns to the ship (or launches if pressed on
+    // foot). The dedicated air-group buttons (5/6) + Tab are handled below.
+    if (this.controls.consumeViewToggle()) {
+      this._toggleCarrierView();
+    }
+
+    // Carrier air-group launch / switch (keys 5/6). Launches both squadrons if
+    // steering; while flying, 5/6 hands control to that squadron (activates it).
+    const launchGroup = this.controls.consumeSquadronLaunch();
+    if (launchGroup) {
+      if (this.shipClass === 'carrier') {
+        if (this.playerView !== 'squadron') {
+          this._enterSquadronView(launchGroup);
+        } else if (this.airWing) {
+          this.airWing.setActive(launchGroup);
+          this._resetSquadronOrbit();
+        }
+      }
+    }
+
+    // Tab: switch the active squadron (torpedo <-> bomber) while flying.
+    if (this.controls.consumeSquadronSwitch() && this.playerView === 'squadron' && this.airWing) {
+      this.airWing.switchActive();
+      this._resetSquadronOrbit();
+    }
+
+    // Carrier squadron auto-pilot toggle (key Y). Engages/disengages the ACTIVE
+    // squadron's auto-attack.
+    if (this.controls.consumeAutoPilotToggle() && this.shipClass === 'carrier') {
+      if (!this.airWing) {
+        this._enterSquadronView('torpedo');
+      }
+      if (this.airWing) {
+        const sq = this.airWing.active;
+        sq.autoPilot = !sq.autoPilot;
+        sq._autoTarget = null;
+      }
+    }
+
+    // Carrier patrol map toggle (M) — hand off to React for rendering.
+    if (this.controls.consumeCarrierMapToggle() && this.shipClass === 'carrier' && this.onCarrierMapToggle) {
+      this.onCarrierMapToggle();
+    }
+
+    // Squadron phase: both squadrons update; the active one takes player keys,
+    // the inactive one cruises (or runs its own auto-pilot). autoPilot can also
+    // be engaged while steering the ship (the squadron flies itself).
+    const squadCtx = {
+      carrierPos: this.ship ? this.ship.position : null,
+      enemies: this.enemyManager.enemies,
+      terrain: this.terrain,
+    };
+    if (this.airWing) {
+      const inView = this.playerView === 'squadron';
+      this.airWing.update(dt, inView ? this.controls.keys : { w: false, a: false, s: false, d: false }, squadCtx);
+      for (const sq of [this.airWing.torpedo, this.airWing.bomber]) {
+        if (sq.autoPilot && sq.autoDrop) {
+          this._release(sq, sq.type);
+          sq.autoDrop = false;
+        }
+      }
+      // If the squadron the player is flying just crashed, fall back to the
+      // ship view so the camera doesn't follow a dead/hidden aircraft. The
+      // player can re-launch (T/5/6) to get a fresh, repaired squadron.
+      if (inView && !this.airWing.active.alive) {
+        this.playerView = 'ship';
+        this.controls.viewMode = 'ship';
+        if (this.onSquadronCrash) this.onSquadronCrash(this.airWing.activeType);
+      }
+      if (this.playerView === 'squadron') {
+        this.airWing.updateGuides();
+        this._updateSquadronFire();
+      } else {
+        this.airWing.torpedo.updateGuides(false);
+        this.airWing.bomber.updateGuides(false);
+      }
     }
 
     if (!this.ship.alive) {
@@ -897,10 +1335,13 @@ export class GameEngine {
       currentAimYaw = aimTurretsAtPoint(this.ship, aimTarget, dt) ?? 0;
     }
 
-    if (this.controls.consumeFire()) {
+    if (this.playerView === 'ship' && this.controls.consumeFire()) {
       if (this.controls.weaponMode === 'torpedo' && this.ship.torpedoTubes.length > 0) {
         this._fireTorpedoes();
-      } else {
+      } else if (this.controls.weaponMode === 'asw') {
+        this._fireDepthCharges(aimTarget);
+      } else if (!this.ship.fullySubmerged) {
+        // Submerged submarines cannot fire their deck gun (it's underwater).
         let anyFired = false;
         const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
         const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
@@ -929,7 +1370,12 @@ export class GameEngine {
       }
     }
 
-    this.projectileManager.update(dt, this.ship, this.enemyManager.enemies);
+    // AA auto-defense + ASW target setup for the player's ship.
+    this._updateAaDefense(dt);
+    if (this._aswCooldown > 0) this._aswCooldown = Math.max(0, this._aswCooldown - dt);
+    this._refreshAswTargets();
+
+    this.projectileManager.update(dt, this.ship, this.enemyManager.enemies, this._collectAllSquadrons());
     if (this.torpedoManager) {
       this.torpedoManager.update(dt, this.ship, this.enemyManager.enemies);
 
@@ -950,11 +1396,14 @@ export class GameEngine {
     }
     this._updateTorpedoCooldowns(dt);
     this.enemyManager.update(dt, this.ship.position, this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
+    // Enemy strike aircraft (the AA target): spawn waves that fly in, bomb the
+    // player, and leave — so AA + flak hit detection have something to shoot.
+    this._updateEnemySquadrons(dt);
 
     for (const enemy of this.enemyManager.enemies) {
       if (enemy.alive && enemy.hp <= 0) {
         this.enemyManager.destroyEnemy(enemy);
-        this.audio.playExplosion();
+        this.audio.playExplosion(this._distToPlayer(enemy.mesh.position.x, enemy.mesh.position.z));
         this.score += enemy.scoreValue;
         this.enemiesDestroyed++;
         if (this.onHitFeedback) this.onHitFeedback({ type: 'kill', score: enemy.scoreValue });
@@ -1013,13 +1462,16 @@ export class GameEngine {
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
         gear: this.controls.gear,
         skills: this.skills.toSnapshot(),
+        squadron: this._squadronHud(),
       });
     }
 
     if (this.onMinimapUpdate) {
+      const mc = this._minimapCenter();
       this.onMinimapUpdate({
-        playerPos: this.ship.position,
-        playerHeading: this.ship.heading,
+        playerPos: mc.pos,
+        playerHeading: mc.heading,
+        followPos: mc.followPos,
         enemies: this.enemyManager.enemies,
         terrainImage: this._minimapTerrain,
       });
@@ -1086,6 +1538,8 @@ export class GameEngine {
     this.ship.upgradeToLevel(newLevel);
     this._torpedoCooldowns = this.ship.torpedoTubes.map(() => 0);
     this._updateControlsCapabilities();
+    // A carrier's air-group stats scale with level; bump the air wing if airborne.
+    if (this.airWing) this.airWing.setLevel(newLevel);
     if (this.onLevelUp) {
       const oldCfg = getClassConfig(this.shipClass, oldLevel) || LEVEL_CONFIG[oldLevel];
       const newCfg = getClassConfig(this.shipClass, newLevel) || LEVEL_CONFIG[newLevel];
@@ -1103,11 +1557,109 @@ export class GameEngine {
   selectClass(shipClass) {
     this.shipClass = shipClass;
     this._waitingForClassSelect = false;
+    // Cancel the pending RAF before flipping running back on: while the class
+    // overlay was up the loop had already scheduled its next frame (line ~931
+    // runs before _checkLevelUp sets running=false). That pending frame sees
+    // running=true again and would run a SECOND concurrent loop alongside the
+    // one we request below — double-stepping dt, double-scoring kills, and
+    // racing the wave-spawn check, which made enemies spawn/refresh erratically
+    // after the 3→4 class pick.
+    if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     this.running = true;
     this.lastTime = performance.now();
     this._applyLevelUp(3, 4);
     this._loop = this._loop.bind(this);
     this.animFrameId = requestAnimationFrame(this._loop);
+  }
+
+  // Carrier: launch / re-enter squadron view, or return to the ship. T from the
+  // ship launches the air wing (default active = torpedo); T while flying
+  // returns to steering the ship.
+  _toggleCarrierView() {
+    if (this.shipClass !== 'carrier') return;
+    if (this.playerView === 'ship') {
+      this._enterSquadronView('torpedo');
+    } else {
+      this.playerView = 'ship';
+      this.controls.viewMode = 'ship';
+      this._resetSquadronOrbit();
+    }
+  }
+
+  // Reset the free-look orbit offsets so re-entering squadron view (or switching
+  // the active squadron) starts with a neutral, heading-aligned camera rather
+  // than inheriting a leftover orbit from the previous view.
+  _resetSquadronOrbit() {
+    this.controls.orbitYaw = 0;
+    this.controls.orbitPitch = -0.35;
+  }
+
+  // Launch the air wing (or re-launch an existing one) and flip the camera/input
+  // over to it. Both squadrons start fully armed; re-launching refills both.
+  // `group` selects which squadron is active first (5=torpedo, 6=bomber).
+  _enterSquadronView(group = null) {
+    if (this.shipClass !== 'carrier') return;
+    if (!this.airWing) {
+      this.airWing = new CarrierAirWing(
+        this.scene,
+        this.ship.position.x,
+        this.ship.position.z,
+        'player',
+        this.level
+      );
+      if (!this.squadronManager) {
+        this.squadronManager = new SquadronManager(this.scene);
+      }
+      this.squadronManager.add(this.airWing);
+    } else {
+      // Re-launch: reposition both squadrons to the carrier and top up ammo.
+      this.airWing.relaunchAt(this.ship.position.x, this.ship.position.z, this.ship.heading);
+    }
+    if (group === 'bomber') this.airWing.setActive('bomber');
+    else this.airWing.setActive('torpedo');
+    this.playerView = 'squadron';
+    this.controls.viewMode = 'squadron';
+    this.controls.scoped = false;
+    this._resetSquadronOrbit();
+  }
+
+  // Squadron fire: left-click releases a salvo from the ACTIVE squadron (its own
+  // type). `sq`/`type` override the active squadron — used by auto-pilot when a
+  // specific squadron requests its own-type drop.
+  _updateSquadronFire() {
+    if (!this.airWing) return;
+    if (!this.controls.consumeFire()) return;
+    const sq = this.airWing.active;
+    this._release(sq, sq.type);
+  }
+
+  // Actually release one salvo from the given squadron (of its own type). Bombs
+  // launch with an absolute initial velocity so they follow a ballistic arc.
+  _release(sq, type) {
+    if (!sq) return;
+    if (type === 'torpedo') {
+      const drops = sq.dropTorpedo();
+      if (drops.length > 0) {
+        for (const d of drops) {
+          this.torpedoManager.fire(d.origin, d.heading, d.tier, this.level, 1, 'narrow', 'player');
+        }
+        if (this.audio) this.audio.playTorpedoLaunch();
+      }
+    } else {
+      const drops = sq.dropBomb();
+      if (drops.length > 0) {
+        for (const d of drops) {
+          // Build a unit direction + speed from the absolute velocity so the
+          // projectile manager's `velocity = dir * muzzleSpeed` reproduces the
+          // ballistic throw (forward ground speed + downward kick).
+          const v = d.velocity;
+          const speed = v.length();
+          const dir = speed > 0 ? v.clone().multiplyScalar(1 / speed) : new THREE.Vector3(0, -1, 0);
+          this.projectileManager.fire(d.origin, dir, d.damage, 'player', speed, CARRIER.bombDrag, d.weapon);
+        }
+        if (this.audio) this.audio.playFire('carrier');
+      }
+    }
   }
 
   _fireTorpedoes() {
@@ -1131,7 +1683,9 @@ export class GameEngine {
       this.level,
       readyTubes.length,
       spread,
-      'player'
+      'player',
+      // Submarine torpedoes are homing (acoustic). Other classes fire dumb.
+      this.shipClass === 'submarine'
     );
 
     const cd = this._getTorpedoCooldown();
@@ -1139,6 +1693,239 @@ export class GameEngine {
       this._torpedoCooldowns[idx] = cd;
     }
     this.audio.playTorpedoLaunch();
+  }
+
+  // Player ASW (depth-charge) release: aim at a water point, lob a salvo of
+  // depth charges toward it. Each charge detonates on water impact with an AoE
+  // that damages submarines (incl. fully-submerged) — see projectile.js. The
+  // aim point is clamped to the ship class's ASW range (hard range limit).
+  _fireDepthCharges(aimTarget) {
+    if (!this.ship || !this.ship.alive) return;
+    if (this.ship.fullySubmerged) return;       // launchers underwater
+    const asw = getClassAsw(this.shipClass);
+    const tierCfg = asw ? getAswTier(asw.tier) : null;
+    if (!asw || !tierCfg) return;
+
+    // Per-ship ASW release cooldown (one salvo per window).
+    if (this._aswCooldown == null) this._aswCooldown = 0;
+    if (this._aswCooldown > 0) return;
+
+    // Clamp the aim point to the ship's ASW range.
+    let ax = aimTarget.x, az = aimTarget.z;
+    const dx = ax - this.ship.position.x;
+    const dz = az - this.ship.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist > asw.range) {
+      const s = asw.range / dist;
+      ax = this.ship.position.x + dx * s;
+      az = this.ship.position.z + dz * s;
+    }
+
+    const originY = 3.0;
+    const salvo = tierCfg.salvo;
+    const spread = tierCfg.spread;
+    for (let i = 0; i < salvo; i++) {
+      // Spread sub-points in a small disc around the clamped aim point.
+      const ang = salvo > 1 ? (i / salvo) * Math.PI * 2 : 0;
+      const rad = salvo > 1 ? spread * (0.4 + 0.6 * ((i * 7) % 5) / 4) : 0;
+      const tx = ax + Math.cos(ang) * rad;
+      const tz = az + Math.sin(ang) * rad;
+      // Short ballistic arc toward the sub-point (mirrors the server calc).
+      const sdx = tx - this.ship.position.x;
+      const sdz = tz - this.ship.position.z;
+      const horiz = Math.sqrt(sdx * sdx + sdz * sdz);
+      let pitch, yaw;
+      if (horiz < 1) {
+        pitch = Math.PI / 4;
+        yaw = 0;
+      } else {
+        const v2 = ASW_MUZZLE_SPEED * ASW_MUZZLE_SPEED;
+        const v4 = v2 * v2;
+        const disc = v4 - CFG_GRAVITY * (CFG_GRAVITY * horiz * horiz + 2 * (0 - originY) * v2);
+        pitch = disc < 0 ? Math.PI / 6 : Math.atan((v2 - Math.sqrt(disc)) / (CFG_GRAVITY * horiz));
+        pitch = Math.max(0, Math.min(60 * Math.PI / 180, pitch));
+        yaw = Math.atan2(sdx, sdz);
+      }
+      const dir = new THREE.Vector3(
+        Math.sin(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.cos(yaw) * Math.cos(pitch),
+      );
+      this.projectileManager.fire(
+        new THREE.Vector3(this.ship.position.x, originY, this.ship.position.z),
+        dir, tierCfg.damage, 'player', ASW_MUZZLE_SPEED, ASW_DRAG, 'depth_charge',
+      );
+    }
+    this._aswCooldown = tierCfg.cooldown;
+    if (this.audio) this.audio.playFire(this.shipClass);
+  }
+
+  // Automatic AA point-defense for the PLAYER's ship: each mount fires flak at
+  // the nearest enemy squadron in AA range, on its own cooldown. Enemy aircraft
+  // come from this.airWing (enemy carriers' wings) + any squadron manager wings
+  // marked hostile. Mirrors the server _fire_aa_defenses. Friendly aircraft
+  // (this.airWing when the player is a carrier) are never targeted.
+  _updateAaDefense(dt) {
+    if (!this.ship || !this.ship.alive) return;
+    const aa = getClassAa(this.shipClass);
+    if (!aa) return;
+    const tierCfg = getAaTier(aa.tier);
+    if (!tierCfg) return;
+
+    // Cooldown array sized to mount count.
+    if (!this._aaCooldowns || this._aaCooldowns.length !== aa.mounts) {
+      this._aaCooldowns = new Array(aa.mounts).fill(0);
+    }
+    // Gather hostile squadrons (everything that is NOT the player's own wing).
+    const hostiles = this._collectHostileSquadrons();
+    if (hostiles.length === 0) {
+      for (let m = 0; m < aa.mounts; m++) {
+        if (this._aaCooldowns[m] > 0) this._aaCooldowns[m] = Math.max(0, this._aaCooldowns[m] - dt);
+      }
+      return;
+    }
+    const r2 = tierCfg.range * tierCfg.range;
+    for (let m = 0; m < aa.mounts; m++) {
+      if (this._aaCooldowns[m] > 0) {
+        this._aaCooldowns[m] = Math.max(0, this._aaCooldowns[m] - dt);
+        continue;
+      }
+      // Nearest hostile squadron in range.
+      let best = null, bestD2 = r2;
+      for (const sq of hostiles) {
+        if (!sq || !sq.alive) continue;
+        const dx = sq.position.x - this.ship.position.x;
+        const dz = sq.position.z - this.ship.position.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; best = sq; }
+      }
+      if (!best) continue;
+      const ox = this.ship.position.x, oy = 3.0, oz = this.ship.position.z;
+      const dx = best.position.x - ox;
+      const dy = best.position.y - oy;
+      const dz = best.position.z - oz;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      this.projectileManager.fire(
+        new THREE.Vector3(ox, oy, oz),
+        new THREE.Vector3(dx / d, dy / d, dz / d),
+        tierCfg.damage, 'player', tierCfg.muzzleSpeed, AA_DRAG, 'flak',
+      );
+      this._aaCooldowns[m] = tierCfg.cooldown;
+    }
+  }
+
+  // All squadrons the player's AA may shoot at: in solo/team there are no enemy
+  // carriers by default, but if enemy air wings exist (stage 4) they'd surface
+  // here. Returns [] when none.
+  _collectHostileSquadrons() {
+    const out = [];
+    // Enemy air wings owned by the engine (added by stage-4 enemy carriers).
+    if (this._enemySquadrons) out.push(...this._enemySquadrons);
+    return out;
+  }
+
+  // Spawn + drive enemy strike aircraft so AA has a target. A wave is a single
+  // dive-bomber squadron (aircraft.js Squadron, owner='enemy') that spawns off-
+  // map, flies straight at the player, drops its bomb load when in range, then
+  // flies off and despawns. Shot down by flak (projectile.js) it just dies. Only
+  // active from level 4+ (where AA / ASW come online) and gated by a cooldown so
+  // it's a periodic threat, not constant.
+  _updateEnemySquadrons(dt) {
+    if (!this.ship || !this.ship.alive) return;
+    if (this.level < 4) return;
+
+    // Cooldown before the next wave can spawn.
+    if (this._enemySquadronTimer == null) this._enemySquadronTimer = 8 + Math.random() * 8;
+    this._enemySquadronTimer -= dt;
+
+    // Cull dead / departed squadrons.
+    this._enemySquadrons = (this._enemySquadrons || []).filter(sq => {
+      if (!sq.alive) { sq.destroy && sq.destroy(); return false; }
+      const dx = sq.position.x - this.ship.position.x;
+      const dz = sq.position.z - this.ship.position.z;
+      if (Math.hypot(dx, dz) > 4000) { sq.destroy && sq.destroy(); return false; }
+      return true;
+    });
+
+    // Spawn a new wave on the timer.
+    if (this._enemySquadronTimer <= 0 && this._enemySquadrons.length < 2) {
+      this._spawnEnemyStrikeSquadron();
+      this._enemySquadronTimer = 18 + Math.random() * 14;
+    }
+
+    // Drive each squadron: steer toward the player + drop when in range.
+    const tgt = this.ship.position;
+    for (const sq of this._enemySquadrons) {
+      if (!sq.alive) continue;
+      const dx = tgt.x - sq.position.x;
+      const dz = tgt.z - sq.position.z;
+      const dist = Math.hypot(dx, dz);
+      const desired = Math.atan2(dx, dz);
+      // Simple direct steer toward the player (no full auto-pilot state machine).
+      let diff = desired - sq.heading;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      const step = CARRIER.aircraftTurnRate * dt;
+      sq.heading += Math.max(-step, Math.min(step, diff));
+      sq.position.x += Math.sin(sq.heading) * sq.speed * dt;
+      sq.position.z += Math.cos(sq.heading) * sq.speed * dt;
+      sq.mesh.position.copy(sq.position);
+      sq.mesh.rotation.y = sq.heading;
+      // Drop bombs when close + roughly pointed at the player.
+      if (dist < CARRIER.autoAttackRange && sq.cd <= 0 && sq.ammo > 0 &&
+          Math.abs(diff) < CARRIER.autoAimTolerance) {
+        const drops = sq.dropBomb();
+        for (const d of drops) {
+          const v = d.velocity;
+          const speed = v.length();
+          const dir = speed > 0 ? v.clone().multiplyScalar(1 / speed) : new THREE.Vector3(0, -1, 0);
+          this.projectileManager.fire(d.origin, dir, d.damage, 'enemy', speed, CARRIER.bombDrag, d.weapon);
+        }
+      }
+      if (sq.cd > 0) sq.cd = Math.max(0, sq.cd - dt);
+    }
+  }
+
+  // Spawn one enemy dive-bomber squadron off-map, headed at the player.
+  _spawnEnemyStrikeSquadron() {
+    const ang = Math.random() * Math.PI * 2;
+    const r = 2500;
+    const sx = this.ship.position.x + Math.cos(ang) * r;
+    const sz = this.ship.position.z + Math.sin(ang) * r;
+    const sq = new Squadron(this.scene, sx, sz, 'enemy', this.level, 'bomber');
+    // Point it at the player.
+    sq.heading = Math.atan2(this.ship.position.x - sx, this.ship.position.z - sz);
+    sq.mesh.position.copy(sq.position);
+    sq.mesh.rotation.y = sq.heading;
+    this._enemySquadrons.push(sq);
+  }
+
+  // Every squadron in play (for flak hit detection — faction is filtered inside
+  // projectile.js by owner). Includes the player's own wing + enemy wings.
+  _collectAllSquadrons() {
+    const out = [];
+    if (this.airWing) {
+      if (this.airWing.torpedo) out.push(this.airWing.torpedo);
+      if (this.airWing.bomber) out.push(this.airWing.bomber);
+    }
+    if (this._enemySquadrons) out.push(...this._enemySquadrons);
+    return out;
+  }
+
+  // Build the ASW target list: every submarine that depth charges may damage.
+  // Includes the player ship (if a sub) and any enemy submarines. In solo/team
+  // the player sub can't depth-charge itself (filtered in _detonateDepthCharge),
+  // but enemy subs are fair game.
+  _refreshAswTargets() {
+    const subs = [];
+    if (this.ship && this.ship.shipClass === 'submarine') subs.push(this.ship);
+    for (const e of (this.enemyManager ? this.enemyManager.enemies : [])) {
+      if (e && e.alive && e.shipClass === 'submarine') subs.push(e);
+    }
+    for (const u of (this.teamUnits || [])) {
+      if (u && u.alive && u.shipClass === 'submarine') subs.push(u);
+    }
+    if (this.projectileManager) this.projectileManager.setAswTargets(subs);
   }
 
   _updateTorpedoCooldowns(dt) {
@@ -1149,12 +1936,86 @@ export class GameEngine {
     }
   }
 
+  // Carrier air-group HUD block: ammo / cooldown / salvo for BOTH squadrons plus
+  // which one is active. Null when not a carrier or no air wing yet. `torpedo`
+  // and `bomber` report each squadron's pool; `activeType` says which the player
+  // currently flies (HUD highlights it).
+  _squadronHud() {
+    const cfg = getAirGroupConfig(this.level);
+    const wing = this.airWing;
+    if (!wing) {
+      return {
+        carrier: this.shipClass === 'carrier',
+        view: this.playerView,
+        activeType: 'torpedo',
+        airborne: false,
+        autoPilot: false,
+        autoPhase: 'idle',
+        rearming: false,
+        patrol: null,
+        hp: CARRIER.aircraftHp, maxHp: CARRIER.aircraftHp,
+        altitude: CARRIER.aircraftAltitude,
+        maxAlt: CARRIER.aircraftMaxAlt, minAlt: CARRIER.aircraftCrashAlt,
+        torpedo: { ammo: 0, maxAmmo: cfg.torpedo.ammo, cd: 0, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo },
+        bomber: { ammo: 0, maxAmmo: cfg.bomber.ammo, cd: 0, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo },
+      };
+    }
+    const t = wing.torpedo, b = wing.bomber;
+    const active = wing.active;
+    // Rearming flag: the ACTIVE squadron within rearmRange of the carrier.
+    let rearming = false;
+    if (this.ship) {
+      const dx = active.position.x - this.ship.position.x;
+      const dz = active.position.z - this.ship.position.z;
+      rearming = dx * dx + dz * dz <= CARRIER.rearmRange * CARRIER.rearmRange;
+    }
+    return {
+      carrier: true,
+      view: this.playerView,
+      activeType: wing.activeType,
+      airborne: this.playerView === 'squadron' && active.alive,
+      autoPilot: !!active.autoPilot,
+      autoPhase: active._autoPhase || 'idle',
+      rearming,
+      patrol: this.carrierPatrol ? { idx: this.carrierPatrol.idx, count: this.carrierPatrol.points.length } : null,
+      // Active squadron's survivability + altitude for the HUD (health bar +
+      // altimeter). Both squadrons track their own HP; only the flown one shows.
+      hp: active.hp, maxHp: active.maxHp,
+      altitude: active.altitude,
+      maxAlt: CARRIER.aircraftMaxAlt, minAlt: CARRIER.aircraftCrashAlt,
+      torpedo: { ammo: t.ammo, maxAmmo: t.maxAmmo, cd: t.cd, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo },
+      bomber: { ammo: b.ammo, maxAmmo: b.maxAmmo, cd: b.cd, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo },
+    };
+  }
+
   _getTorpedoCooldown() {
     const tier = this.controls.torpedoTier;
     const base = TORPEDO_TIERS[tier];
     if (!base) return 8;
     const levelsAbove4 = Math.max(0, this.level - 4);
     return base.baseCooldown * Math.pow(0.95, levelsAbove4);
+  }
+
+  // Tear down any carrier air-wing state from the previous round. Called on
+  // start()/startTeam()/destroy() so a re-launched match begins with NO leftover
+  // squadron meshes and a ship view — otherwise the stale CarrierAirWing (whose
+  // meshes may have been disposed with the scene) makes `_enterSquadronView`
+  // relaunch onto dead geometry and the aircraft model fails to render.
+  _resetCarrierState() {
+    if (this.airWing) {
+      this.airWing.destroy();
+      this.airWing = null;
+    }
+    // Clear any enemy strike squadrons (their meshes live in the scene).
+    if (this._enemySquadrons) {
+      for (const sq of this._enemySquadrons) { try { sq.destroy(); } catch (e) { /* already gone */ } }
+      this._enemySquadrons = [];
+    }
+    this._enemySquadronTimer = null;
+    this.squadronManager = null;
+    this.playerView = 'ship';
+    if (this.controls) this.controls.viewMode = 'ship';
+    this.carrierPatrol = null;
   }
 
   destroy() {
@@ -1172,6 +2033,8 @@ export class GameEngine {
     if (this.projectileManager) this.projectileManager.destroy();
     if (this.torpedoManager) this.torpedoManager.destroy();
     if (this.enemyManager) this.enemyManager.clear();
+    // Destroy any carrier air-wing (squadron meshes) before the renderer goes.
+    this._resetCarrierState();
     // Team-mode units aren't owned by EnemyManager; remove their meshes.
     for (const u of this.teamUnits) {
       if (u.mesh) this.scene.remove(u.mesh);

@@ -5,12 +5,16 @@ from game.config import (
     DT, SNAPSHOT_HISTORY_SIZE, GRAVITY, PROJECTILE_INITIAL_SPEED,
     ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED, ENEMY_FIRE_COOLDOWN,
     RAMMING_DAMAGE, get_ship_config, get_muzzle_speed, get_cannon_drag,
+    CARRIER,
+    AA_DRAG, get_aa_tier, get_class_aa,
+    ASW_MUZZLE_SPEED, ASW_DRAG, get_asw_tier, get_class_asw,
 )
 from game.ship import ServerShip
 from game.terrain import Terrain
 from game.projectile import ProjectileManager, apply_cannon_spread, compensate_drag_pitch
 from game.torpedo import TorpedoManager
 from game.enemy import EnemyManager
+from game.aircraft import AircraftManager
 
 
 class GameState:
@@ -26,12 +30,29 @@ class GameState:
         self.enemies = []
         self._next_enemy_id = 0
         self.enemy_mgr = EnemyManager()
+        self.aircraft_mgr = AircraftManager()
+        # Pending fly inputs per carrier owner: {player_id: keys_dict}. Cleared
+        # each tick after the aircraft manager consumes them.
+        self._fly_inputs = {}
+        # Carriers currently in squadron view: {player_id: True}. Drives which
+        # ships ignore WASD (autopilot) vs which aircraft receive them.
+        self._in_squadron_view = {}
+        # Currently-armed air group per carrier: {player_id: 'torpedo'|'bomber'}.
+        # Set by launch_squadron / defaulted on toggle_view; read for snapshot.
+        self._active_group = {}
         self.wave = 0
         self.level = 1
         self._spawn_index = 0
         self.respawn_limit = respawn_limit
         self._respawn_remaining = {}  # player_id -> remaining respawns
         self._initial_spawns = {}     # player_id -> (x, z)
+        # Per-mount AA cooldowns: {player_id: [cd_per_mount, ...]}. Lazily sized
+        # to a ship's mount count in _fire_aa_defenses so a level/class change
+        # (which can change mount count) is handled automatically.
+        self._aa_cooldowns = {}
+        # Per-ship ASW release cooldown: {player_id: cd_seconds}. One depth-
+        # charge salvo per cooldown window.
+        self._asw_cooldowns = {}
 
     def add_ship(self, player_id, username, level=1, ship_class=None, team=None):
         ship = ServerShip(player_id, username, level, ship_class, team)
@@ -164,6 +185,9 @@ class GameState:
         if not ship or not ship.alive:
             return
         keys = msg.get("k", {})
+        # A carrier in squadron view autopilots — its WASD flies the aircraft.
+        if self._in_squadron_view.get(player_id, False):
+            keys = {}
         ship.update(DT, keys, self.terrain)
 
     def _get_turret_offsets(self, ship):
@@ -403,6 +427,8 @@ class GameState:
             player_id, tier, ship.level,
             ship.pos_x, ship.pos_z,
             heading, count=tube_count, spread=spread,
+            # Submarine torpedoes are homing (acoustic). Other classes dumb.
+            homing=(ship.ship_class == "submarine"),
         )
 
     def process_skill(self, player_id, msg):
@@ -415,6 +441,293 @@ class GameState:
             return
         ship.skills.activate(name, ship)
 
+    def process_dive(self, player_id, msg):
+        """Server-authoritative submarine dive toggle."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive:
+            return
+        ship.toggle_dive()
+
+    def process_fly_input(self, player_id, msg):
+        """Carrier squadron flight keys (held each tick)."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or ship.ship_class != "carrier":
+            return
+        self._fly_inputs[player_id] = {
+            "w": bool(msg.get("w")),
+            "a": bool(msg.get("a")),
+            "s": bool(msg.get("s")),
+            "d": bool(msg.get("d")),
+        }
+
+    def process_toggle_view(self, player_id, msg):
+        """Carrier ship<->squadron view toggle. Spawns the squadron on entry."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or ship.ship_class != "carrier":
+            return
+        in_view = self._in_squadron_view.get(player_id, False)
+        if in_view:
+            # Returning to ship view; keep the squadron alive for re-launch.
+            self._in_squadron_view[player_id] = False
+        else:
+            self._enter_squadron_view(player_id)
+
+    def process_launch_squadron(self, player_id, msg):
+        """Carrier air-group launch / switch (keys 5/6).
+
+        While steering the ship this launches the squadron (entering squadron
+        view) and arms the requested group; while already flying it just switches
+        the active group. The group is stored per-player so process_drop knows
+        which air group to release; the client mirrors this via the snapshot.
+        """
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or ship.ship_class != "carrier":
+            return
+        group = msg.get("group", "torpedo")
+        if group not in ("torpedo", "bomber"):
+            group = "torpedo"
+        in_view = self._in_squadron_view.get(player_id, False)
+        if not in_view:
+            self._enter_squadron_view(player_id)
+        self._active_group[player_id] = group
+
+    def process_toggle_autopilot(self, player_id, msg):
+        """Toggle carrier squadron auto-pilot (auto-attack)."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or ship.ship_class != "carrier":
+            return
+        if not self.aircraft_mgr.get_by_owner(player_id):
+            self._enter_squadron_view(player_id)
+        sq = self.aircraft_mgr.get_by_owner(player_id)
+        if sq is not None:
+            sq.auto_pilot = not getattr(sq, "auto_pilot", False)
+            sq._auto_target = None
+
+    def _enter_squadron_view(self, player_id):
+        """Enter squadron view: spawn if none, else re-launch (reposition+refill)."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or ship.ship_class != "carrier":
+            return
+        sq = self.aircraft_mgr.get_by_owner(player_id)
+        if not sq:
+            self.aircraft_mgr.spawn(player_id, ship.pos_x, ship.pos_z, level=ship.level)
+        else:
+            # Reposition an existing squadron to the carrier (re-launch) and
+            # fully re-arm both groups.
+            sq.pos_x = ship.pos_x
+            sq.pos_z = ship.pos_z
+            sq.heading = ship.heading
+            sq.alive = True
+            sq.set_level(ship.level)
+            sq.refill()
+        self._in_squadron_view[player_id] = True
+        # Default the active group to torpedo bombers if unset (T-key launch).
+        self._active_group.setdefault(player_id, "torpedo")
+
+    def process_drop(self, player_id, msg):
+        """Carrier ordinance drop (torpedo or bomb salvo).
+
+        `kind` selects the air group ('torpedo' = torpedo bombers, 'bomb' =
+        dive bombers). Each release spawns the whole salvo (1..N torpedoes or
+        bombs depending on carrier level) and starts that group's cooldown.
+        The squadron's drop methods are authoritative for ammo/cooldown gating.
+        """
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or ship.ship_class != "carrier":
+            return
+        if not self._in_squadron_view.get(player_id, False):
+            return
+        sq = self.aircraft_mgr.get_by_owner(player_id)
+        if sq is None:
+            return
+        kind = msg.get("kind", "torpedo")
+        if kind == "bomb":
+            drops = sq.drop_bomb()
+            for (x, y, z, vx, vy, vz, damage, weapon) in drops:
+                # Bombs carry an absolute velocity (forward throw + downward
+                # kick); convert to a unit direction + speed for the projectile
+                # manager so the ballistic arc reproduces.
+                speed = math.sqrt(vx * vx + vy * vy + vz * vz) or 1.0
+                self.projectile_mgr.fire(
+                    player_id, damage, (x, y, z), (vx / speed, vy / speed, vz / speed),
+                    muzzle_speed=speed, drag=CARRIER["bomb_drag"],
+                    weapon=weapon,
+                )
+        else:
+            drops = sq.drop_torpedo()
+            for (x, z, heading, tier) in drops:
+                self.torpedo_mgr.fire(
+                    player_id, tier, ship.level, x, z, heading,
+                    count=1, spread="narrow",
+                )
+
+    def process_asw_fire(self, player_id, msg):
+        """Server-authoritative ASW (depth-charge) release.
+
+        The player aims at a water point (`msg["aim"]={x,z}`) — a last-known
+        sub position. A salvo of depth charges arcs out toward that point and
+        detonates on the water, AoE-damaging submarines within ASW_BLAST_RADIUS
+        (handled in ProjectileManager.update). The aim point is clamped to the
+        ship class's ASW `range` so charges can't be lobbed across the map.
+        Only ships with an ASW fit (get_class_asw) may release; submerged subs
+        can't fire (their launchers are underwater).
+        """
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive or not ship.ship_class:
+            return
+        asw = get_class_asw(ship.ship_class)
+        if not asw:
+            return
+        if getattr(ship, "fully_submerged", False):
+            return
+        tier_cfg = get_asw_tier(asw["tier"])
+        if not tier_cfg:
+            return
+
+        # Gating: per-ship ASW cooldown (one release per cooldown window).
+        now_cd = self._asw_cooldowns.get(player_id, 0.0)
+        if now_cd > 0:
+            return
+
+        aim = msg.get("aim", {})
+        aim_x = float(aim.get("x", ship.pos_x))
+        aim_z = float(aim.get("z", ship.pos_z))
+
+        # Clamp the aim point to the ship's ASW range (hard range limit).
+        max_range = asw["range"]
+        dx = aim_x - ship.pos_x
+        dz = aim_z - ship.pos_z
+        dist = math.sqrt(dx * dx + dz * dz)
+        if dist > max_range:
+            scale = max_range / dist
+            aim_x = ship.pos_x + dx * scale
+            aim_z = ship.pos_z + dz * scale
+
+        # Fire a salvo of depth charges spread around the clamped aim point.
+        # Each charge flies a short ballistic arc toward its sub-point and
+        # detonates on water impact (y<=0) in projectile.py.
+        origin_y = 3.0
+        salvo = tier_cfg["salvo"]
+        spread = tier_cfg["spread"]
+        for i in range(salvo):
+            # Spread sub-points in a small disc around the aim point.
+            if salvo > 1:
+                ang = (i / salvo) * 2 * math.pi
+                rad = spread * (0.4 + 0.6 * ((i * 7) % 5) / 4.0)
+            else:
+                ang = 0.0
+                rad = 0.0
+            tx = aim_x + math.cos(ang) * rad
+            tz = aim_z + math.sin(ang) * rad
+            # Direction from the ship's deck toward this sub-point, pitched up
+            # enough for a short arc (the low ASW muzzle speed keeps it short).
+            sdx = tx - ship.pos_x
+            sdz = tz - ship.pos_z
+            horiz = math.sqrt(sdx * sdx + sdz * sdz)
+            if horiz < 1:
+                pitch = math.pi / 4
+                yaw = 0.0
+            else:
+                v2 = ASW_MUZZLE_SPEED ** 2
+                v4 = v2 * v2
+                disc = v4 - GRAVITY * (GRAVITY * horiz * horiz + 2 * (0.0 - origin_y) * v2)
+                pitch = math.pi / 6 if disc < 0 else math.atan(
+                    (v2 - math.sqrt(disc)) / (GRAVITY * horiz))
+                pitch = max(0, min(math.radians(60), pitch))
+                yaw = math.atan2(sdx, sdz)
+            direction = (
+                math.sin(yaw) * math.cos(pitch),
+                math.sin(pitch),
+                math.cos(yaw) * math.cos(pitch),
+            )
+            self.projectile_mgr.fire(
+                player_id, tier_cfg["damage"],
+                (ship.pos_x, origin_y, ship.pos_z),
+                direction,
+                muzzle_speed=ASW_MUZZLE_SPEED,
+                drag=ASW_DRAG,
+                weapon="depth_charge",
+            )
+
+        self._asw_cooldowns[player_id] = tier_cfg["cooldown"]
+
+    def _fire_aa_defenses(self, dt):
+        """Automatic AA point-defense pass.
+
+        Each alive ship with an AA fit (`get_class_aa`) independently targets
+        the nearest enemy squadron within AA range per mount, firing a flak
+        shell on that mount's cooldown. Friendly aircraft (same owner, or same
+        team in team mode) are skipped. No-op when no aircraft are airborne.
+        """
+        squads = [sq for sq in self.aircraft_mgr.squadrons if sq.alive]
+        if not squads:
+            return
+        for pid, ship in self.ships.items():
+            if not ship.alive or not ship.ship_class:
+                continue
+            aa = get_class_aa(ship.ship_class)
+            if not aa:
+                continue
+            tier_cfg = get_aa_tier(aa["tier"])
+            if not tier_cfg:
+                continue
+            mounts = aa["mounts"]
+            cds = self._aa_cooldowns.get(pid)
+            if cds is None or len(cds) != mounts:
+                cds = [0.0] * mounts
+                self._aa_cooldowns[pid] = cds
+
+            aa_range2 = tier_cfg["range"] ** 2
+            # Friendly-owner set: skip own aircraft + teammates' aircraft.
+            friend_owners = {pid}
+            if ship.team:
+                for opid, os in self.ships.items():
+                    if os.team == ship.team:
+                        friend_owners.add(opid)
+
+            for m in range(mounts):
+                if cds[m] > 0:
+                    cds[m] = max(0.0, cds[m] - dt)
+                    continue
+                # Acquire nearest hostile squadron in range.
+                best_sq = None
+                best_d2 = aa_range2
+                for sq in squads:
+                    if sq.owner in friend_owners:
+                        continue
+                    dx = sq.pos_x - ship.pos_x
+                    dz = sq.pos_z - ship.pos_z
+                    d2 = dx * dx + dz * dz
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        best_sq = sq
+                if best_sq is None:
+                    continue
+                # Lead the target slightly by aiming at the squadron's current
+                # position; flak hit radius is generous, so a direct intercept
+                # calc isn't needed.
+                aim_x = best_sq.pos_x
+                aim_y = best_sq.altitude
+                aim_z = best_sq.pos_z
+                # Origin: a point above the deck (turret height). Each mount
+                # fires from roughly the same deck point — separate mounts are a
+                # rate-of-fire abstraction, not distinct muzzle positions.
+                ox = ship.pos_x
+                oy = 3.0
+                oz = ship.pos_z
+                # Direction toward the squadron (unit vector).
+                dx = aim_x - ox
+                dy = aim_y - oy
+                dz = aim_z - oz
+                d = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+                self.projectile_mgr.fire(
+                    pid, tier_cfg["damage"], (ox, oy, oz),
+                    (dx / d, dy / d, dz / d),
+                    muzzle_speed=tier_cfg["muzzle_speed"],
+                    drag=AA_DRAG, weapon="flak",
+                )
+                cds[m] = tier_cfg["cooldown"]
+
     def update(self, dt):
         self.tick += 1
         self.events = []
@@ -426,6 +739,12 @@ class GameState:
                     if ship.turret_cooldowns[i] > 0:
                         ship.turret_cooldowns[i] -= dt
                 ship.skills.update(dt, ship)
+        # Decay ASW release cooldowns.
+        for pid in list(self._asw_cooldowns.keys()):
+            if self._asw_cooldowns[pid] > 0:
+                self._asw_cooldowns[pid] = max(0.0, self._asw_cooldowns[pid] - dt)
+            else:
+                del self._asw_cooldowns[pid]
 
         # Update enemy turret cooldowns every tick
         for enemy in self.enemy_mgr.enemies:
@@ -434,13 +753,59 @@ class GameState:
                     if enemy.turret_cooldowns[i] > 0:
                         enemy.turret_cooldowns[i] = max(0.0, enemy.turret_cooldowns[i] - dt)
 
-        # Update projectiles
-        proj_events = self.projectile_mgr.update(dt, self.terrain, self.ships)
+        # Update projectiles (pass the aircraft manager so flak can hit
+        # squadrons and depth charges can AoE submarines).
+        proj_events = self.projectile_mgr.update(dt, self.terrain, self.ships, aircraft_mgr=self.aircraft_mgr)
         self.events.extend(proj_events)
 
         # Update torpedoes
         torp_events = self.torpedo_mgr.update(dt, self.ships)
         self.events.extend(torp_events)
+
+        # Update carrier aircraft (authoritative flight + ordinance regen +
+        # auto-pilot). Carriers map each squadron to its owning ship (for
+        # re-arm + level); enemies are every other ship (autopilot targets).
+        carrier_map = {}
+        for pid, ship in self.ships.items():
+            if ship.ship_class == "carrier" and ship.alive:
+                carrier_map[pid] = ship
+        auto_drops = self.aircraft_mgr.update(
+            dt, self._fly_inputs,
+            carriers=carrier_map,
+            enemies=[s for s in self.ships.values() if s.alive],
+        )
+        self._fly_inputs.clear()
+
+        # Execute auto-pilot releases (server-authoritative, mirror process_drop).
+        for owner_id, kind in auto_drops:
+            ship = self.ships.get(owner_id)
+            if not ship or not ship.alive:
+                continue
+            sq = self.aircraft_mgr.get_by_owner(owner_id)
+            if sq is None:
+                continue
+            if kind == "bomb":
+                for (x, y, z, vx, vy, vz, damage, weapon) in sq.drop_bomb():
+                    speed = math.sqrt(vx * vx + vy * vy + vz * vz) or 1.0
+                    self.projectile_mgr.fire(
+                        owner_id, damage, (x, y, z), (vx / speed, vy / speed, vz / speed),
+                        muzzle_speed=speed,
+                        drag=CARRIER["bomb_drag"], weapon=weapon,
+                    )
+            else:
+                for (x, z, heading, tier) in sq.drop_torpedo():
+                    self.torpedo_mgr.fire(
+                        owner_id, tier, ship.level, x, z, heading,
+                        count=1, spread="narrow",
+                    )
+
+        # ---- Automatic AA point-defense ----
+        # Each ship with AA mounts fires `weapon="flak"` shells at the nearest
+        # enemy squadron within AA range, independently per mount on its own
+        # cooldown. Friendly aircraft (same owner) are never targeted. Flak hit
+        # detection happens in ProjectileManager.update (next tick). Only
+        # matters once aircraft exist (carrier squadrons / enemy wings).
+        self._fire_aa_defenses(dt)
 
         # Ship-to-ship ramming damage (single-shot per contact + push apart)
         self._process_ship_collisions()
@@ -584,6 +949,11 @@ class GameState:
             else:
                 others.append(snap)
 
+        # Tell the local player whether they're in carrier squadron view.
+        if you is not None:
+            you["squadView"] = self._in_squadron_view.get(player_id, False)
+            you["squadGroup"] = self._active_group.get(player_id, "torpedo")
+
         snapshot = {
             "type": "snapshot",
             "tick": self.tick,
@@ -591,6 +961,7 @@ class GameState:
             "others": others,
             "projs": self.projectile_mgr.get_snapshots(),
             "torps": self.torpedo_mgr.get_snapshots(),
+            "airs": self.aircraft_mgr.get_snapshots(),
             "enemies": self.enemy_mgr.get_snapshots(),
             "evts": self.events,
         }

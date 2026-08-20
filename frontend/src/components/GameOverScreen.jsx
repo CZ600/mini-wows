@@ -1,6 +1,15 @@
-export default function GameOverScreen({ score, enemies, level, multiplayerResults, teamMode, teamResult, onContinue, onRestart, onBackToLobby }) {
+const SHIP_CLASS_NAMES = {
+  destroyer: '驱逐舰',
+  cruiser: '巡洋舰',
+  battleship: '战列舰',
+  submarine: '潜艇',
+  carrier: '航母',
+};
+
+export default function GameOverScreen({ score, enemies, level, shipClass, multiplayerResults, teamMode, teamResult, onContinue, onRestart, onBackToLobby }) {
   if (teamMode) {
     const win = teamResult === 'win';
+    const className = SHIP_CLASS_NAMES[shipClass] || shipClass || '';
     return (
       <div id="gameover-screen">
         <div className="gameover-container">
@@ -9,6 +18,7 @@ export default function GameOverScreen({ score, enemies, level, multiplayerResul
           </h1>
           <p>{win ? '敌方舰队已被全歼!' : '我方全军覆没。'}</p>
           <p>击毁敌方: <strong>{enemies}</strong></p>
+          <p className="gameover-hint">将沿用当前设置再战：等级 {level}{className ? ` · ${className}` : ''}</p>
           <button className="menu-btn" onClick={onRestart}>再战一场</button>
         </div>
       </div>

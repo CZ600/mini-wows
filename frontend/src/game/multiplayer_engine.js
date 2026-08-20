@@ -9,10 +9,12 @@ import { InputSender } from './input_sender.js';
 import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag } from './config.js';
+import { CARRIER, getAirGroupConfig } from './config.js';
 import { Ship, CLASS_CONFIG, getDriftConfig } from './ship.js';
 import { turretCanAim, applyCannonSpread, getTurretFireData, aimTurretsAtPoint } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
+import { Squadron } from './aircraft.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -76,6 +78,17 @@ export class MultiplayerEngine {
     this._myRespawns = 0;
     this._localTeam = null;
     this._labelTempVec = new THREE.Vector3();
+
+    // Carrier state (mirrors engine.js): squadron the local player flies,
+    // current view, and visual caches for remote squadrons in the snapshot.
+    this.squadron = null;
+    this.playerView = 'ship';
+    this.ordinanceType = 'torpedo';
+    this._airVisuals = {};      // squadId -> { mesh, owner }
+    this._inSquadView = false;  // echoed from server snapshot
+    // Authoritative local-squadron snapshot (ammo/cd/level) mirrored from the
+    // server `airs` array each snapshot; drives the HUD payload.
+    this._localSquadronSnap = null;
   }
 
   init(canvas) {
@@ -209,6 +222,12 @@ export class MultiplayerEngine {
     if (type === 'game_end') {
       this._gameStarted = false;
       this._eliminated = false;
+      // Stop the round's ambient/BGM now that the match is over. Without this the
+      // loop audio keeps playing on the results screen, and — since the
+      // single-player engine owns a SEPARATE AudioManager whose startBGM() guard
+      // only dedupes within its own instance — that leftover BGM would stack on
+      // top of a solo match's BGM if the player launches one from the lobby.
+      if (this.audio) this.audio.stopAll();
       if (this.onGameOver) {
         this.onGameOver(msg.results);
       }
@@ -324,6 +343,19 @@ export class MultiplayerEngine {
     this.localShip.max_hp = ship.maxHp;
   }
 
+  // Horizontal distance from a world point to the local player's ship, in
+  // meters, for distance-based impact-sound attenuation. Returns 0 when the
+  // local ship isn't spawned yet or coords are missing (no attenuation).
+  _distToLocalShip(x, z) {
+    if (!this.localShip) return 0;
+    const ship = this.localShip.ship;
+    const sp = (ship && ship.position) || (ship && ship.mesh && ship.mesh.position);
+    if (!sp || !Number.isFinite(x) || !Number.isFinite(z)) return 0;
+    const dx = x - sp.x;
+    const dz = z - sp.z;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+
   _findAimTarget() {
     RAYCASTER.setFromCamera(SCREEN_CENTER, this.camera);
 
@@ -378,6 +410,17 @@ export class MultiplayerEngine {
       // Update skills state from server
       if (serverState.skl) {
         this.localShip.skl = serverState.skl;
+      }
+
+      // Update submarine dive state from server (authoritative). The local
+      // prediction toggles immediately on key press; this corrects drift and
+      // drives the transition animation via ship.updateDiveTransition each tick.
+      if (this.localShip.ship && serverState.dive !== undefined) {
+        this.localShip.ship.diveDepth = serverState.dive;
+        // Reconstruct the target submerged flag + eased transition from depth.
+        const DIVE_MAX = 4.0; // matches SUBMARINE.diveDepth
+        this.localShip.ship.diveTransition = Math.min(1, serverState.dive / DIVE_MAX);
+        this.localShip.ship.submerged = serverState.dive > DIVE_MAX * 0.5;
       }
 
       // Track local team for friend/foe detection
@@ -453,6 +496,11 @@ export class MultiplayerEngine {
       this._updateTorpedoVisuals(msg.torps);
     }
 
+    // Update carrier aircraft visuals from server data
+    if (msg.airs) {
+      this._updateAircraftVisuals(msg.airs);
+    }
+
     // Process events — render a visual explosion at the server-authoritative
     // impact point for every hit (so you see all combat, not just your own),
     // but only play the explosion sound when the local player is involved.
@@ -498,13 +546,15 @@ export class MultiplayerEngine {
         }
 
         // Sound is local-only to avoid an overwhelming cacophony from
-        // distant fights.
+        // distant fights, and attenuates with the impact's distance from the
+        // local player's ship so far-away hits read as a muffled rumble.
         const target = String(evt.target ?? '');
         if (target === me || attacker === me) {
+          const dist = this._distToLocalShip(evt.x, evt.z);
           if (evt.weapon === 'torpedo') {
-            this.audio.playTorpedoHit();
+            this.audio.playTorpedoHit(dist);
           } else {
-            this.audio.playExplosion();
+            this.audio.playExplosion(dist);
           }
         }
       }
@@ -802,6 +852,24 @@ export class MultiplayerEngine {
         entry.ship.mesh.rotation.y = snap.h;
       }
 
+      // Submarine dive visibility: a fully-submerged ENEMY submarine hides its
+      // mesh (and minimap blip, handled in the minimap feed). Teammates (same
+      // team) stay visible so friendly subs can be coordinated. FFA (team=null)
+      // treats everyone as an enemy.
+      const dive = snap.dive || 0;
+      const isSubmarine = (snap.shipClass === 'submarine');
+      const sameTeam = this._localTeam != null && snap.team === this._localTeam;
+      const hidden = isSubmarine && dive >= 1.5 && !sameTeam;
+      entry.hidden = hidden;
+      if (entry.ship.shipClass === 'submarine') {
+        entry.ship.diveDepth = dive;
+        entry.ship.mesh.position.y = -dive;
+      }
+      // Only flip visibility when the ship isn't already hidden by sinking.
+      if (!entry.ship.sinking) {
+        entry.ship.mesh.visible = !hidden;
+      }
+
       entry.lastAlive = snap.alive;
     }
 
@@ -875,6 +943,10 @@ export class MultiplayerEngine {
       this.water.material.uniforms['uCameraPos'].value.copy(this.camera.position);
     }
 
+    // 云的漂移时钟与水波共用同一累计值
+    const skyDome = this.scene.userData.skyDome;
+    if (skyDome) skyDome.material.uniforms.time.value = this.water.material.uniforms['time'].value;
+
     if (!this._gameStarted || !this.localShip) {
       if (this.onShipLabelsUpdate) this.onShipLabelsUpdate([]);
       this.renderer.render(this.scene, this.camera);
@@ -883,7 +955,12 @@ export class MultiplayerEngine {
 
     // Local prediction
     if (this.localShip.alive) {
-      this.controls.updateMotionKeys(this.localShip.speed, this.localShip.max_speed);
+      // In squadron view the player's W/S are altitude controls for the
+      // aircraft, not throttle for the ship. updateMotionKeys would clobber
+      // them from the ship's gear/speed, so skip it while flying.
+      if (this.playerView !== 'squadron') {
+        this.controls.updateMotionKeys(this.localShip.speed, this.localShip.max_speed);
+      }
       const keys = this.controls.keys;
 
       // Apply controls locally for immediate feedback
@@ -933,6 +1010,93 @@ export class MultiplayerEngine {
         }
       }
 
+      // Submarine dive toggle: send to server + local prediction.
+      if (this.controls.consumeDiveToggle()) {
+        this.inputSender.sendDive();
+        if (this.localShip.ship) this.localShip.ship.toggleDive();
+      }
+
+      // Carrier squadron control. The server is authoritative for squadron
+      // position + ammo/cooldown; we only stream inputs + spawn a local visual
+      // squadron so the player can see/fly it without waiting for the round-trip.
+      if (this.controls.consumeViewToggle()) {
+        // T = return to ship (or launch with current group).
+        this.inputSender.sendToggleView();
+        this._toggleCarrierViewLocal(this.ordinanceType);
+      }
+      // Dedicated air-group buttons (5/6): launch if steering, else switch group.
+      const launchGroup = this.controls.consumeSquadronLaunch();
+      if (launchGroup) {
+        // Always tell the server: it launches if steering, or just re-arms the
+        // group if already flying. Mirrored locally below.
+        this.inputSender.sendLaunch(launchGroup);
+        if (this.playerView !== 'squadron') {
+          this._toggleCarrierViewLocal(launchGroup);
+        } else if (this.ordinanceType !== launchGroup) {
+          // Already flying: switching group means rebuilding the local typed
+          // Squadron so its guide/drop match (server's single squadron carries
+          // both pools; we just mirror the active type's visuals).
+          this.ordinanceType = launchGroup;
+          this._toggleCarrierViewLocal(launchGroup);
+        }
+      }
+      // Tab: switch the active air group (torpedo <-> bomber). Mirrors the solo
+      // flow: tell the server (launch_squadron with the other group) and rebuild
+      // the local Squadron to that type.
+      if (this.controls.consumeSquadronSwitch() && this.playerView === 'squadron') {
+        const other = this.ordinanceType === 'bomber' ? 'torpedo' : 'bomber';
+        this.inputSender.sendLaunch(other);
+        this.ordinanceType = other;
+        this._toggleCarrierViewLocal(other);
+      }
+      // Auto-pilot toggle (Y). Server-authoritative, but we mirror locally so
+      // the player sees the squadron fly itself without waiting for the snapshot.
+      if (this.controls.consumeAutoPilotToggle() && this.localShip.shipClass === 'carrier') {
+        if (!this.squadron) this._toggleCarrierViewLocal(this.ordinanceType);
+        if (this.squadron) {
+          this.squadron.autoPilot = !this.squadron.autoPilot;
+          this.squadron._autoTarget = null;
+        }
+        this.inputSender.sendAutoPilotToggle();
+      }
+      // Squadron update. In multiplayer the server is authoritative for position
+      // and (when auto-pilot is on) the AI. We only feed the local Squadron for
+      // manual flight feel + aim guides + re-arm prediction; the snapshot each
+      // tick re-syncs position/ammo. Under auto-pilot we feed empty keys so the
+      // local Squadron doesn't fight the server's steering, and we DON'T emit
+      // local drops — the server's own AI releases them (authoritative).
+      if (this.squadron) {
+        const enemyList = [];
+        for (const id in this.otherShips) {
+          const e = this.otherShips[id];
+          if (e.lastAlive && e.ship && e.ship.mesh && !e.hidden) enemyList.push(e.ship);
+        }
+        const squadCtx = {
+          carrierPos: { x: this.localShip.pos_x, z: this.localShip.pos_z },
+          enemies: enemyList,
+          terrain: this.terrain,
+        };
+        const inView = this.playerView === 'squadron';
+        const manualKeys = this.squadron.autoPilot
+          ? { w: false, a: false, s: false, d: false }
+          : (inView ? this.controls.keys : { w: false, a: false, s: false, d: false });
+        this.squadron.update(dt, manualKeys, squadCtx);
+        // Crashed (terrain/water impact) -> fall back to ship view so the camera
+        // doesn't chase a dead aircraft. Player can re-launch for a fresh one.
+        if (inView && !this.squadron.alive) {
+          this.playerView = 'ship';
+          this.controls.viewMode = 'ship';
+        }
+        if (this.playerView === 'squadron') {
+          this.squadron.updateGuides(true);
+          if (this.controls.consumeFire()) {
+            this.inputSender.sendDrop(this.ordinanceType);
+          }
+        } else {
+          this.squadron.updateGuides(false);
+        }
+      }
+
       this.audio.updateEngineBySpeed(this.localShip.speed, this.localShip.max_speed);
     } else {
       this.audio.updateEngineBySpeed(0, this.localShip.max_speed || 1);
@@ -940,7 +1104,8 @@ export class MultiplayerEngine {
 
     // Update local ship mesh
     if (this.localShip.ship) {
-      this.localShip.ship.mesh.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
+      const diveY = this.localShip.ship.shipClass === 'submarine' ? -this.localShip.ship.diveDepth : 0;
+      this.localShip.ship.mesh.position.set(this.localShip.pos_x, diveY, this.localShip.pos_z);
       this.localShip.ship.mesh.rotation.y = this.localShip.heading;
       this.localShip.ship.heading = this.localShip.heading;
       this.localShip.ship.velocityHeading = this.localShip.velocityHeading;
@@ -978,7 +1143,8 @@ export class MultiplayerEngine {
       } else {
         // Guns: only consume wantsFire if turrets actually fire
         const ship = this.localShip.ship;
-        const canFireNow = ship.turrets.some(t => t.cooldown <= 0 && turretCanAim(t, currentAimYaw));
+        const canFireNow = !ship.fullySubmerged
+          && ship.turrets.some(t => t.cooldown <= 0 && turretCanAim(t, currentAimYaw));
         if (canFireNow) {
           this._fireGuns(currentAimYaw);
           this.controls.consumeFire();
@@ -1020,6 +1186,39 @@ export class MultiplayerEngine {
 
     // Camera follow
     const scoped = this.controls.scoped;
+
+    // Squadron (carrier aircraft) view: high trailing chase cam behind the
+    // local visual squadron, with free-look (mouse orbits the view, plane
+    // position locks to its heading). Mirrors the solo engine's handling.
+    if (this.playerView === 'squadron' && this.squadron) {
+      const subj = this.squadron;
+      const headingYaw = subj.cameraHeading;
+      const camDist = 35;
+      const camHeight = 25;
+      const targetCamPos = new THREE.Vector3(
+        subj.position.x - Math.sin(headingYaw) * camDist,
+        subj.position.y + camHeight,
+        subj.position.z - Math.cos(headingYaw) * camDist
+      );
+      this.camera.position.lerp(targetCamPos, 0.12);
+      const targetFov = this.controls.normalFov || FOV_NORMAL;
+      this._currentFov += (targetFov - this._currentFov) * 0.12;
+      this.camera.fov = this._currentFov;
+      this.camera.updateProjectionMatrix();
+      if (this.onScopeChange) this.onScopeChange(false);
+      const freeYaw = headingYaw + this.controls.orbitYaw;
+      const pitch = Math.max(-1.2, Math.min(0.4, this.controls.orbitPitch));
+      const lookDir = new THREE.Vector3(
+        Math.sin(freeYaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        Math.cos(freeYaw) * Math.cos(pitch)
+      );
+      this.camera.lookAt(this.camera.position.clone().add(lookDir.multiplyScalar(1000)));
+      // Keep the water shader's camera-pos uniform fresh.
+      if (this.water && this.water.material && this.water.material.uniforms) {
+        this.water.material.uniforms['uCameraPos'].value.copy(this.camera.position);
+      }
+    } else {
     // 进入开镜的边沿：把当前世界朝向锚定为绝对方向，之后船身转向
     // 不再带动瞄准镜；只有鼠标移动会改 scopedWorldYaw。
     if (scoped && !this.controls._wasScoped) {
@@ -1068,6 +1267,7 @@ export class MultiplayerEngine {
       Math.cos(worldYaw) * Math.cos(pitch)
     );
     this.camera.lookAt(this.camera.position.clone().add(lookDir.multiplyScalar(1000)));
+    } // end ship-view camera
 
     // HUD update
     if (this.onHudUpdate && this.localShip.ship) {
@@ -1100,6 +1300,7 @@ export class MultiplayerEngine {
         availableTorpedoTiers: this.controls.availableTorpedoTiers,
         gear: this.controls.gear,
         skills: this.localShip.skl,
+        squadron: this._squadronHud(),
       });
     }
 
@@ -1108,7 +1309,8 @@ export class MultiplayerEngine {
       const otherEntities = [];
       for (const id in this.otherShips) {
         const entry = this.otherShips[id];
-        if (entry.lastAlive && entry.ship.mesh) {
+        // Skip fully-submerged enemy submarines (hidden from this player).
+        if (entry.lastAlive && entry.ship.mesh && !entry.hidden) {
           otherEntities.push({
             mesh: entry.ship.mesh,
             heading: entry.ship.mesh.rotation.y,
@@ -1117,9 +1319,14 @@ export class MultiplayerEngine {
           });
         }
       }
+      // Minimap centre follows the squadron while flying; otherwise the ship.
+      const inSquad = this.playerView === 'squadron' && this.squadron && this.squadron.alive;
       this.onMinimapUpdate({
-        playerPos: { x: this.localShip.pos_x, z: this.localShip.pos_z },
-        playerHeading: this.localShip.heading,
+        playerPos: inSquad
+          ? { x: this.squadron.position.x, z: this.squadron.position.z }
+          : { x: this.localShip.pos_x, z: this.localShip.pos_z },
+        playerHeading: inSquad ? this.squadron.heading : this.localShip.heading,
+        followPos: inSquad ? { x: this.localShip.pos_x, z: this.localShip.pos_z } : null,
         enemies: otherEntities,
         terrainImage: this._minimapTerrain,
       });
@@ -1220,6 +1427,48 @@ export class MultiplayerEngine {
     return (base[tier] || 8) * Math.pow(0.95, levelsAbove4);
   }
 
+  // Carrier air-group HUD block. Reads authoritative ammo/cd from the server
+  // snapshot when available; falls back to the local squadron's mirrored values.
+  _squadronHud() {
+    const level = this.localShip ? this.localShip.level : 4;
+    const cfg = getAirGroupConfig(level);
+    const snap = this._localSquadronSnap;
+    const sq = this.squadron;
+    const isCarrier = this.localShip && this.localShip.shipClass === 'carrier';
+    // Prefer server snapshot values; fall back to local squadron (post-mirror)
+    // so the HUD still reads correctly between snapshots. The server's single
+    // squadron carries BOTH ammo pools; the local typed Squadron only mirrors
+    // its own type's pool, so for the non-active type we use the snapshot.
+    const tAmmo = snap ? snap.tord : (sq && sq.type === 'torpedo' ? sq.ammo : 0);
+    const tCd = snap ? snap.torcd : (sq && sq.type === 'torpedo' ? sq.cd : 0);
+    const bAmmo = snap ? snap.bomd : (sq && sq.type === 'bomber' ? sq.ammo : 0);
+    const bCd = snap ? snap.bomcd : (sq && sq.type === 'bomber' ? sq.cd : 0);
+    const autoPilot = snap ? (snap.ap === 1) : (sq ? !!sq.autoPilot : false);
+    const autoPhase = snap ? (snap.phase || 'idle') : (sq ? (sq._autoPhase || 'idle') : 'idle');
+    // Rearming flag: squadron within rearmRange of the carrier.
+    let rearming = false;
+    if (sq && this.localShip) {
+      const dx = sq.position.x - this.localShip.pos_x;
+      const dz = sq.position.z - this.localShip.pos_z;
+      rearming = dx * dx + dz * dz <= CARRIER.rearmRange * CARRIER.rearmRange;
+    }
+    return {
+      carrier: isCarrier,
+      view: this.playerView,
+      activeType: this.ordinanceType,
+      airborne: this.playerView === 'squadron' && !!sq && sq.alive,
+      autoPilot,
+      autoPhase,
+      rearming,
+      hp: sq ? sq.hp : CARRIER.aircraftHp,
+      maxHp: sq ? sq.maxHp : CARRIER.aircraftHp,
+      altitude: sq ? sq.altitude : CARRIER.aircraftAltitude,
+      maxAlt: CARRIER.aircraftMaxAlt, minAlt: CARRIER.aircraftCrashAlt,
+      torpedo: { ammo: tAmmo, maxAmmo: cfg.torpedo.ammo, cd: tCd, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo },
+      bomber: { ammo: bAmmo, maxAmmo: cfg.bomber.ammo, cd: bCd, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo },
+    };
+  }
+
   _applyLocalDrift(dt) {
     const ls = this.localShip;
     const driftCfg = getDriftConfig(ls.shipClass);
@@ -1251,6 +1500,12 @@ export class MultiplayerEngine {
     // the round ends.
     this._dmgAccum = 0;
     this._lastDmgEmit = 0;
+    // Reset carrier view/squadron state so a new round starts in ship view.
+    this.playerView = 'ship';
+    this.ordinanceType = 'torpedo';
+    this.squadron = null;
+    this._localSquadronSnap = null;
+    if (this.controls) this.controls.viewMode = 'ship';
     if (this.terrain) {
       this.terrain.destroy?.();
       this.terrain = null;
@@ -1304,6 +1559,98 @@ export class MultiplayerEngine {
         entry.trail.material.dispose();
       }
       this._torpedoVisuals = {};
+    }
+  }
+
+  // Carrier: flip the local view + spawn a local visual squadron. The server
+  // also gets a toggle_view/launch and is authoritative, but the local squadron
+  // lets the player fly immediately without waiting for the round-trip.
+  // `group` selects the active air group — the local Squadron is (re)built with
+  // that type so its aim guide + drop match. The server's single authoritative
+  // squadron carries BOTH ammo pools; we mirror only the active type's pool here.
+  _toggleCarrierViewLocal(group = null) {
+    if (this.localShip.shipClass !== 'carrier') return;
+    if (this.playerView === 'ship') {
+      const wantType = group === 'bomber' ? 'bomber' : 'torpedo';
+      if (this.scene) {
+        if (!this.squadron || this.squadron.type !== wantType) {
+          if (this.squadron) this.squadron.destroy();
+          this.squadron = new Squadron(
+            this.scene,
+            this.localShip.pos_x,
+            this.localShip.pos_z,
+            'player',
+            this.localShip.level,
+            wantType
+          );
+        } else {
+          // Re-launch: reposition + re-arm locally (server refills too).
+          this.squadron.position.set(this.localShip.pos_x, CARRIER.aircraftAltitude, this.localShip.pos_z);
+          this.squadron.heading = this.localShip.heading;
+          this.squadron.setLevel(this.localShip.level);
+          this.squadron.refill();
+        }
+      }
+      this.ordinanceType = wantType;
+      this.playerView = 'squadron';
+      this.controls.viewMode = 'squadron';
+      this.controls.scoped = false;
+    } else {
+      this.playerView = 'ship';
+      this.controls.viewMode = 'ship';
+    }
+  }
+
+  // Sync remote (and re-sync local) squadrons from the snapshot `airs` array.
+  _updateAircraftVisuals(airs) {
+    if (!airs) return;
+    const activeIds = new Set();
+    for (const a of airs) {
+      const id = a.id;
+      activeIds.add(id);
+      // Don't double-render the local player's squadron (it has its own mesh).
+      if (a.owner === this._myId && this.squadron) {
+        // Reconcile local squadron position to the authoritative server value.
+        this.squadron.position.set(a.x, this.squadron.position.y, a.z);
+        this.squadron.heading = a.h;
+        this.squadron.mesh.position.copy(this.squadron.position);
+        this.squadron.mesh.rotation.y = a.h;
+        // Mirror authoritative ammo/cooldown so the HUD reflects the server
+        // (the local Squadron doesn't deduct ammo — server is authoritative).
+        // The local Squadron has a single typed pool; reflect whichever pool
+        // matches its current type. Keep a full {torpedo,bomber} snapshot for HUD.
+        if (typeof a.tord === 'number' && this.squadron.type === 'torpedo') this.squadron.ammo = a.tord;
+        if (typeof a.bomd === 'number' && this.squadron.type === 'bomber') this.squadron.ammo = a.bomd;
+        if (typeof a.torcd === 'number' && this.squadron.type === 'torpedo') this.squadron.cd = a.torcd;
+        if (typeof a.bomcd === 'number' && this.squadron.type === 'bomber') this.squadron.cd = a.bomcd;
+        // Mirror auto-pilot state so the HUD + local steering match the server.
+        if (typeof a.ap === 'number') this.squadron.autoPilot = a.ap === 1;
+        if (typeof a.phase === 'string') this.squadron._autoPhase = a.phase;
+        this._localSquadronSnap = a;
+        continue;
+      }
+      let entry = this._airVisuals[id];
+      if (!entry) {
+        const mesh = new THREE.Group();
+        const mat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
+        const body = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2.5, 6), mat);
+        body.rotation.x = Math.PI / 2;
+        mesh.add(body);
+        const wings = new THREE.Mesh(new THREE.BoxGeometry(3, 0.1, 0.8), mat);
+        mesh.add(wings);
+        this.scene.add(mesh);
+        entry = { mesh, owner: a.owner };
+        this._airVisuals[id] = entry;
+      }
+      entry.mesh.position.set(a.x, a.alt, a.z);
+      entry.mesh.rotation.y = a.h;
+    }
+    // Remove squadrons no longer in the snapshot.
+    for (const id in this._airVisuals) {
+      if (!activeIds.has(Number(id))) {
+        this.scene.remove(this._airVisuals[id].mesh);
+        delete this._airVisuals[id];
+      }
     }
   }
 

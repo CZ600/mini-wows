@@ -323,6 +323,10 @@ const SPREAD_CLASS = {
   destroyer:  { base: 0.00005, growth: 0.8 },
   cruiser:    { base: 0.0008,  growth: 0.4 },
   battleship: { base: 0.0015,  growth: 0.15 },
+  // Submarine: single deck gun, short range — tight up close, falls off fast.
+  submarine:  { base: 0.0001,  growth: 0.9 },
+  // Carrier: self-defense secondaries, mediocre accuracy.
+  carrier:    { base: 0.0010,  growth: 0.5 },
 };
 
 function gaussianRandom(mean, stdev) {

@@ -295,7 +295,7 @@ async def api_reset_progress(player_id: int, user: dict = Depends(get_current_us
     return {"status": "ok"}
 
 
-VALID_CLASSES = {"destroyer", "cruiser", "battleship"}
+VALID_CLASSES = {"destroyer", "cruiser", "battleship", "submarine", "carrier"}
 
 
 @app.get("/api/players/{player_id}/class")

@@ -1,3 +1,6 @@
+import AirGroupSlots from './AirGroupSlots.jsx';
+import CarrierStatus from './CarrierStatus.jsx';
+
 const GEAR_ROWS = [
   { name: '前进4', gear: 5 },
   { name: '前进3', gear: 4 },
@@ -106,7 +109,7 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
 
   const tierLabels = { 1: '短/快', 2: '中程', 3: '远/慢' };
   const tierKeys = { 1: '2', 2: '3', 3: '4' };
-  const classNames = { destroyer: '驱逐舰', cruiser: '巡洋舰', battleship: '战列舰' };
+  const classNames = { destroyer: '驱逐舰', cruiser: '巡洋舰', battleship: '战列舰', submarine: '潜艇', carrier: '航母' };
 
   const hasTorpedoes = torpedoTubes.length > 0 && availableTorpedoTiers.length > 0;
   const sortedTiers = [...availableTorpedoTiers].sort((a, b) => a - b);
@@ -174,6 +177,9 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
           ))}
         </div>
       )}
+
+      {/* Carrier status strip (auto-pilot / rearming / patrol). */}
+      <CarrierStatus squadron={data.squadron} />
 
       {/* Bottom Bar */}
       <div id="hud-bottom-bar">
@@ -255,6 +261,8 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
                 <div className="weapon-slot-desc">{tierLabels[tier] || ''}{torpedoTubes.length}管</div>
               </div>
             ))}
+            {/* Carrier air-group launch slots (鱼雷机 / 轰炸机) */}
+            <AirGroupSlots squadron={data.squadron} />
             {/* Skill slots */}
             {['rf', 'dc', 'ps'].map(id => {
               const s = (data.skills && data.skills[id]) || { a: 0, c: 0 };

@@ -15,6 +15,8 @@ SHIP_CLASS_NAMES = {
     "destroyer": "驱逐舰",
     "cruiser": "巡洋舰",
     "battleship": "战列舰",
+    "submarine": "潜艇",
+    "carrier": "航母",
 }
 
 
@@ -219,6 +221,20 @@ class Room:
                         self.game_state.process_torpedo(pid, msg)
                     elif msg_type == "activate_skill":
                         self.game_state.process_skill(pid, msg)
+                    elif msg_type == "dive":
+                        self.game_state.process_dive(pid, msg)
+                    elif msg_type == "fly_input":
+                        self.game_state.process_fly_input(pid, msg)
+                    elif msg_type == "toggle_view":
+                        self.game_state.process_toggle_view(pid, msg)
+                    elif msg_type == "launch_squadron":
+                        self.game_state.process_launch_squadron(pid, msg)
+                    elif msg_type == "toggle_autopilot":
+                        self.game_state.process_toggle_autopilot(pid, msg)
+                    elif msg_type == "drop":
+                        self.game_state.process_drop(pid, msg)
+                    elif msg_type == "asw_fire":
+                        self.game_state.process_asw_fire(pid, msg)
 
                 self.game_state.update(DT)
                 self._tick_count += 1

@@ -5,20 +5,22 @@ from game.config import (
     GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG,
     CANNON_SPREAD_BASE, CANNON_SPREAD_VERTICAL_MULT, CANNON_SPREAD_MAX_SIGMA,
     CANNON_SPREAD_CLASS,
+    AA_HIT_RADIUS, ASW_BLAST_RADIUS,
 )
 
 
 class ServerProjectile:
     __slots__ = [
-        "proj_id", "owner", "damage",
+        "proj_id", "owner", "damage", "weapon",
         "x", "y", "z", "px", "py", "pz",
         "vx", "vy", "vz", "lifetime", "alive", "drag",
     ]
 
-    def __init__(self, proj_id, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG):
+    def __init__(self, proj_id, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG, weapon="shell"):
         self.proj_id = proj_id
         self.owner = owner
         self.damage = damage
+        self.weapon = weapon
         self.x, self.y, self.z = origin
         self.px, self.py, self.pz = origin
         speed = muzzle_speed
@@ -118,13 +120,19 @@ class ProjectileManager:
         self.projectiles = []
         self._next_id = 0
 
-    def fire(self, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG):
-        proj = ServerProjectile(self._next_id, owner, damage, origin, direction, muzzle_speed=muzzle_speed, drag=drag)
+    def fire(self, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG, weapon="shell"):
+        proj = ServerProjectile(self._next_id, owner, damage, origin, direction, muzzle_speed=muzzle_speed, drag=drag, weapon=weapon)
         self._next_id += 1
         self.projectiles.append(proj)
         return proj
 
-    def update(self, dt, terrain, ships):
+    def update(self, dt, terrain, ships, aircraft_mgr=None):
+        """Advance projectiles, resolve terrain/ship/aircraft collisions.
+
+        aircraft_mgr: the room's AircraftManager, so `weapon='flak'` shells can
+        hit squadrons and `weapon='depth_charge'` shells can AoE submarines. May
+        be None (e.g. when no aircraft are in play) — flak then does nothing.
+        """
         events = []
 
         # Update all projectiles
@@ -225,6 +233,12 @@ class ProjectileManager:
                     pid = ship_ids[idx]
                     ship = alive_ships[idx][1]
 
+                    # Fully-submerged submarines are immune to ordinary shells
+                    # (they pass overhead through the water column). Depth-charge
+                    # weapons bypass this. Mirrors frontend projectile.js.
+                    if getattr(ship, "fully_submerged", False) and p.weapon != "depth_charge":
+                        continue
+
                     # Don't hit self
                     if p.owner == pid:
                         continue
@@ -259,6 +273,101 @@ class ProjectileManager:
                             "z": round(p.z, 2),
                         })
                     break
+
+        # ---- Aircraft collisions: `weapon="flak"` AA shells vs squadrons ----
+        # Flak detonates within AA_HIT_RADIUS (m) of a squadron's lead position
+        # (3D distance), so dense AA still threatens a fast-moving squadron. The
+        # owner is the firing ship's player_id; friendly aircraft are skipped
+        # (same owner). Mirrors the client projectile.js flak branch.
+        if aircraft_mgr is not None:
+            squads = [sq for sq in aircraft_mgr.squadrons if sq.alive]
+            if squads:
+                r2 = AA_HIT_RADIUS * AA_HIT_RADIUS
+                for p in self.projectiles:
+                    if not p.alive or p.weapon != "flak":
+                        continue
+                    for sq in squads:
+                        # Don't shoot down your own air wing (owner == shooter).
+                        if p.owner == sq.owner:
+                            continue
+                        dx = sq.pos_x - p.x
+                        dy = sq.altitude - p.y
+                        dz = sq.pos_z - p.z
+                        if dx * dx + dy * dy + dz * dz <= r2:
+                            killed = sq.take_damage(p.damage)
+                            p.alive = False
+                            events.append({
+                                "type": "air_hit",
+                                "target": sq.owner,
+                                "squad": sq.squad_id,
+                                "damage": p.damage,
+                                "attacker": p.owner,
+                                "x": round(p.x, 2),
+                                "y": round(p.y, 2),
+                                "z": round(p.z, 2),
+                            })
+                            if killed:
+                                events.append({
+                                    "type": "air_destroyed",
+                                    "target": sq.owner,
+                                    "squad": sq.squad_id,
+                                    "destroyed_by": p.owner,
+                                    "x": round(sq.pos_x, 2),
+                                    "y": round(sq.altitude, 2),
+                                    "z": round(sq.pos_z, 2),
+                                })
+                            break
+
+        # ---- Depth-charge detonation (ASW) ----
+        # A depth_charge detonates when it hits the water (y<=0), dealing its
+        # damage to every submarine within ASW_BLAST_RADIUS (horizontal). This is
+        # the ASW payload: it bypasses the fully-submerged shell immunity (see
+        # the ship loop above) so submerged subs — otherwise invulnerable to
+        # shells — can be hunted. One detonation can hit multiple subs.
+        if self.projectiles:
+            blast2 = ASW_BLAST_RADIUS * ASW_BLAST_RADIUS
+            for p in self.projectiles:
+                if not p.alive or p.weapon != "depth_charge":
+                    continue
+                if p.y > 0:
+                    continue  # still airborne; detonates on water impact
+                # Detonate. Damage every alive submarine within blast radius.
+                for pid, ship in ships.items():
+                    if not ship.alive or pid == p.owner:
+                        continue
+                    # Only submarines are ASW targets.
+                    if getattr(ship, "ship_class", None) != "submarine":
+                        continue
+                    # Team mode: don't depth-charge teammates.
+                    if ship.team and p.owner in ships:
+                        owner_ship = ships.get(p.owner)
+                        if owner_ship and owner_ship.team == ship.team:
+                            continue
+                    dx = ship.pos_x - p.x
+                    dz = ship.pos_z - p.z
+                    if dx * dx + dz * dz <= blast2:
+                        ship.take_damage(p.damage)
+                        events.append({
+                            "type": "hit",
+                            "target": pid,
+                            "damage": p.damage,
+                            "attacker": p.owner,
+                            "weapon": "depth_charge",
+                            "x": round(p.x, 2),
+                            "y": 0.0,
+                            "z": round(p.z, 2),
+                        })
+                        if not ship.alive:
+                            events.append({
+                                "type": "entity_destroyed",
+                                "target": pid,
+                                "destroyed_by": p.owner,
+                                "weapon": "depth_charge",
+                                "x": round(p.x, 2),
+                                "y": 0.0,
+                                "z": round(p.z, 2),
+                            })
+                p.alive = False
 
         # Clean up dead projectiles
         self.projectiles = [p for p in self.projectiles if p.alive]

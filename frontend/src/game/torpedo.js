@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { applyHalfLambert } from './scene.js';
+import { HOMING_TORPEDO } from './config.js';
 
 export const TORPEDO_TIERS = {
   1: { speed: 22.2, range: 400, baseCooldown: 8 },
@@ -47,7 +48,7 @@ export class TorpedoManager {
     this._aimFan = null;
   }
 
-  fire(origin, heading, tier, level, tubeCount, spread, owner) {
+  fire(origin, heading, tier, level, tubeCount, spread, owner, homing = false) {
     const stats = getTorpedoStats(tier, level);
     if (!stats) return;
 
@@ -94,6 +95,7 @@ export class TorpedoManager {
       this.torpedoes.push({
         mesh,
         trail,
+        heading: angle,
         velocity: new THREE.Vector3(
           Math.sin(angle) * stats.speed,
           0,
@@ -104,6 +106,7 @@ export class TorpedoManager {
         distanceTraveled: 0,
         owner,
         tier,
+        homing,
         trailData: [],
       });
     }
@@ -134,6 +137,39 @@ export class TorpedoManager {
   update(dt, ship, enemies) {
     for (let i = this.torpedoes.length - 1; i >= 0; i--) {
       const t = this.torpedoes[i];
+
+      // Homing torpedoes (submarine tier 2/3) steer toward the nearest spotted
+      // enemy within acquire range. Turn rate is capped so a close target can
+      // still juke it. Only player-fired homing torpedoes track here; enemy
+      // homing is driven server-side in multiplayer.
+      if (t.homing && t.owner === 'player' && enemies && enemies.length > 0) {
+        const tp = t.mesh.position;
+        let nearest = null;
+        let nearestD2 = HOMING_TORPEDO.acquireRange * HOMING_TORPEDO.acquireRange;
+        for (const enemy of enemies) {
+          if (!enemy.alive) continue;
+          const ep = enemy.mesh.position;
+          const dx = ep.x - tp.x;
+          const dz = ep.z - tp.z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 < nearestD2) {
+            nearestD2 = d2;
+            nearest = enemy;
+          }
+        }
+        if (nearest) {
+          const ep = nearest.mesh.position;
+          const desired = Math.atan2(ep.x - tp.x, ep.z - tp.z);
+          let diff = desired - t.heading;
+          while (diff > Math.PI) diff -= 2 * Math.PI;
+          while (diff < -Math.PI) diff += 2 * Math.PI;
+          const maxStep = HOMING_TORPEDO.turnRate * dt;
+          const step = Math.max(-maxStep, Math.min(maxStep, diff));
+          t.heading += step;
+          t.velocity.set(Math.sin(t.heading) * t.speed, 0, Math.cos(t.heading) * t.speed);
+          t.mesh.rotation.y = t.heading;
+        }
+      }
 
       t.distanceTraveled += t.speed * dt;
       t.mesh.position.addScaledVector(t.velocity, dt);
@@ -170,8 +206,9 @@ export class TorpedoManager {
           }
 
           if (hitEnemy) {
-            enemy.takeDamage((50 + t.tier * 20) * 2);
-            if (this.audio) this.audio.playTorpedoHit();
+            const dmgMul = t.homing ? HOMING_TORPEDO.damageMul : 1.0;
+            enemy.takeDamage((50 + t.tier * 20) * 2 * dmgMul);
+            if (this.audio) this.audio.playTorpedoHit(this._distToPlayer(t.mesh.position, ship));
             hit = true;
             break;
           }
@@ -193,7 +230,7 @@ export class TorpedoManager {
         if (Math.abs(localX) < ship.shipWidth / 2 + HIT_RADIUS &&
             Math.abs(localZ) < ship.shipLength / 2 + HIT_RADIUS) {
           ship.takeDamage((30 + t.tier * 15) * 2);
-          if (this.audio) this.audio.playTorpedoHit();
+          if (this.audio) this.audio.playTorpedoHit(this._distToPlayer(t.mesh.position, ship));
           hit = true;
         }
       }
@@ -225,6 +262,18 @@ export class TorpedoManager {
         f.mesh.material.opacity = 0.35 * (f.life / 2.0);
       }
     }
+  }
+
+  // Horizontal distance from an impact point to the player ship, in meters,
+  // for distance-based impact-sound attenuation. The player ship keeps both a
+  // `.position` Vector3 and a mesh position in sync.
+  _distToPlayer(point, ship) {
+    if (!ship) return 0;
+    const sp = ship.position || (ship.mesh && ship.mesh.position);
+    if (!sp) return 0;
+    const dx = point.x - sp.x;
+    const dz = point.z - sp.z;
+    return Math.sqrt(dx * dx + dz * dz);
   }
 
   updateAimFan(visible, origin, aimYaw, tubeCount, spread, range) {

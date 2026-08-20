@@ -29,6 +29,22 @@ const TORPEDO_HIT_START = 1;
 const TORPEDO_HIT_END = 3;
 const TORPEDO_LAUNCH_END = 1.5;
 
+// Distance-based volume attenuation for impact sounds, modeling real-world
+// sound falloff. Combat happens in the ~100–1500m band: very close hits stay
+// loud, and everything beyond combat range is muffled to a faint rumble
+// (distant artillery you can feel rather than hear) rather than going silent.
+//   - FULL_VOLUME_DIST: within this range there is no attenuation (a hit on or
+//     near the player's own ship sounds full strength).
+//   - HALF_VOLUME_DIST: at this distance volume is roughly halved.
+//   - MIN_VOLUME_RATIO: floor so far-away fights still read as ambient noise.
+const FULL_VOLUME_DIST = 100;
+const HALF_VOLUME_DIST = 800;
+const MIN_VOLUME_RATIO = 0.08;
+// Solve the falloff curve 1/(1+(d/C)^2) so it equals 0.5 at HALF_VOLUME_DIST:
+//   1/(1+(H/C)^2) = 0.5  =>  H/C = 1  =>  C = H.
+// (The math works out to C == HALF_VOLUME_DIST, written explicitly for clarity.)
+const FALLOFF_C = HALF_VOLUME_DIST;
+
 function clamp01(v) {
   if (Number.isNaN(v)) return 0;
   return Math.max(0, Math.min(1, v));
@@ -64,6 +80,19 @@ export class AudioManager {
 
   _sfxScale() {
     return this._muted ? 0 : this._sfxVolume;
+  }
+
+  // Map a hit's horizontal distance from the player's ship (meters) to a 0..1
+  // volume multiplier. No distance (0) or non-finite value means "no
+  // attenuation" — used by callers that don't have a meaningful point (e.g.
+  // the player's own gunfire), and keeps the no-arg callsites at full volume.
+  _distanceAttenuation(distance) {
+    if (distance == null || !Number.isFinite(distance) || distance <= 0) return 1;
+    if (distance <= FULL_VOLUME_DIST) return 1;
+    // Inverse-square-like falloff: 1 / (1 + (d/C)^2). At HALF_VOLUME_DIST the
+    // value is 0.5; it keeps dropping toward MIN_VOLUME_RATIO at long range.
+    const falloff = 1 / (1 + (distance / FALLOFF_C) ** 2);
+    return clamp01(Math.max(MIN_VOLUME_RATIO, falloff));
   }
 
   init() {
@@ -160,30 +189,30 @@ export class AudioManager {
     }
   }
 
-  playFire(shipClass) {
+  playFire(shipClass, distance = 0) {
     if (!this.initialized) return;
     const src = FIRE_SOUND[shipClass] || DEFAULT_FIRE_SOUND;
     const a = new Audio(src);
-    a.volume = FIRE_VOLUME * this._sfxScale();
+    a.volume = FIRE_VOLUME * this._distanceAttenuation(distance) * this._sfxScale();
     a.play().catch(() => {});
   }
 
-  playExplosion() {
+  playExplosion(distance = 0) {
     if (!this.initialized) return;
     const now = performance.now();
     if (now - this._lastExplosionTime < EXPLOSION_THROTTLE_MS) return;
     this._lastExplosionTime = now;
     const a = new Audio(EXPLOSION_SOUND);
-    a.volume = EXPLOSION_VOLUME * this._sfxScale();
+    a.volume = EXPLOSION_VOLUME * this._distanceAttenuation(distance) * this._sfxScale();
     a.play().catch(() => {});
   }
 
-  playTorpedoHit() {
+  playTorpedoHit(distance = 0) {
     if (!this.initialized) return;
     const now = performance.now();
     if (now - this._lastExplosionTime < EXPLOSION_THROTTLE_MS) return;
     this._lastExplosionTime = now;
-    this._playClip(TORPEDO_HIT_SOUND, TORPEDO_HIT_START, TORPEDO_HIT_END, TORPEDO_HIT_VOLUME * this._sfxScale());
+    this._playClip(TORPEDO_HIT_SOUND, TORPEDO_HIT_START, TORPEDO_HIT_END, TORPEDO_HIT_VOLUME * this._distanceAttenuation(distance) * this._sfxScale());
   }
 
   playTorpedoLaunch() {
