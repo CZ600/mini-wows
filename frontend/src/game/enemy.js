@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { LEVEL_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch } from './turret.js';
-import { applyHalfLambert } from './scene.js';
+import { buildShipModel, createMarkerSprite, CLASS_NAMES } from './ship_model.js';
 import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag, SUBMARINE } from './config.js';
 
 export const ENEMY_SCALE = {
@@ -33,13 +33,14 @@ const GRAVITY = 9.8;
 const SHIP_TURN_RATE = Math.PI / 3;
 
 // Single-player (solo) mode tuning.
-// Spawns land in the annulus [SPAWN_MIN_DIST, SPAWN_MAX_DIST] around the player
-// so enemies never appear within the keep-out radius but stay close enough to
-// reach the fight. The keep-out radius shrinks for early levels so low-level
-// fights don't force long chases to close 700m before engaging.
-const SOLO_SPAWN_MIN_DIST_LOW = 600;   // < level 4: 600m keep-out radius
-const SOLO_SPAWN_MIN_DIST = 700;       // >= level 4: 700m keep-out radius
-const SOLO_SPAWN_MAX_DIST = 1500;      // 1.5km spawn radius (random within)
+// Spawns land in the annulus [SPAWN_MIN_DIST, SPAWN_MAX_DIST] around the player.
+// 关键约束：刷怪圈必须完全在敌方索敌圈（ENEMY_DETECT_RANGE）之外 ——
+// 否则波次一刷新，全部敌舰立刻发现并集火静止的玩家，开局即被秒杀。
+// 因此最小刷怪距离直接由 ENEMY_DETECT_RANGE 派生（低等级贴着索敌圈外沿，
+// 省去长途奔袭；4 级起再外扩 100m，给玩家更多展开空间）。
+const SOLO_SPAWN_MIN_DIST_LOW = ENEMY_DETECT_RANGE;        // < level 4: 600m，索敌圈外沿
+const SOLO_SPAWN_MIN_DIST = ENEMY_DETECT_RANGE + 100;      // >= level 4: 700m
+const SOLO_SPAWN_MAX_DIST = 1500;                          // 1.5km spawn radius (random within)
 const SOLO_SPAWN_MIN_SEP = 100;        // min spacing between spawned enemies
 
 // Orbit band: within ENEMY_ORBIT_RANGE the ship stops chasing and circles the
@@ -121,161 +122,25 @@ export class EnemyShip {
   }
 
   _buildMesh(cfg) {
-    this.mesh = new THREE.Group();
-    const deckY = cfg.height + 1.0;
-    const hullY = cfg.height / 2 + 1.0;
-    const hullMat = new THREE.MeshPhongMaterial({ color: 0x8b2020 });
-    applyHalfLambert(hullMat);
-    const turretMat = new THREE.MeshPhongMaterial({ color: 0x666666 });
-    applyHalfLambert(turretMat);
-    const barrelMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
-    applyHalfLambert(barrelMat);
-    // Keep a ref to the hull material so subclasses (e.g. FriendlyAIShip) can
-    // retint the whole hull+deck+superstructure with one call. All hull-derived
-    // meshes below share this material.
-    this._hullMat = hullMat;
+    // 敌方舰船与玩家共用同一套真实感建模（ship_model.js），涂装完全一致；
+    // 阵营只通过血条颜色 + 文字标记区分，不再使用深红色船体。
+    const model = buildShipModel(cfg, this.shipType);
+    this.mesh = model.group;
+    this._hullMat = model.mats.hull;   // subclasses can retint via _tintHull
+    this._deckY = model.deckY;
 
-    const hullGeo = new THREE.CylinderGeometry(1, 1, cfg.height, 32);
-    hullGeo.scale(cfg.width * 0.65, 1, cfg.length * 0.65);
-    const hull = new THREE.Mesh(hullGeo, hullMat);
-    hull.position.set(0, hullY, 0);
-    this.mesh.add(hull);
-
-    const deck = new THREE.Mesh(
-      new THREE.BoxGeometry(cfg.width * 0.85, 0.25, cfg.length * 0.85),
-      hullMat
-    );
-    deck.position.set(0, deckY, 0);
-    this.mesh.add(deck);
-
-    if (cfg.hasBridge) {
-      // Long-island superstructure mirroring the player ship: low deckhouse
-      // running fore-aft, with a forward bridge block (carrying the mast) and
-      // an aft funnel.
-      const isAbx = (cfg.barrels || 1) >= 3;
-      const bridgeOffsetZ = 0;
-      const bw = cfg.width * (isAbx ? 0.5 : 0.45);
-      // Bridge island height: raised to 140% to match the player ship.
-      const bh = cfg.height * 0.98;
-      const bl = cfg.length * 0.26;
-
-      const deckhouseH = bh * 0.5;
-      const deckhouse = new THREE.Mesh(
-        new THREE.BoxGeometry(bw * 0.85, deckhouseH, bl),
-        hullMat
-      );
-      deckhouse.position.set(0, deckY + deckhouseH / 2 + 0.1, bridgeOffsetZ);
-      this.mesh.add(deckhouse);
-
-      const windowMat = new THREE.MeshPhongMaterial({ color: 0x886644 });
-      applyHalfLambert(windowMat);
-      const windows = new THREE.Mesh(
-        new THREE.BoxGeometry(bw * 0.88, deckhouseH * 0.35, bl + 0.1),
-        windowMat
-      );
-      windows.position.y = deckhouseH * 0.1;
-      deckhouse.add(windows);
-
-      // Forward bridge block (taller).
-      const fwdBlockW = bw * 0.7;
-      const fwdBlockH = bh * 0.8;
-      const fwdBlockL = bl * 0.32;
-      const fwdBlock = new THREE.Mesh(
-        new THREE.BoxGeometry(fwdBlockW, fwdBlockH, fwdBlockL),
-        hullMat
-      );
-      fwdBlock.position.set(0, deckhouseH / 2 + fwdBlockH / 2, bl * 0.30);
-      deckhouse.add(fwdBlock);
-
-      // Aft funnel block (shorter, squatter).
-      const funnelW = bw * 0.5;
-      const funnelH = bh * 0.6;
-      const funnelL = bl * 0.26;
-      const funnel = new THREE.Mesh(
-        new THREE.BoxGeometry(funnelW, funnelH, funnelL),
-        hullMat
-      );
-      funnel.position.set(0, deckhouseH / 2 + funnelH / 2, -bl * 0.32);
-      deckhouse.add(funnel);
-
-      const funnelTopMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-      applyHalfLambert(funnelTopMat);
-      const funnelTop = new THREE.Mesh(
-        new THREE.BoxGeometry(funnelW * 0.9, funnelH * 0.12, funnelL * 0.9),
-        funnelTopMat
-      );
-      funnelTop.position.y = funnelH / 2 - funnelH * 0.06;
-      funnel.add(funnelTop);
-
-      const mastH = bh * (isAbx ? 1.2 : 0.9);
-      const mast = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.1, 0.18, mastH, 6),
-        hullMat
-      );
-      mast.position.set(0, fwdBlockH / 2 + mastH / 2, -fwdBlockL * 0.1);
-      fwdBlock.add(mast);
-
-      const crossarm = new THREE.Mesh(
-        new THREE.BoxGeometry(fwdBlockW * 0.5, 0.12, 0.12),
-        hullMat
-      );
-      crossarm.position.set(0, mastH * 0.35, 0);
-      mast.add(crossarm);
-    }
-
-    const barrels = cfg.barrels || 1;
-    const turretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
-    const barrelLen = turretSize * 1.5;
-    const barrelGap = turretSize * 0.35;
-    // Spacing tracks the (widened) multi-barrel housing width so adjacent
-    // turrets pack tightly (was width*0.85, too loose with smaller turrets).
-    const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
-    const spacing = Math.max(1.2, housingWidth * 1.4);
-
-    let frontCenter = cfg.length * 0.2;
-    let backCenter = -cfg.length * 0.2;
-
-    if (cfg.hasBridge) {
-      const bridgeZ = 0;
-      const bridgeHalf = cfg.length * 0.14;
-      const frontGap = housingWidth * 0.35;
-      const backGap = housingWidth * 0.55;
-      if (cfg.frontTurrets > 0) {
-        const frontEdge = bridgeZ + bridgeHalf;
-        const closestOffset = (cfg.frontTurrets - 1) / 2 * spacing;
-        frontCenter = Math.max(frontCenter, frontEdge + frontGap + closestOffset);
-      }
-      if (cfg.backTurrets > 0) {
-        const backEdge = bridgeZ - bridgeHalf;
-        const closestOffset = (cfg.backTurrets - 1) / 2 * spacing;
-        backCenter = Math.min(backCenter, backEdge - backGap - closestOffset);
-      }
-    }
-
-    this._turretBodies = [];
-    this._turretBarrels = [];
-    this._turretBarrelGroups = [];
-
-    // Step height so aft turrets are raised to fire over the ones ahead of them.
-    const stepH = turretSize * 0.55;
-
-    for (let i = 0; i < cfg.frontTurrets; i++) {
-      const offset = (i - (cfg.frontTurrets - 1) / 2) * spacing;
-      // Front group fires forward: turret nearest the bridge (lowest i) is highest.
-      this._addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, frontCenter + offset, deckY, (cfg.frontTurrets - 1 - i) * stepH);
-    }
-    for (let i = 0; i < cfg.backTurrets; i++) {
-      const offset = (i - (cfg.backTurrets - 1) / 2) * spacing;
-      // Rear group fires aft: turret nearest the bridge (highest i) is highest.
-      this._addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, backCenter + offset, deckY, i * stepH);
-    }
+    // 炮塔网格句柄：group 承担水平旋回（yaw），barrelPivot 承担俯仰（pitch），
+    // 与玩家 Ship 的 turret.js 驱动方式完全同构。
+    this._turretBodies = model.turrets.map(t => t.group);
+    this._turretPivots = model.turrets.map(t => t.barrelPivot);
+    this._turretBarrelGroups = model.turrets.map(t => ({ meshes: t.barrels, barrelLen: t.barrelLen }));
 
     const hpWidth = cfg.length * 0.6;
     this.hpBarBg = new THREE.Mesh(
       new THREE.PlaneGeometry(hpWidth, 1.5),
       new THREE.MeshBasicMaterial({ color: 0x333333, depthTest: false, transparent: true })
     );
-    this.hpBarBg.position.y = deckY + cfg.height + 3;
+    this.hpBarBg.position.y = cfg.height + model.deckY + 3;
     this.hpBarBg.renderOrder = 999;
     this.mesh.add(this.hpBarBg);
 
@@ -296,13 +161,21 @@ export class EnemyShip {
     // left edge aligns with the background's left edge and the bar depletes
     // from the right.
     this.hpBarFill.position.x = 0;
-    this.hpBarFill.position.y = deckY + cfg.height + 3;
+    this.hpBarFill.position.y = cfg.height + model.deckY + 3;
     this.hpBarFill.renderOrder = 1000;
     this.mesh.add(this.hpBarFill);
 
+    // 敌方文字标记（船体涂装已与玩家一致，靠红字识别）。友军翼舰在
+    // _applyFactionColors 里隐藏此标记（他们由 HUD 队友标签标识）。
+    const className = CLASS_NAMES[this.shipType] || '战舰';
+    this.factionMarker = createMarkerSprite(`敌方·${className}`);
+    const mw = Math.min(15, Math.max(7, cfg.length * 0.45));
+    this.factionMarker.scale.set(mw, mw * 0.25, 1);
+    this.factionMarker.position.y = cfg.height + model.deckY + 5.2;
+    this.mesh.add(this.factionMarker);
+
     this._hpWidth = hpWidth;
     this._applyFactionColors();   // tint HP bar by faction (player=blue / enemy=red)
-    this._deckY = deckY;
   }
 
   // Retint the hull/deck/superstructure (all share _hullMat). Used by team-mode
@@ -325,12 +198,15 @@ export class EnemyShip {
       this.hpBarFill.visible = false;
       this.hpBarBg.material.color.setHex(0x113355);
       this.hpBarFill.material.color.setHex(0x33ccff);
+      // 翼舰不带"敌方"标记 —— 他们由 HUD 的队友标签标识。
+      if (this.factionMarker) this.factionMarker.visible = false;
     } else {
       // Enemy (and solo-mode enemies): red family.
       this.hpBarBg.visible = true;
       this.hpBarFill.visible = true;
       this.hpBarBg.material.color.setHex(0x331111);
       this.hpBarFill.material.color.setHex(0xff5544);
+      if (this.factionMarker) this.factionMarker.visible = true;
     }
   }
 
@@ -348,60 +224,6 @@ export class EnemyShip {
       else if (hpPercent > 0.3) this.hpBarFill.material.color.setHex(0xdd3322); // red
       else this.hpBarFill.material.color.setHex(0x882222);                    // dark red
     }
-  }
-
-  _addTurretMesh(turretMat, barrelMat, turretSize, barrelLen, barrelGap, barrels, z, deckY, yOffset = 0) {
-    const turretGroup = new THREE.Group();
-
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(turretSize * 0.5, turretSize * 0.6, turretSize * 0.3, 8),
-      turretMat
-    );
-    turretGroup.add(base);
-
-    // Widen the turret housing so multiple barrels sit naturally side by side.
-    const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(housingWidth, turretSize, turretSize),
-      turretMat
-    );
-    body.position.y = turretSize * 0.4;
-    turretGroup.add(body);
-
-    // One barrel mesh per barrel, offset sideways on x; all parented to the
-    // body so they pitch together (body rotation animates elevation).
-    const barrelMeshes = [];
-    for (let b = 0; b < barrels; b++) {
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.15, 0.15, barrelLen, 8),
-        barrelMat
-      );
-      barrel.rotation.x = Math.PI / 2;
-      barrel.position.set((b - (barrels - 1) / 2) * barrelGap, 0, turretSize * 0.5 + barrelLen / 2);
-      body.add(barrel);
-      barrelMeshes.push(barrel);
-    }
-
-    turretGroup.position.set(0, deckY + 0.15 + yOffset, z);
-    this.mesh.add(turretGroup);
-
-    // Cylindrical pedestal under raised (superfiring) turrets, filling the
-    // gap from the deck up to the turret base.
-    if (yOffset > 0.01) {
-      const pedestalH = yOffset + 0.15;
-      const pedestal = new THREE.Mesh(
-        new THREE.CylinderGeometry(housingWidth * 0.42, housingWidth * 0.5, pedestalH, 12),
-        turretMat
-      );
-      pedestal.position.set(0, deckY + pedestalH / 2, z);
-      this.mesh.add(pedestal);
-    }
-
-    this._turretBodies.push(body);
-    // Per-turret barrel info for computing distinct muzzle origins when firing.
-    this._turretBarrelGroups.push({ meshes: barrelMeshes, barrelLen });
-    // Keep the flat list for the pitch animation loop.
-    for (const m of barrelMeshes) this._turretBarrels.push(m);
   }
 
   _rotateToward(target, dt) {
@@ -559,7 +381,8 @@ export class EnemyShip {
 
       const targetYaw = Math.atan2(leadDx, leadDz);
       const localYaw = targetYaw - this.heading;
-      for (const b of this._turretBodies) b.rotation.y = localYaw;
+      // 炮塔旋回：直接驱动炮塔 group 的 yaw（与玩家 turret.js 同构）。
+      for (const g of this._turretBodies) g.rotation.y = localYaw;
 
       const fireOriginY = this._deckY + 1;
       const horizDist = leadDist;
@@ -580,7 +403,8 @@ export class EnemyShip {
 
       pitch = compensateDragPitch(pitch, horizDist, muzzleSpeed, cannonDrag);
 
-      for (const b of this._turretBarrels) b.rotation.x = Math.PI / 2 - pitch;
+      // 炮管俯仰：驱动 barrelPivot（炮管组挂在炮室内，随旋回一起转动）。
+      for (const p of this._turretPivots) p.rotation.x = -pitch;
 
       // Turret-based salvo: fire from all turrets that can aim and are ready.
       // Each barrel fires its own shell from its own muzzle position with

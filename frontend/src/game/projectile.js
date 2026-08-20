@@ -106,7 +106,8 @@ export class ProjectileManager {
         const localZ = -relX * sinH + relZ * cosH;
         const sh = ship.shipHeight || 2.5;
         const ts = ship.turretSize || 1.0;
-        const turretTop = (sh + 1) + 0.15 + ts * 0.9;
+        // deckY 是按船种压缩过的真实甲板高度（旧公式 cfg.height+1 仅作回退）。
+        const turretTop = (ship.deckY ?? (sh + 1)) + 0.15 + ts * 0.9;
         // Fully-submerged submarines are immune to ordinary shells (they pass
         // overhead through the water column). Depth-charge weapons bypass this.
         const immune = ship.fullySubmerged && p.weapon !== 'depth_charge';
@@ -144,10 +145,13 @@ export class ProjectileManager {
             const sinH = Math.sin(h);
             const localX =  relX * cosH + relZ * sinH;
             const localZ = -relX * sinH + relZ * cosH;
-            // Bridge top (excl. mast): deckY + deckhouseH + fwdBlockH
-            //   = (height+1) + height*0.49 + height*0.784 = 1 + height*2.274
+            // Bridge top (excl. mast): deckY + 0.1 + deckhouseH + fwdBlockH
+            //   = deckY + 0.1 + height*(0.5 + 0.8)*1.08  （巡洋舰比例的建筑常量）
+            // deckY 取模型真实甲板高度（干舷按船种压缩过），旧公式 1+height*2.274
+            // 仅在拿不到模型数据时回退。
             const sh = enemy.shipHeight || 2.5;
-            const bridgeTop = 1 + sh * 2.274;
+            const deck = enemy._deckY ?? (sh + 1);
+            const bridgeTop = deck + 0.1 + sh * 1.404;
             hitEnemy = Math.abs(localX) < (enemy.shipWidth  || enemy.size) / 2 + 0.5 &&
                        Math.abs(localZ) < (enemy.shipLength || enemy.size) / 2 + 0.5 &&
                        p.mesh.position.y >= ep.y - 1 &&

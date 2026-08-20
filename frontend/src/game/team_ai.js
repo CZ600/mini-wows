@@ -59,10 +59,12 @@ function toFireTarget(u) {
   };
 }
 
-// Hull colour for wingmen so they read as allies at a glance (enemy ships are
-// red 0x8b2020). A distinct blue keeps the friendly faction visually obvious
-// alongside the player's grey hull.
-const FRIENDLY_HULL_COLOR = 0x2a4a8a;
+// 翼舰船体的柔和蓝灰罩色：所有舰船现在共用同一套真实感雾灰涂装
+// （含贴图），敌我船体基色一致，只靠血条颜色与文字标记区分阵营。
+// 翼舰在此之上叠一层淡淡的蓝灰 tint（乘在贴图上），既保留了"蓝=友军"
+// 的即时辨识度，又看起来像真实的舰队双色涂装而不是鲜艳的玩具蓝。
+// 0xbcd0ee ≈ (0.74, 0.82, 0.93)，与雾灰贴图相乘后是低饱和的蓝灰。
+const FRIENDLY_HULL_TINT = 0xbcd0ee;
 
 // ============================================================================
 // Friendly wingman AI (faction 'player')
@@ -76,7 +78,7 @@ export class FriendlyAIShip extends EnemyShip {
                              // instanceof (which can fail across duplicated module
                              // identities under some bundler/hot-reload setups).
     this._applyFactionColors();   // re-tint HP bar now that faction is 'player'
-    this._tintHull(FRIENDLY_HULL_COLOR);  // paint the hull blue to match the friendly faction
+    this._tintHull(FRIENDLY_HULL_TINT);  // 叠加柔和蓝灰罩色，标识友军阵营
     this.slot = slot;
     this.playerRef = playerRef;     // live reference to the player ship/unit
     this.state = 'follow';

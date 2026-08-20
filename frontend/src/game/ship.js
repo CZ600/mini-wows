@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { applyHalfLambert } from './scene.js';
-import { SUBMARINE, getClassAa } from './config.js';
+import { SUBMARINE } from './config.js';
+import { buildShipModel } from './ship_model.js';
 
 export const LEVEL_CONFIG = {
   // Hull height scaled to ~60% of the original freeboard so ships sit lower
@@ -19,34 +19,39 @@ export const LEVEL_CONFIG = {
 
 export const CLASS_CONFIG = {
   destroyer: {
-    4:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 1 },
-    5:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 1 },
-    6:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 2 },
-    7:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 2 },
-    8:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 2 },
-    9:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 2 },
-    10: { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 8, sizeMul: 0.55, turretMul: 0.75, spacingMul: 0.7, barrels: 2 },
+    4:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 1 },
+    5:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 1 },
+    6:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    7:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    8:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    9:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    10: { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 8, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
   },
+  // turretMul 0.8/0.65: cruiser & destroyer turrets scaled down — with the
+  // longer (1.7x) gunhouses they otherwise blanket most of the deck.
   cruiser: {
-    4:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 1 },
-    5:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 1 },
-    6:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 2 },
-    7:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 2 },
-    8:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 2 },
-    9:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 2 },
-    10: { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 1.0, spacingMul: 0.85, barrels: 2 },
+    4:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 1 },
+    5:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 1 },
+    6:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    7:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    8:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    9:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    10: { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
   },
   // Battleship: Lv6-7 double turrets; Lv8-10 triple turrets in A-B-X layout
   // (2 front + 1 back). get_class_config keeps DPM constant via the
   // equivalent-barrels factor derived from BASE_TURRET_COUNT.
+  // lengthMul stretches the hull (width/height untouched): a longer, sleeker
+  // spindle and more deck room so turrets can train without clipping the
+  // bridge superstructure.
   battleship: {
-    4:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 1 },
-    5:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 1 },
-    6:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 2 },
-    7:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 2 },
-    8:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 1 },
-    9:  { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 1 },
-    10: { hpMul: 1.4,  speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 2 },
+    4:  { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 1 },
+    5:  { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 1 },
+    6:  { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 2 },
+    7:  { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 2 },
+    8:  { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 1 },
+    9:  { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 1 },
+    10: { hpMul: 1.4, speedMul: 0.7, turnMul: 1.4, damageMul: 3.075, cooldownMul: 1.2, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.0, lengthMul: 1.18, turretMul: 1.0, spacingMul: 1.0, barrels: 3, frontTurrets: 2, backTurrets: 2 },
   },
   // Submarine: very fragile, slow on the surface, relies on torpedoes.
   // A single deck gun (frontTurrets=1, backTurrets=0) keeps DPM low.
@@ -135,7 +140,7 @@ export function getClassConfig(shipClass, level) {
     frontTurrets,
     backTurrets,
     hasBridge: base.hasBridge,
-    length: Math.round(base.length * sm),
+    length: Math.round(base.length * sm * (cc.lengthMul || 1.0)),
     width: +(base.width * sm).toFixed(1),
     height: +(base.height * sm).toFixed(1),
     torpedoTiers: cc.torpedoTiers,
@@ -163,127 +168,12 @@ export function getTorpedoTubes(shipClass, level) {
 
 const ACCEL = BASE_MAX_SPEED / 15;
 const DECEL_FRICTION = 0.98;
-const YAW_RANGE_FULL = Math.PI;
 // Bridge ships (Lv4+) keep a slightly narrower arc than the full 360° of
 // early-game ships — the island blocks dead-ast/fire arcs. Widened from 2.2
 // to 2.6 (≈149°/side) so front and rear groups overlap at the beam and oblique
 // quarters (e.g. ±150°) can still bring a turret group to bear.
-const YAW_RANGE_BRIDGE = 2.6;
-
-function buildTurretDefs(cfg) {
-  const defs = [];
-  const yawRange = cfg.hasBridge ? YAW_RANGE_BRIDGE : YAW_RANGE_FULL;
-  const turretMul = cfg.turretMul || 1.0;
-  const barrels = cfg.barrels || 1;
-  const turretSize = (0.8 + cfg.width * 0.10) * turretMul;
-  // Housing width widens with barrel count; spacing just clears it so adjacent
-  // turrets in a group sit tightly packed (was width*0.85, far too loose now
-  // that turrets are smaller).
-  const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
-  const spacing = Math.max(1.2, housingWidth * 1.4);
-
-  let frontCenter = cfg.length * 0.2;
-  let backCenter = -cfg.length * 0.2;
-
-  if (cfg.hasBridge) {
-    // Bridge stays centered; turrets pack against its fore/aft edges.
-    const bridgeZ = 0;
-    const bridgeHalf = cfg.length * 0.14;
-    // Tight gap so front turrets hug the bridge; rear keeps a bit more room.
-    const frontGap = housingWidth * 0.35;
-    const backGap = housingWidth * 0.55;
-
-    if (cfg.frontTurrets > 0) {
-      // Front turrets sit ahead of the bridge, pushed clear of its near edge.
-      const frontEdge = bridgeZ + bridgeHalf;
-      const closestOffset = (cfg.frontTurrets - 1) / 2 * spacing;
-      frontCenter = Math.max(frontCenter, frontEdge + frontGap + closestOffset);
-    }
-    if (cfg.backTurrets > 0) {
-      // Rear turret(s) sit behind the bridge, pushed clear of its far edge.
-      const backEdge = bridgeZ - bridgeHalf;
-      const closestOffset = (cfg.backTurrets - 1) / 2 * spacing;
-      backCenter = Math.min(backCenter, backEdge - backGap - closestOffset);
-    }
-  }
-
-  // Step height so each turret aft of another is raised enough to fire over it
-  // (real warship "superfiring" arrangement). Steps scale with turret size so
-  // the barrel of the rearmost turret clears the housing of the one ahead.
-  const stepH = turretSize * 0.55;
-
-  const nFront = cfg.frontTurrets;
-  for (let i = 0; i < nFront; i++) {
-    const offset = (i - (nFront - 1) / 2) * spacing;
-    // Front group fires forward: the turret nearest the bridge (lowest i, furthest
-    // aft in the group) sits highest to fire over the ones ahead of it.
-    defs.push({ z: frontCenter + offset, x: 0, y: (nFront - 1 - i) * stepH, yawCenter: 0, yawRange, isFront: true });
-  }
-
-  const nBack = cfg.backTurrets;
-  for (let i = 0; i < nBack; i++) {
-    const offset = (i - (nBack - 1) / 2) * spacing;
-    // Rear group fires aft: the turret nearest the bridge (highest i, furthest
-    // forward in the group) sits highest to fire over the ones behind it.
-    defs.push({ z: backCenter + offset, x: 0, y: i * stepH, yawCenter: Math.PI, yawRange, isFront: false });
-  }
-
-  return defs;
-}
-
-function createBowGeometry(width, height, length) {
-  const hw = width / 2;
-  const hh = height / 2;
-  const positions = new Float32Array([
-    -hw, -hh, 0,
-     hw, -hh, 0,
-     hw,  hh, 0,
-    -hw,  hh, 0,
-     0, -hh, length,
-     0,  hh, length,
-  ]);
-  const indices = new Uint16Array([
-    0, 2, 1,  0, 3, 2,
-    3, 0, 4,  3, 4, 5,
-    2, 5, 4,  1, 2, 4,
-    0, 1, 4,
-    3, 5, 2,
-  ]);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setIndex(new THREE.BufferAttribute(indices, 1));
-  geo.computeVertexNormals();
-  return geo;
-}
-
-function createSternGeometry(frontWidth, backWidth, height, length) {
-  const fhw = frontWidth / 2;
-  const bhw = backWidth / 2;
-  const hh = height / 2;
-  const positions = new Float32Array([
-    -fhw, -hh, 0,
-     fhw, -hh, 0,
-     fhw,  hh, 0,
-    -fhw,  hh, 0,
-    -bhw, -hh, -length,
-     bhw, -hh, -length,
-     bhw,  hh, -length,
-    -bhw,  hh, -length,
-  ]);
-  const indices = new Uint16Array([
-    0, 1, 2,  0, 2, 3,
-    4, 6, 5,  4, 7, 6,
-    0, 3, 7,  0, 7, 4,
-    1, 5, 6,  1, 6, 2,
-    3, 2, 6,  3, 6, 7,
-    0, 4, 5,  0, 5, 1,
-  ]);
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setIndex(new THREE.BufferAttribute(indices, 1));
-  geo.computeVertexNormals();
-  return geo;
-}
+// Turret layout (buildTurretDefs) and the whole visual model live in
+// ship_model.js, shared with enemy ships so both sides look identical.
 
 export class Ship {
   constructor(scene, level = 1, shipClass = null) {
@@ -334,394 +224,30 @@ export class Ship {
   }
 
   _buildMesh(cfg) {
-    this.mesh = new THREE.Group();
-    const deckY = cfg.height + 1.0;
-    const hullY = cfg.height / 2 + 1.0;
-    const hullMat = new THREE.MeshPhongMaterial({ color: 0xb0b0b0 });
-    applyHalfLambert(hullMat);
-
-    const hullGeo = new THREE.CylinderGeometry(1, 1, cfg.height, 32);
-    hullGeo.scale(cfg.width * 0.65, 1, cfg.length * 0.65);
-    const hull = new THREE.Mesh(hullGeo, hullMat);
-    hull.position.set(0, hullY, 0);
-    this.mesh.add(hull);
-
-    const deck = new THREE.Mesh(
-      new THREE.BoxGeometry(cfg.width * 0.85, 0.25, cfg.length * 0.85),
-      hullMat
-    );
-    deck.position.set(0, deckY, 0);
-    this.mesh.add(deck);
-
-    if (this.shipClass === 'submarine') {
-      this._buildSubmarineSuperstructure(cfg, deckY, hullMat);
-    } else if (this.shipClass === 'carrier') {
-      this._buildCarrierSuperstructure(cfg, deckY, hullMat);
-    } else if (cfg.hasBridge) {
-      // Long-island superstructure: a low deckhouse runs fore-aft, with a
-      // forward bridge block (carrying the mast) and an aft funnel.
-      //
-      //            |           <- mast (tall, thin, forward)
-      //            ▢           <- forward bridge block (taller)
-      //   ▢  ▢  ▢  ▢  ▢  ▢    <- long low deckhouse island
-      //                  ▢     <- aft funnel block (shorter, wider)
-      //
-      const isAbx = (cfg.barrels || 1) >= 3;
-      const bridgeOffsetZ = 0;
-      const bw = cfg.width * (isAbx ? 0.5 : 0.45);
-      // Bridge island height: raised to 140% of the original freeboard-derived
-      // height so the superstructure towers over the lowered hull.
-      const bh = cfg.height * 0.98;
-      // Lengthened island: spans a larger share of the deck.
-      const bl = cfg.length * 0.26;
-
-      // Long low deckhouse (the ▢▢▢▢▢ base).
-      const deckhouseH = bh * 0.5;
-      const deckhouse = new THREE.Mesh(
-        new THREE.BoxGeometry(bw * 0.85, deckhouseH, bl),
-        hullMat
-      );
-      deckhouse.position.set(0, deckY + deckhouseH / 2 + 0.1, bridgeOffsetZ);
-      this.mesh.add(deckhouse);
-
-      // Window strip wrapping the deckhouse.
-      const windowMat = new THREE.MeshPhongMaterial({ color: 0xaaddff });
-      applyHalfLambert(windowMat);
-      const windows = new THREE.Mesh(
-        new THREE.BoxGeometry(bw * 0.88, deckhouseH * 0.35, bl + 0.1),
-        windowMat
-      );
-      windows.position.y = deckhouseH * 0.1;
-      deckhouse.add(windows);
-
-      // Forward bridge block — taller, sits at the front of the island.
-      const fwdBlockW = bw * 0.7;
-      const fwdBlockH = bh * 0.8;
-      const fwdBlockL = bl * 0.32;
-      const fwdBlock = new THREE.Mesh(
-        new THREE.BoxGeometry(fwdBlockW, fwdBlockH, fwdBlockL),
-        hullMat
-      );
-      fwdBlock.position.set(0, deckhouseH / 2 + fwdBlockH / 2, bl * 0.30);
-      deckhouse.add(fwdBlock);
-
-      const fwdWindows = new THREE.Mesh(
-        new THREE.BoxGeometry(fwdBlockW * 0.85, fwdBlockH * 0.25, fwdBlockL + 0.1),
-        windowMat
-      );
-      fwdWindows.position.y = fwdBlockH * 0.15;
-      fwdBlock.add(fwdWindows);
-
-      // Aft funnel block — shorter and squatter, sits at the rear of the island.
-      const funnelW = bw * 0.5;
-      const funnelH = bh * 0.6;
-      const funnelL = bl * 0.26;
-      const funnel = new THREE.Mesh(
-        new THREE.BoxGeometry(funnelW, funnelH, funnelL),
-        hullMat
-      );
-      funnel.position.set(0, deckhouseH / 2 + funnelH / 2, -bl * 0.32);
-      deckhouse.add(funnel);
-
-      // Funnel top (dark rim).
-      const funnelTopMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-      applyHalfLambert(funnelTopMat);
-      const funnelTop = new THREE.Mesh(
-        new THREE.BoxGeometry(funnelW * 0.9, funnelH * 0.12, funnelL * 0.9),
-        funnelTopMat
-      );
-      funnelTop.position.y = funnelH / 2 - funnelH * 0.06;
-      funnel.add(funnelTop);
-
-      // Tripod-ish mast on the forward bridge block. Taller on capital ships.
-      const mastH = bh * (isAbx ? 1.2 : 0.9);
-      const mast = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.1, 0.18, mastH, 6),
-        hullMat
-      );
-      mast.position.set(0, fwdBlockH / 2 + mastH / 2, -fwdBlockL * 0.1);
-      fwdBlock.add(mast);
-
-      // Crossarm near the top of the mast.
-      const crossarm = new THREE.Mesh(
-        new THREE.BoxGeometry(fwdBlockW * 0.5, 0.12, 0.12),
-        hullMat
-      );
-      crossarm.position.set(0, mastH * 0.35, 0);
-      mast.add(crossarm);
-
-      this.scopedCameraHeight = deckY + 0.1 + deckhouseH + fwdBlockH + mastH + 1.5;
-    } else {
-      this.scopedCameraHeight = deckY + 3;
-    }
-    this.hasBridge = cfg.hasBridge;
-
-    const barrels = cfg.barrels || 1;
-    const turretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
-    this.turretSize = turretSize; // exposed for hitbox height computation
-    const barrelLen = turretSize * 1.5;
-    // Multi-barrel spacing: barrels fan out sideways across the turret face.
-    const barrelGap = turretSize * 0.35;
-    const turretDefs = buildTurretDefs(cfg);
-    this.turrets = [];
-
-    const turretMat = new THREE.MeshPhongMaterial({ color: 0x808080 });
-    applyHalfLambert(turretMat);
-    const barrelMat = new THREE.MeshPhongMaterial({ color: 0x505050 });
-    applyHalfLambert(barrelMat);
-
-    for (const def of turretDefs) {
-      const turretGroup = new THREE.Group();
-
-      const base = new THREE.Mesh(
-        new THREE.CylinderGeometry(turretSize * 0.5, turretSize * 0.6, turretSize * 0.3, 8),
-        turretMat
-      );
-      turretGroup.add(base);
-
-      // Widen the turret housing so multiple barrels sit naturally side by side.
-      const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(housingWidth, turretSize, turretSize),
-        turretMat
-      );
-      body.position.y = turretSize * 0.4;
-      turretGroup.add(body);
-
-      const barrelPivot = new THREE.Group();
-      barrelPivot.position.set(0, turretSize * 0.4, turretSize * 0.5);
-      turretGroup.add(barrelPivot);
-
-      // One barrel mesh per barrel, offset sideways on x.
-      const barrelMeshes = [];
-      for (let b = 0; b < barrels; b++) {
-        const barrel = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.15, 0.15, barrelLen, 8),
-          barrelMat
-        );
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.set((b - (barrels - 1) / 2) * barrelGap, 0, barrelLen / 2);
-        barrelPivot.add(barrel);
-        barrelMeshes.push(barrel);
-      }
-
-      turretGroup.position.set(def.x, deckY + 0.15 + (def.y || 0), def.z);
-      this.mesh.add(turretGroup);
-
-      // Cylindrical pedestal under raised (superfiring) turrets, filling the
-      // gap from the deck up to the turret base.
-      if ((def.y || 0) > 0.01) {
-        const housingWidth = turretSize * (1 + (barrels - 1) * 0.45);
-        const pedestalH = (def.y || 0) + 0.15;
-        const pedestal = new THREE.Mesh(
-          new THREE.CylinderGeometry(housingWidth * 0.42, housingWidth * 0.5, pedestalH, 12),
-          turretMat
-        );
-        pedestal.position.set(def.x, deckY + pedestalH / 2, def.z);
-        this.mesh.add(pedestal);
-      }
-
-      this.turrets.push({
-        group: turretGroup,
-        body,
-        barrelPivot,
-        barrel: barrelMeshes[0],
-        barrels: barrelMeshes,
-        barrelLen,
-        barrelGap,
-        currentYaw: def.yawCenter,
-        currentPitch: 0,
-        cooldown: 0,
-        yawCenter: def.yawCenter,
-        yawRange: def.yawRange,
-        isFront: def.isFront,
-      });
-    }
-
-    // AA mounts: small caliber gun clusters scattered along the deck sides,
-    // purely cosmetic (AA fire is authoritative/simulated). Count comes from the
-    // class AA fit; submarines have none. They read as clutter on the deck so a
-    // cruiser/battleship visibly looks like it bristles with AA.
-    this._buildAaMounts(cfg, deckY, turretMat, barrelMat);
-  }
-
-  // Scatter small AA gun tubs along both deck rails. Each is a low base + a
-  // tiny twin-barrel cluster — far smaller than main-battery turrets. Kept off
-  // the centerline so they don't clash with the bridge island / main turrets.
-  _buildAaMounts(cfg, deckY, turretMat, barrelMat) {
-    const aa = getClassAa(this.shipClass);
-    if (!aa || aa.mounts <= 0) return;
-    // AA mount size tracks the ship's main-turret size (smaller for DDs).
-    const mainTurretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
-    const mountSize = Math.max(0.35, mainTurretSize * 0.32);
-    const halfL = cfg.length / 2;
-    const railX = cfg.width * 0.34;     // just inboard of the deck edge
-    const barrelLen = mountSize * 1.1;
-    for (let i = 0; i < aa.mounts; i++) {
-      // Alternate port/starboard, spread fore-aft along the deck.
-      const side = (i % 2 === 0) ? 1 : -1;
-      const t = aa.mounts === 1 ? 0.5 : i / (aa.mounts - 1);
-      const z = halfL * 0.7 - t * halfL * 1.2;   // fore -> aft
-      const mount = new THREE.Group();
-      const base = new THREE.Mesh(
-        new THREE.CylinderGeometry(mountSize * 0.5, mountSize * 0.6, mountSize * 0.3, 6),
-        turretMat,
-      );
-      mount.add(base);
-      const housing = new THREE.Mesh(
-        new THREE.BoxGeometry(mountSize, mountSize * 0.8, mountSize),
-        turretMat,
-      );
-      housing.position.y = mountSize * 0.4;
-      mount.add(housing);
-      // Twin stub barrels pointing up/out (AA guns elevate).
-      for (let b = 0; b < 2; b++) {
-        const barrel = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.06, 0.06, barrelLen, 6),
-          barrelMat,
-        );
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.set((b - 0.5) * mountSize * 0.35, mountSize * 0.4, barrelLen / 2);
-        barrel.rotation.x = Math.PI / 2 - 0.6;   // elevated ~35°
-        housing.add(barrel);
-      }
-      mount.position.set(side * railX, deckY + 0.15, z);
-      this.mesh.add(mount);
-    }
-  }
-
-  // Submarine silhouette: a low slick hull already built by _buildMesh; this
-  // adds a small conning tower, a periscope mast and a tiny aft flagpole so it
-  // reads as a submarine at a glance. The deck gun is added by the shared
-  // turret loop afterwards. scopedCameraHeight sits at the periscope top.
-  _buildSubmarineSuperstructure(cfg, deckY, hullMat) {
-    const towerW = cfg.width * 0.45;
-    const towerL = cfg.length * 0.12;
-    const towerH = cfg.height * 1.1;
-
-    const tower = new THREE.Mesh(
-      new THREE.BoxGeometry(towerW, towerH, towerL),
-      hullMat
-    );
-    tower.position.set(0, deckY + towerH / 2 + 0.1, 0);
-    this.mesh.add(tower);
-
-    // Conning-tower window strip (submarines have a small bridge viewport).
-    const windowMat = new THREE.MeshPhongMaterial({ color: 0xaaddff });
-    applyHalfLambert(windowMat);
-    const towerWindows = new THREE.Mesh(
-      new THREE.BoxGeometry(towerW * 0.9, towerH * 0.3, towerL + 0.05),
-      windowMat
-    );
-    towerWindows.position.y = towerH * 0.15;
-    tower.add(towerWindows);
-
-    // Periscope mast — a thin tall cylinder atop the tower.
-    const periscopeH = cfg.height * 2.4;
-    const periscope = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.08, periscopeH, 6),
-      hullMat
-    );
-    periscope.position.set(0, towerH / 2 + periscopeH / 2, 0);
-    tower.add(periscope);
-
-    // Aft rudder/fin for profile recognition.
-    const finH = cfg.height * 0.8;
-    const fin = new THREE.Mesh(
-      new THREE.BoxGeometry(cfg.width * 0.1, finH, cfg.length * 0.08),
-      hullMat
-    );
-    fin.position.set(0, deckY + finH / 2, -cfg.length * 0.4);
-    this.mesh.add(fin);
-
-    this.scopedCameraHeight = deckY + towerH + periscopeH + 1.0;
-    this.hasBridge = false;
-  }
-
-  // Carrier silhouette: a long flat flight deck over the hull, with an
-  // off-center starboard island (bridge + funnel + mast) — the classic
-  // carrier profile. self-defense guns are placed by the shared turret loop.
-  _buildCarrierSuperstructure(cfg, deckY, hullMat) {
-    // Flight deck: wide and long, slightly raised above the hull deck.
-    const fdW = cfg.width * 0.98;
-    const fdL = cfg.length * 0.95;
-    const fdH = 0.4;
-    const flightDeck = new THREE.Mesh(
-      new THREE.BoxGeometry(fdW, fdH, fdL),
-      hullMat
-    );
-    flightDeck.position.set(0, deckY + fdH / 2 + 0.1, 0);
-    this.mesh.add(flightDeck);
-
-    // Deck centerline stripe — subtle, just to read as a flight deck.
-    const stripeMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-    applyHalfLambert(stripeMat);
-    const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(fdW * 0.04, 0.05, fdL * 0.9),
-      stripeMat
-    );
-    stripe.position.set(0, fdH / 2 + 0.03, 0);
-    flightDeck.add(stripe);
-
-    // Starboard island: bridge block + funnel + mast, offset to +x.
-    const islandX = fdW * 0.32;
-    const islandW = cfg.width * 0.22;
-    const islandL = cfg.length * 0.18;
-    const islandH = cfg.height * 1.6;
-
-    const island = new THREE.Mesh(
-      new THREE.BoxGeometry(islandW, islandH, islandL),
-      hullMat
-    );
-    island.position.set(islandX, deckY + fdH + islandH / 2 + 0.1, -cfg.length * 0.05);
-    this.mesh.add(island);
-
-    // Island window strip.
-    const windowMat = new THREE.MeshPhongMaterial({ color: 0xaaddff });
-    applyHalfLambert(windowMat);
-    const islandWindows = new THREE.Mesh(
-      new THREE.BoxGeometry(islandW * 0.92, islandH * 0.3, islandL + 0.1),
-      windowMat
-    );
-    islandWindows.position.y = islandH * 0.1;
-    island.add(islandWindows);
-
-    // Funnel block aft of the bridge, slightly shorter.
-    const funnelH = islandH * 0.7;
-    const funnel = new THREE.Mesh(
-      new THREE.BoxGeometry(islandW * 0.6, funnelH, islandL * 0.3),
-      hullMat
-    );
-    funnel.position.set(0, islandH / 2 - funnelH / 2, -islandL * 0.4);
-    island.add(funnel);
-
-    const funnelTopMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-    applyHalfLambert(funnelTopMat);
-    const funnelTop = new THREE.Mesh(
-      new THREE.BoxGeometry(islandW * 0.55, funnelH * 0.12, islandL * 0.32),
-      funnelTopMat
-    );
-    funnelTop.position.y = funnelH / 2 - funnelH * 0.06;
-    funnel.add(funnelTop);
-
-    // Mast atop the bridge block.
-    const mastH = islandH * 0.9;
-    const mast = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.2, mastH, 6),
-      hullMat
-    );
-    mast.position.set(0, islandH / 2 + mastH / 2, islandL * 0.3);
-    island.add(mast);
-
-    const crossarm = new THREE.Mesh(
-      new THREE.BoxGeometry(islandW * 0.5, 0.12, 0.12),
-      hullMat
-    );
-    crossarm.position.set(0, mastH * 0.35, 0);
-    mast.add(crossarm);
-
-    this.scopedCameraHeight = deckY + fdH + islandH + mastH + 1.5;
-    this.hasBridge = true;
+    // 全部视觉建模（放样船体/贴图/上层建筑/炮塔/防空炮座）在 ship_model.js
+    // 中程序化生成，并与敌方舰船共用同一套代码 —— 双方涂装一致，阵营只靠
+    // 血条颜色与文字标记区分。
+    const model = buildShipModel(cfg, this.shipClass);
+    this.mesh = model.group;
+    this.hasBridge = model.hasBridge;
+    this.turretSize = model.turretSize; // exposed for hitbox height computation
+    this.deckY = model.deckY;           // 实际甲板高度（干舷按船种压缩过）
+    this.scopedCameraHeight = model.scopedCameraHeight;
+    this.turrets = model.turrets.map(t => ({
+      group: t.group,
+      body: t.body,
+      barrelPivot: t.barrelPivot,
+      barrel: t.barrels[0],
+      barrels: t.barrels,
+      barrelLen: t.barrelLen,
+      barrelGap: t.barrelGap,
+      currentYaw: t.yawCenter,
+      currentPitch: 0,
+      cooldown: 0,
+      yawCenter: t.yawCenter,
+      yawRange: t.yawRange,
+      isFront: t.isFront,
+    }));
   }
 
   _initWake() {
