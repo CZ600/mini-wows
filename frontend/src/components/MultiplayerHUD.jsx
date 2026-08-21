@@ -1,5 +1,6 @@
 import AirGroupSlots from './AirGroupSlots.jsx';
 import CarrierStatus from './CarrierStatus.jsx';
+import DiveSlot from './DiveSlot.jsx';
 
 const GEAR_ROWS = [
   { name: '前进4', gear: 5 },
@@ -113,6 +114,10 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
 
   const hasTorpedoes = torpedoTubes.length > 0 && availableTorpedoTiers.length > 0;
   const sortedTiers = [...availableTorpedoTiers].sort((a, b) => a - b);
+
+  const aswMaxCd = data.aswMaxCooldown || 0;
+  const aswCd = Math.max(0, Math.min(aswMaxCd, data.aswCooldown || 0));
+  const aswFillPct = aswMaxCd > 0 ? ((aswMaxCd - aswCd) / aswMaxCd) * 100 : 100;
 
   const torpedoMaxRemaining = hasTorpedoes
     ? Math.max(0, Math.min(torpedoMaxCooldown, Math.max(...torpedoTubes.map(t => t.cooldown))))
@@ -235,6 +240,13 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
                   );
                 })}
               </>
+            ) : weaponMode === 'asw' ? (
+              <div className="reload-bar">
+                <span className="reload-bar-label">深弹</span>
+                <div className="reload-bar-track">
+                  <div className={`reload-bar-fill ${aswCd <= 0 ? 'ready' : ''}`} style={{ width: aswFillPct + '%' }} />
+                </div>
+              </div>
             ) : (
               <div className="reload-bar">
                 <span className="reload-bar-label">装填</span>
@@ -261,6 +273,22 @@ export default function MultiplayerHUD({ data, events, onOpenSettings, onExit, o
                 <div className="weapon-slot-desc">{tierLabels[tier] || ''}{torpedoTubes.length}管</div>
               </div>
             ))}
+            {/* Submarine dive toggle indicator (B key). */}
+            <DiveSlot dive={data.dive} />
+            {data.hasSecondary && (
+              <div className={`weapon-slot ${weaponMode === 'secondary' ? 'selected' : ''}`}>
+                <span className="weapon-slot-key">5</span>
+                <div className="weapon-slot-name">副炮</div>
+                <div className="weapon-slot-desc">{(data.secondaryTurrets || []).length} 座</div>
+              </div>
+            )}
+            {data.hasAsw && (
+              <div className={`weapon-slot asw ${weaponMode === 'asw' ? 'selected' : ''}`}>
+                <span className="weapon-slot-key">6</span>
+                <div className="weapon-slot-name">深水炸弹</div>
+                <div className="weapon-slot-desc">{data.aswAir ? '空投反潜' : '近程反潜'}</div>
+              </div>
+            )}
             {/* Carrier air-group launch slots (鱼雷机 / 轰炸机) */}
             <AirGroupSlots squadron={data.squadron} />
             {/* Skill slots */}

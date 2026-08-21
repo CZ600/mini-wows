@@ -32,6 +32,10 @@ export class Squadron {
     this.altitude = CARRIER.aircraftAltitude;   // tracked height, clamped to [min,max]
     this.pitch = 0;                             // nose pitch (rad): +down(dive)/-up(climb)
     this.alive = true;
+    // Set when AA fire (not a crash) destroyed the squadron — the solo engine
+    // auto re-launches shot-down squadrons from the carrier on a timer
+    // (CARRIER.squadronRespawnDelay); crashed ones still need a manual T.
+    this.shotDown = false;
 
     // Survivability: HP pool depleted by AA fire; a terrain/water crash is
     // instant death (see update()).
@@ -56,6 +60,9 @@ export class Squadron {
     this._rearmAccum = 0;
     this._autoTarget = null;
     this._autoPhase = 'idle';
+    // Loiter direction around the carrier during the re-arm phase (the two
+    // air groups orbit opposite ways so they don't stack on one circle).
+    this._orbitDir = this.type === 'bomber' ? -1 : 1;
     // Per-type drop request surfaced to the engine (set during auto-pilot).
     this.autoDrop = false;
 
@@ -141,7 +148,11 @@ export class Squadron {
   // drop reticle (ring + crosshair) placed at the PREDICTED ballistic impact
   // point (not directly below the plane). Only the squadron's own-type guide is
   // shown. `show` lets the engine hide a non-active squadron's guide.
+  // PLAYER-OWNED squadrons only: enemy/remote squadrons never show aim guides —
+  // nothing drives updateGuides for them, so their reticle would sit stuck at
+  // the world origin (right on the player's spawn point) instead.
   _buildGuides() {
+    if (this.owner !== 'player') return;
     if (this.type === 'torpedo') {
       const torpMat = new THREE.LineBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.85 });
       const torpGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1)]);
@@ -189,6 +200,8 @@ export class Squadron {
   // Refresh the aim guide. `show` hides it (e.g. non-active squadron). Uses a
   // wall-clock so the pulse animates even while the plane sits still.
   updateGuides(show) {
+    // Guides were never built (non-player-owned squadron) — nothing to drive.
+    if (!this._torpGuide && !this._bombReticle) return;
     if (!this.alive || !show) {
       if (this._torpGuide) this._torpGuide.visible = false;
       if (this._bombReticle) this._bombReticle.visible = false;
@@ -218,8 +231,11 @@ export class Squadron {
   // Numerically integrate a bomb's trajectory (same physics as projectile.js:
   // gravity + multiplicative air drag) from the squadron's current position and
   // forward ground speed, until it hits the water (y<=0). Returns the impact
-  // {x,z}. Used to position the drop reticle so it shows where bombs WILL land.
-  _predictBombImpact() {
+  // {x, z} plus horizTime — the drag-decayed flight time that converts an
+  // initial horizontal velocity into its landing offset (dividing a desired
+  // offset by it yields the velocity adjustment that realises it). Used by the
+  // drop reticle (where bombs WILL land) and by dropBomb (aiming the scatter).
+  _simulateBomb() {
     const drag = CARRIER.bombDrag;
     const hStep = 0.02;
     let x = this.position.x;
@@ -229,19 +245,27 @@ export class Squadron {
     // downward kick (see dropBomb for the exact composition).
     const fwd = this.speed;
     const vy0 = CARRIER.bombDropVy;
-    const total = Math.hypot(fwd, vy0);
-    let vx = total > 0 ? (Math.sin(this.heading) * fwd) : 0;
-    let vz = total > 0 ? (Math.cos(this.heading) * fwd) : 0;
+    let vx = Math.sin(this.heading) * fwd;
+    let vz = Math.cos(this.heading) * fwd;
     let vy = -vy0;
+    let p = 1.0;          // drag decay product for horizontal velocity
+    let horizTime = 0.0;
     for (let i = 0; i < 600 && y > 0; i++) {
       const d = 1.0 - drag * hStep;
       vx *= d; vy *= d; vz *= d;
+      p *= d;
       vy -= GRAVITY * hStep;
       x += vx * hStep;
       y += vy * hStep;
       z += vz * hStep;
+      horizTime += p * hStep;
     }
-    return { x, z };
+    return { x, z, horizTime };
+  }
+
+  _predictBombImpact() {
+    const s = this._simulateBomb();
+    return { x: s.x, z: s.z };
   }
 
   // Drive the lead aircraft. keys: {w,a,s,d}. dt seconds. ctx is optional
@@ -344,6 +368,7 @@ export class Squadron {
     this.hp -= amount;
     if (this.hp <= 0) {
       this.hp = 0;
+      this.shotDown = true;   // AA kill (vs. a crash) → eligible for auto respawn
       this._crash();
       return true;
     }
@@ -386,12 +411,21 @@ export class Squadron {
     }
 
     let goal = null;
-    if (!this.ammo || !this._autoTarget) {
-      this._autoPhase = carrier && this._dist2(carrier) <= CARRIER.rearmRange * CARRIER.rearmRange
-        ? 'rearm' : 'return';
+    // Once a squadron heads home it commits to the FULL re-arm: it keeps
+    // circling the carrier until the pool is topped off. The old exit (any
+    // ammo + any target) let it sortie again after a single round came back.
+    const homing = !this.ammo || !this._autoTarget;
+    const topping = this._autoPhase === 'return' || this._autoPhase === 'rearm';
+    if (homing || (topping && this.ammo < this.maxAmmo)) {
       if (!carrier) { this._autoPhase = 'idle'; return { w: true, a: false, s: false, d: false }; }
-      goal = carrier;
-    } else {
+      const inRearm = this._dist2(carrier) <= CARRIER.rearmRange * CARRIER.rearmRange;
+      this._autoPhase = inRearm ? 'rearm' : 'return';
+      // Inside the ring: loiter on a circle instead of flying through the
+      // carrier and out the far side — the orbit stays within rearmRange so
+      // the pool refills at full rate the whole time.
+      return inRearm ? this._orbitKeys(carrier) : this._steerTo(carrier);
+    }
+    {
       const ep = this._autoTarget.mesh ? this._autoTarget.mesh.position : this._autoTarget.position;
       const d2 = this._dist2(ep);
       this._autoPhase = d2 <= CARRIER.autoAttackRange * CARRIER.autoAttackRange ? 'attack' : 'engage';
@@ -405,6 +439,21 @@ export class Squadron {
     }
 
     return this._steerTo(goal);
+  }
+
+  // Loiter keys for the re-arm phase: hold a circular orbit around the carrier
+  // at ~55% of the re-arm radius. The tangent heading keeps the plane flying
+  // around the ring; the radial error term steers back onto the hold radius.
+  _orbitKeys(center) {
+    const radius = CARRIER.rearmRange * 0.55;
+    const dx = center.x - this.position.x;
+    const dz = center.z - this.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz) || 1;
+    const tangent = Math.atan2(dx, dz) + (Math.PI / 2) * this._orbitDir;
+    const corr = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, ((dist - radius) / radius) * 1.2));
+    const desired = tangent - this._orbitDir * corr;
+    const err = this._headingErr(desired);
+    return { w: true, a: err > 0.02, d: err < -0.02, s: false };
   }
 
   _steerTo(goal) {
@@ -453,27 +502,36 @@ export class Squadron {
 
   // Bomb salvo (bomber squadron only). Bombs inherit the plane's forward ground
   // speed plus a small downward kick, so they fly a real ballistic arc (forward
-  // throw + gravity) instead of dropping straight down. Each descriptor carries
-  // an absolute initial velocity so the engine's projectile manager can launch
-  // it without recomputing.
+  // throw + gravity) instead of dropping straight down. The salvo is SCATTERED,
+  // not a line abreast: each bomb is aimed at a random point inside a uniform
+  // disc of CARRIER.bombScatterRadius centred on the predicted impact (the drop
+  // reticle), realised as a small initial-velocity adjustment — the bombs fan
+  // out from the release point and land spread across the circle. A salvo is
+  // many weak bombs (salvo total damage unchanged) so a single drop connects
+  // far more often. Each descriptor carries an absolute initial velocity so
+  // the engine's projectile manager can launch it without recomputing.
   dropBomb() {
     if (!this.alive || this.type !== 'bomber') return [];
     if (this.cd > 0 || this.ammo <= 0) return [];
     const cfg = getAirGroupConfig(this.level).bomber;
     const count = Math.min(cfg.salvo, this.ammo);
-    const drops = [];
     const fwd = this.speed;                 // inherit ground speed (m/s)
     const vy0 = CARRIER.bombDropVy;         // initial downward kick (m/s)
+    const { horizTime } = this._simulateBomb();
+    const vx = Math.sin(this.heading) * fwd;
+    const vz = Math.cos(this.heading) * fwd;
+    const drops = [];
     for (let i = 0; i < count; i++) {
-      const off = count > 1 ? (i - (count - 1) / 2) * 3 : 0;
-      const lx = Math.cos(this.heading) * off;
-      const lz = -Math.sin(this.heading) * off;
-      // Absolute initial velocity vector (m/s): forward throw along heading.
-      const vx = Math.sin(this.heading) * fwd;
-      const vz = Math.cos(this.heading) * fwd;
+      // Uniform random point in the aiming disc -> velocity adjustment.
+      const ang = Math.random() * Math.PI * 2;
+      const rad = CARRIER.bombScatterRadius * Math.sqrt(Math.random());
       drops.push({
-        origin: new THREE.Vector3(this.position.x + lx, CARRIER.aircraftAltitude, this.position.z + lz),
-        velocity: new THREE.Vector3(vx, -vy0, vz),
+        origin: new THREE.Vector3(this.position.x, this.position.y, this.position.z),
+        velocity: new THREE.Vector3(
+          vx + (Math.cos(ang) * rad) / horizTime,
+          -vy0,
+          vz + (Math.sin(ang) * rad) / horizTime,
+        ),
         damage: cfg.dmg,
         weapon: CARRIER.bombWeaponType,
       });
@@ -489,10 +547,23 @@ export class Squadron {
     this.cd = 0;
     this.hp = this.maxHp;
     this.alive = true;
+    this.shotDown = false;
     this.altitude = CARRIER.aircraftAltitude;
     this.pitch = 0;
     this.position.y = this.altitude;
     this.mesh.visible = true;
+  }
+
+  // Re-launch THIS squadron from the carrier: reposition onto the carrier's
+  // deck line, revive + re-arm. Used by the solo engine's auto-respawn after
+  // the squadron was shot down by enemy AA (and by nothing else — a manual
+  // T goes through CarrierAirWing.relaunchAt for both squadrons).
+  relaunchAt(x, z, heading) {
+    this.position.set(x, CARRIER.aircraftAltitude, z);
+    this.heading = heading;
+    this.mesh.position.copy(this.position);
+    this.mesh.rotation.y = heading;
+    this.refill();
   }
 
   // Re-apply the level's ammo caps + stats (after a carrier level-up).

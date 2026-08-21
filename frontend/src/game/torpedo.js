@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { applyHalfLambert } from './scene.js';
-import { HOMING_TORPEDO } from './config.js';
 
 export const TORPEDO_TIERS = {
   1: { speed: 22.2, range: 400, baseCooldown: 8 },
@@ -48,7 +47,9 @@ export class TorpedoManager {
     this._aimFan = null;
   }
 
-  fire(origin, heading, tier, level, tubeCount, spread, owner, homing = false) {
+  // damageMul scales the tier-formula hit damage — used by AIRCRAFT torpedo
+  // drops (CARRIER.airTorpedoDamageMul); ship-launched torpedoes leave it at 1.
+  fire(origin, heading, tier, level, tubeCount, spread, owner, damageMul = 1.0) {
     const stats = getTorpedoStats(tier, level);
     if (!stats) return;
 
@@ -106,7 +107,7 @@ export class TorpedoManager {
         distanceTraveled: 0,
         owner,
         tier,
-        homing,
+        damageMul,
         trailData: [],
       });
     }
@@ -137,39 +138,6 @@ export class TorpedoManager {
   update(dt, ship, enemies) {
     for (let i = this.torpedoes.length - 1; i >= 0; i--) {
       const t = this.torpedoes[i];
-
-      // Homing torpedoes (submarine tier 2/3) steer toward the nearest spotted
-      // enemy within acquire range. Turn rate is capped so a close target can
-      // still juke it. Only player-fired homing torpedoes track here; enemy
-      // homing is driven server-side in multiplayer.
-      if (t.homing && t.owner === 'player' && enemies && enemies.length > 0) {
-        const tp = t.mesh.position;
-        let nearest = null;
-        let nearestD2 = HOMING_TORPEDO.acquireRange * HOMING_TORPEDO.acquireRange;
-        for (const enemy of enemies) {
-          if (!enemy.alive) continue;
-          const ep = enemy.mesh.position;
-          const dx = ep.x - tp.x;
-          const dz = ep.z - tp.z;
-          const d2 = dx * dx + dz * dz;
-          if (d2 < nearestD2) {
-            nearestD2 = d2;
-            nearest = enemy;
-          }
-        }
-        if (nearest) {
-          const ep = nearest.mesh.position;
-          const desired = Math.atan2(ep.x - tp.x, ep.z - tp.z);
-          let diff = desired - t.heading;
-          while (diff > Math.PI) diff -= 2 * Math.PI;
-          while (diff < -Math.PI) diff += 2 * Math.PI;
-          const maxStep = HOMING_TORPEDO.turnRate * dt;
-          const step = Math.max(-maxStep, Math.min(maxStep, diff));
-          t.heading += step;
-          t.velocity.set(Math.sin(t.heading) * t.speed, 0, Math.cos(t.heading) * t.speed);
-          t.mesh.rotation.y = t.heading;
-        }
-      }
 
       t.distanceTraveled += t.speed * dt;
       t.mesh.position.addScaledVector(t.velocity, dt);
@@ -206,8 +174,9 @@ export class TorpedoManager {
           }
 
           if (hitEnemy) {
-            const dmgMul = t.homing ? HOMING_TORPEDO.damageMul : 1.0;
-            enemy.takeDamage((50 + t.tier * 20) * 2 * dmgMul);
+            // Aircraft torpedoes carry a damage multiplier (airTorpedoDamageMul);
+            // ship-launched ones use the bare tier formula.
+            enemy.takeDamage((50 + t.tier * 20) * 2 * (t.damageMul || 1.0));
             if (this.audio) this.audio.playTorpedoHit(this._distToPlayer(t.mesh.position, ship));
             hit = true;
             break;

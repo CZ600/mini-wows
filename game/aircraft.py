@@ -11,7 +11,8 @@ Two air groups share the squadron: torpedo bombers (鱼雷机) and dive bombers
 AIR_GROUP in game/config.py. Mirrors frontend/src/game/aircraft.js Squadron.
 """
 import math
-from game.config import CARRIER, get_air_group_config
+import random
+from game.config import CARRIER, GRAVITY, get_air_group_config
 
 
 class ServerSquadron:
@@ -21,7 +22,7 @@ class ServerSquadron:
         # per-group: {ammo, max_ammo, cd, regen_accum}
         "torpedo", "bomber",
         # auto-pilot state
-        "auto_pilot", "_auto_target", "_auto_phase", "_rearm_accum",
+        "auto_pilot", "_auto_target", "_auto_phase", "_rearm_accum", "_orbit_dir",
         # Survivability. Depleted by AA flak; at 0 hp the squadron is destroyed.
         # Mirrors frontend aircraft.js Squadron.hp/maxHp.
         "hp", "max_hp",
@@ -45,6 +46,8 @@ class ServerSquadron:
         self._auto_target = None
         self._auto_phase = "idle"
         self._rearm_accum = 0.0
+        # Loiter direction around the carrier during the re-arm phase.
+        self._orbit_dir = 1.0
 
     def take_damage(self, amount):
         """Apply AA flak damage. Returns True if this hit destroyed the squadron.
@@ -129,7 +132,11 @@ class ServerSquadron:
     def _ai_keys(self, dt, carrier_pos, enemies):
         """Auto-pilot decision tree. Returns (keys, auto_drop).
 
-        - Out of ammo or no target -> return to carrier & re-arm.
+        - Out of ammo or no target -> return to carrier & re-arm. Once home,
+          the squadron commits to the FULL re-arm: it keeps circling the
+          carrier until BOTH pools are topped off (the old exit let it
+          sortie again after a single round came back). Mirrors frontend
+          aircraft.js Squadron._autoPilotKeys.
         - Has ammo + target -> engage: turn to intercept, drop when in range.
         """
         enemies = enemies or []
@@ -159,15 +166,23 @@ class ServerSquadron:
 
         auto_drop = None
         goal = None
-        if not has_ammo or self._auto_target is None:
-            # Return to carrier to re-arm.
-            if carrier_pos:
-                d2 = (self.pos_x - carrier_pos["x"]) ** 2 + (self.pos_z - carrier_pos["z"]) ** 2
-                self._auto_phase = "rearm" if d2 <= CARRIER["rearm_range"] ** 2 else "return"
-                goal = carrier_pos
-            else:
+        full = (self.torpedo["ammo"] >= self.torpedo["max_ammo"]
+                and self.bomber["ammo"] >= self.bomber["max_ammo"])
+        homing = (not has_ammo) or self._auto_target is None
+        topping = self._auto_phase in ("return", "rearm")
+        if homing or (topping and not full):
+            # Head home (and stay) until fully re-armed.
+            if not carrier_pos:
                 self._auto_phase = "idle"
                 return {"w": True, "a": False, "s": False, "d": False}, None
+            d2 = (self.pos_x - carrier_pos["x"]) ** 2 + (self.pos_z - carrier_pos["z"]) ** 2
+            if d2 <= CARRIER["rearm_range"] ** 2:
+                self._auto_phase = "rearm"
+                # Loiter on a circle inside the re-arm ring — mirrors the
+                # frontend's rearm orbit, so refill runs at full rate.
+                return self._orbit_keys(carrier_pos), None
+            self._auto_phase = "return"
+            return self._steer_to(carrier_pos), None
         else:
             e = self._auto_target
             ex, ez = e.pos_x, e.pos_z
@@ -189,6 +204,20 @@ class ServerSquadron:
         if not goal:
             return {"w": True, "a": False, "s": False, "d": False}
         desired = math.atan2(goal["x"] - self.pos_x, goal["z"] - self.pos_z)
+        err = self._heading_err(desired)
+        return {"w": True, "a": err > 0.02, "d": err < -0.02, "s": False}
+
+    def _orbit_keys(self, carrier_pos):
+        """Loiter keys for the re-arm phase: hold a circular orbit around the
+        carrier at ~55% of the re-arm radius. Must mirror frontend
+        aircraft.js Squadron._orbitKeys."""
+        radius = CARRIER["rearm_range"] * 0.55
+        dx = carrier_pos["x"] - self.pos_x
+        dz = carrier_pos["z"] - self.pos_z
+        dist = math.sqrt(dx * dx + dz * dz) or 1.0
+        tangent = math.atan2(dx, dz) + (math.pi / 2) * self._orbit_dir
+        corr = max(-math.pi / 3, min(math.pi / 3, ((dist - radius) / radius) * 1.2))
+        desired = tangent - self._orbit_dir * corr
         err = self._heading_err(desired)
         return {"w": True, "a": err > 0.02, "d": err < -0.02, "s": False}
 
@@ -218,12 +247,50 @@ class ServerSquadron:
         g["cd"] = cfg["cd"]
         return drops
 
+    def _simulate_bomb(self):
+        """Integrate a released bomb's fall (same physics as projectile.py:
+        gravity + multiplicative air drag) from the squadron's current state
+        until it reaches the water. Returns (impact_x, impact_z, horiz_time)
+        where horiz_time converts an initial horizontal velocity into its
+        landing offset (drag-decayed) — dividing a desired offset by it yields
+        the velocity adjustment that realises it. Mirrors frontend
+        Squadron._simulateBomb().
+        """
+        drag = CARRIER["bomb_drag"]
+        h_step = 0.02
+        x, y, z = self.pos_x, self.altitude, self.pos_z
+        vx = math.sin(self.heading) * self.speed
+        vz = math.cos(self.heading) * self.speed
+        vy = -CARRIER["bomb_drop_vy"]
+        p = 1.0            # drag decay product for horizontal velocity
+        horiz_time = 0.0
+        for _ in range(600):
+            if y <= 0:
+                break
+            d = 1.0 - drag * h_step
+            vx *= d
+            vy *= d
+            vz *= d
+            p *= d
+            vy -= GRAVITY * h_step
+            x += vx * h_step
+            y += vy * h_step
+            z += vz * h_step
+            horiz_time += p * h_step
+        return x, z, horiz_time
+
     def drop_bomb(self):
         """Return list of (x, y, z, vx, vy, vz, damage, weapon) for a bomb salvo.
 
         Bombs inherit the plane's forward ground speed plus a small downward
         kick, so they follow a ballistic arc (forward throw + gravity) instead
-        of dropping straight down. Mirrors frontend Squadron.dropBomb().
+        of dropping straight down. The salvo is SCATTERED, not a line abreast:
+        each bomb is aimed at a random point inside a uniform disc of
+        CARRIER["bomb_scatter_radius"] centred on the predicted impact (the
+        client's drop reticle), realised as a small initial-velocity
+        adjustment. A salvo is many weak bombs (salvo total damage unchanged)
+        so a single drop connects far more often. Mirrors frontend
+        Squadron.dropBomb().
         """
         if not self.alive:
             return []
@@ -234,15 +301,20 @@ class ServerSquadron:
         count = min(cfg["salvo"], g["ammo"])
         fwd = self.speed                       # inherit ground speed (m/s)
         vy0 = CARRIER["bomb_drop_vy"]          # initial downward kick (m/s)
+        _, _, horiz_time = self._simulate_bomb()
+        radius = CARRIER["bomb_scatter_radius"]
+        vx = math.sin(self.heading) * fwd
+        vz = math.cos(self.heading) * fwd
         drops = []
-        for i in range(count):
-            off = (i - (count - 1) / 2) * 3 if count > 1 else 0.0
-            lx = math.cos(self.heading) * off
-            lz = -math.sin(self.heading) * off
-            vx = math.sin(self.heading) * fwd
-            vz = math.cos(self.heading) * fwd
-            drops.append((self.pos_x + lx, self.altitude, self.pos_z + lz,
-                          vx, -vy0, vz, cfg["dmg"], CARRIER["bomb_weapon_type"]))
+        for _i in range(count):
+            # Uniform random point in the aiming disc -> velocity adjustment.
+            ang = random.random() * math.pi * 2
+            rad = radius * math.sqrt(random.random())
+            drops.append((self.pos_x, self.altitude, self.pos_z,
+                          vx + (math.cos(ang) * rad) / horiz_time,
+                          -vy0,
+                          vz + (math.sin(ang) * rad) / horiz_time,
+                          cfg["dmg"], CARRIER["bomb_weapon_type"]))
         g["ammo"] -= count
         g["cd"] = cfg["cd"]
         return drops

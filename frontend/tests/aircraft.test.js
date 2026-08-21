@@ -34,11 +34,16 @@ describe('getAirGroupConfig', () => {
     expect(getAirGroupConfig(99).torpedo.salvo).toBe(4);  // above 10 -> 10
   });
 
-  it('every level fires a 4-ordnance salvo from both groups', () => {
+  it('torpedoes fire a 4-ordnance salvo; bombers a scattered 8 at reduced damage', () => {
+    // Bomber per-bomb damage was rebalanced to 60% of the pre-flak value
+    // (enemy AA + the aircraft-torpedo buff came in the same pass), so salvo
+    // totals are 60% of the originals: 2000*0.6 .. 3680*0.6.
+    const oldTotals = { 4: 1200, 5: 1344, 6: 1488, 7: 1656, 8: 1824, 9: 2016, 10: 2208 };
     for (const lvl of [4, 5, 6, 7, 8, 9, 10]) {
       const g = getAirGroupConfig(lvl);
       expect(g.torpedo.salvo).toBe(4);
-      expect(g.bomber.salvo).toBe(4);
+      expect(g.bomber.salvo).toBe(8);
+      expect(g.bomber.salvo * g.bomber.dmg).toBe(oldTotals[lvl]);
     }
   });
 
@@ -197,6 +202,43 @@ describe('Bomb ballistic physics', () => {
     const impact = sq._predictBombImpact();
     // Impact should be well ahead of the plane in +z, not under it.
     expect(impact.z).toBeGreaterThan(20);
+  });
+
+  it('scatters bombs across the aiming circle instead of a line abreast', () => {
+    const sq = new Squadron(makeScene(), 0, 0, 'player', 6, 'bomber');
+    sq.heading = 0;          // +z
+    sq.speed = 50;
+    sq.position.set(0, CARRIER.aircraftAltitude, 0);
+    const center = sq._predictBombImpact();
+    const drops = sq.dropBomb();
+    expect(drops.length).toBe(8);
+
+    // Integrate each bomb with the same physics (drag + gravity) to its
+    // landing point — every bomb must land inside the aiming circle.
+    const impacts = drops.map(d => {
+      let { x, y, z } = d.origin;
+      let { x: vx, y: vy, z: vz } = d.velocity;
+      const h = 0.02;
+      for (let i = 0; i < 2000 && y > 0; i++) {
+        const k = 1.0 - CARRIER.bombDrag * h;
+        vx *= k; vy *= k; vz *= k;
+        vy -= 9.8 * h;
+        x += vx * h; y += vy * h; z += vz * h;
+      }
+      return { x, z };
+    });
+    for (const im of impacts) {
+      const dist = Math.hypot(im.x - center.x, im.z - center.z);
+      expect(dist).toBeLessThanOrEqual(CARRIER.bombScatterRadius + 1.0);
+    }
+    // Random scatter, not a single shared point: at least two distinct landings.
+    const uniq = new Set(impacts.map(im => `${im.x.toFixed(1)},${im.z.toFixed(1)}`));
+    expect(uniq.size).toBeGreaterThan(1);
+    // Bombs release from the squadron itself (no lateral line-abreast offsets).
+    for (const d of drops) {
+      expect(d.origin.x).toBe(sq.position.x);
+      expect(d.origin.z).toBe(sq.position.z);
+    }
   });
 });
 
@@ -427,5 +469,29 @@ describe('CarrierAirWing (two squadrons + Tab switch)', () => {
     expect(wing.torpedo.heading).toBeGreaterThan(0.05);
     // Inactive bomber did NOT turn from the player's A.
     expect(Math.abs(wing.bomber.heading)).toBeLessThan(0.05);
+  });
+});
+
+describe('Aim guides are player-only', () => {
+  // Enemy bomber waves (solo _spawnEnemyStrikeSquadron) never get updateGuides
+  // calls, so a reticle built for them would sit stuck — visible — at the world
+  // origin, i.e. right on the player's spawn point.
+  it('enemy squadrons build no aim guides at all', () => {
+    const bomber = new Squadron(makeScene(), 0, 0, 'enemy', 6, 'bomber');
+    expect(bomber._bombReticle).toBeUndefined();
+    const torp = new Squadron(makeScene(), 0, 0, 'enemy', 6, 'torpedo');
+    expect(torp._torpGuide).toBeUndefined();
+    // Showing/hiding stays a safe no-op.
+    bomber.updateGuides(true);
+    bomber.updateGuides(false);
+  });
+
+  it('player squadrons keep their guides (bomb reticle toggles with view)', () => {
+    const sq = new Squadron(makeScene(), 0, 0, 'player', 6, 'bomber');
+    expect(sq._bombReticle).toBeTruthy();
+    sq.updateGuides(true);
+    expect(sq._bombReticle.visible).toBe(true);
+    sq.updateGuides(false);
+    expect(sq._bombReticle.visible).toBe(false);
   });
 });

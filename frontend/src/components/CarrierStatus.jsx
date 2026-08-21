@@ -1,10 +1,12 @@
-// Carrier status strip: shows auto-pilot / rearming / patrol chips plus the
+// Carrier status strip: shows auto-attack chips (per air group — 鱼雷机/轰炸机
+// each have their own auto-pilot in solo) plus rearming/patrol chips and the
 // flown squadron's health bar + altimeter, above the weapon bar when the player
 // is a carrier. Purely informational (keys drive the actions); reflects the
 // engine's `squadron` HUD block.
 //
 // squadron = { carrier, airborne, autoPilot, autoPhase, rearming, patrol,
-//              hp, maxHp, altitude, maxAlt, minAlt }
+//              hp, maxHp, altitude, maxAlt, minAlt,
+//              torpedo:{autoPilot,autoPhase,...}, bomber:{autoPilot,autoPhase,...} }
 const PHASE_LABELS = {
   idle: '',
   engage: '接敌',
@@ -16,16 +18,20 @@ const PHASE_LABELS = {
 export default function CarrierStatus({ squadron }) {
   if (!squadron || !squadron.carrier) return null;
   const chips = [];
-  if (squadron.autoPilot) {
+  // Per-group auto-attack state: one chip per squadron currently running its
+  // auto-pilot, with that group's own phase. Y toggles the ACTIVE group.
+  const groups = [
+    { id: 'torpedo', name: '鱼雷机', g: squadron.torpedo },
+    { id: 'bomber', name: '轰炸机', g: squadron.bomber },
+  ];
+  for (const { id, name, g } of groups) {
+    if (!g || !g.autoPilot) continue;
+    const phase = PHASE_LABELS[g.autoPhase || squadron.autoPhase];
     chips.push(
-      <span key="ap" className="carrier-chip autopilot" title="飞机自动攻击（Y 切换）">
-        自动攻击 ON
+      <span key={`ap-${id}`} className="carrier-chip autopilot" title={`${name}自动攻击中（切到该机队后按 Y 关闭）`}>
+        {name}·自动{phase ? `·${phase}` : ''}
       </span>
     );
-    const phase = PHASE_LABELS[squadron.autoPhase];
-    if (phase) {
-      chips.push(<span key="ph" className="carrier-chip phase">{phase}</span>);
-    }
   }
   if (squadron.rearming) {
     chips.push(

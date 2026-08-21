@@ -7,7 +7,8 @@ from game.config import (
     RAMMING_DAMAGE, get_ship_config, get_muzzle_speed, get_cannon_drag,
     CARRIER,
     AA_DRAG, get_aa_tier, get_class_aa,
-    ASW_MUZZLE_SPEED, ASW_DRAG, get_asw_tier, get_class_asw,
+    ASW_MUZZLE_SPEED, ASW_DRAG, ASW_AIR, get_asw_tier, get_class_asw,
+    SECONDARY,
 )
 from game.ship import ServerShip
 from game.terrain import Terrain
@@ -53,6 +54,11 @@ class GameState:
         # Per-ship ASW release cooldown: {player_id: cd_seconds}. One depth-
         # charge salvo per cooldown window.
         self._asw_cooldowns = {}
+        # In-flight battleship ASW strike planes. Each entry simulates a plane
+        # cruising from the ship to the marked target rectangle, scattering
+        # fused depth charges across it, then flying off and despawning.
+        self._asw_planes = []
+        self._next_asw_plane_id = 0
 
     def add_ship(self, player_id, username, level=1, ship_class=None, team=None):
         ship = ServerShip(player_id, username, level, ship_class, team)
@@ -272,6 +278,183 @@ class GameState:
         diff = (local_aim_yaw - yaw_center + math.pi) % (2 * math.pi) - math.pi
         return abs(diff) <= yaw_range + 0.05
 
+    # ---- Secondary battery / AA mount layouts (mirror ship_model.js) ----
+    # The server doesn't simulate turret meshes; it needs the same station
+    # math the client uses to build them, so shells leave from the visible
+    # mounts. Plane-view hull options mirror frontend hullOptsFor().
+    _HULL_OPTS = {
+        "battleship": {"bow_start": 0.66, "bow_pow": 1.6, "transom": 0.2, "stern_start": 0.32, "stern_pow": 1.5},
+        "cruiser":    {"bow_start": 0.6,  "bow_pow": 1.6, "transom": 0.32, "stern_pow": 1.1},
+        "destroyer":  {"bow_start": 0.58, "bow_pow": 1.75, "transom": 0.5, "stern_pow": 1.3},
+        "carrier":    {"bow_start": 0.75, "bow_pow": 1.6, "transom": 0.75, "stern_pow": 1.3},
+    }
+
+    @classmethod
+    def _hull_half_beam(cls, ship_class, t):
+        """Mirror ship_model.js hullHalfBeamFraction: plane-view half-beam at
+        station t (0=stern, 1=bow) as a fraction of max half-beam."""
+        o = cls._HULL_OPTS.get(ship_class)
+        if not o:
+            return 1.0
+        bow_start = o["bow_start"]
+        stern_start = o.get("stern_start", 1 - bow_start)
+        if t >= bow_start:
+            u = (t - bow_start) / (1 - bow_start)
+            return max(0.02, 1 - u ** o["bow_pow"])
+        if t <= stern_start:
+            u = t / stern_start
+            return o["transom"] + (1 - o["transom"]) * (1 - (1 - u) ** o["stern_pow"])
+        return 1.0
+
+    @classmethod
+    def _beam_rail_x(cls, ship, z, keep_out):
+        """Safe lateral rail position (mirror ship_model.js beamRailX): inset
+        from the local hull half-beam so mounts never hang off a narrow bow/
+        stern section."""
+        length = ship.ship_length
+        width = ship.ship_width
+        t = max(0.0, min(1.0, (z + length / 2) / length))
+        local_half = cls._hull_half_beam(ship.ship_class, t) * width / 2
+        return min(width * 0.36, local_half - keep_out)
+
+    @staticmethod
+    def _fore_aft_stations(n, bridge_edge, max_z):
+        """Mirror ship_model.js foreAftStations: spread n stations evenly over
+        the aft + fore usable deck segments (skipping the bridge)."""
+        out = []
+        total = 2 * (max_z - bridge_edge)
+        for i in range(n):
+            s = 0.5 if n == 1 else i / (n - 1)
+            u = s * total
+            out.append(-max_z + u if u <= max_z - bridge_edge else bridge_edge + (u - (max_z - bridge_edge)))
+        return out
+
+    SECONDARY_YAW_RANGE = 2.1
+
+    def _get_secondary_layout(self, ship):
+        """Mirror ship_model.js buildSecondaryMounts: beam side turrets fore and
+        aft of the bridge. Returns [(dx, dz, yaw_center, yaw_range)] per mount."""
+        cfg = get_ship_config(ship.level, ship.ship_class)
+        fit = cfg.get("secondary")
+        if not fit:
+            return []
+        barrels = fit.get("barrels", 2)
+        turret_size = (0.8 + ship.ship_width * 0.10) * cfg.get("turret_mul", 1.0)
+        size = turret_size * 0.55
+        housing_width = size * (1 + (barrels - 1) * 0.38)
+        sweep = math.sqrt((housing_width / 2) ** 2 + (size * 1.7 / 2) ** 2)
+        bl_frac = 0.30 if ship.ship_class == "battleship" else 0.22
+        bridge_edge = ship.ship_length * bl_frac / 2 + sweep + 0.15
+        max_z = ship.ship_length * 0.37
+        per_side = math.ceil(fit["mounts"] / 2)
+
+        layout = []
+        for side in (1, -1):
+            for z in self._fore_aft_stations(per_side, bridge_edge, max_z):
+                rail_x = self._beam_rail_x(ship, z, sweep * 0.8)
+                if rail_x < sweep * 0.5:
+                    continue
+                layout.append((side * rail_x, z, side * math.pi / 2, self.SECONDARY_YAW_RANGE))
+        return layout
+
+    def _get_aa_layout(self, ship):
+        """Mirror ship_model.js buildAaMounts: stern battery (battleship/
+        cruiser — the beams carry secondaries) or the classic beam spread
+        (destroyer/carrier). Returns [(dx, dz)] per mount."""
+        aa = get_class_aa(ship.ship_class)
+        if not aa:
+            return []
+        cfg = get_ship_config(ship.level, ship.ship_class)
+        turret_size = (0.8 + ship.ship_width * 0.10) * cfg.get("turret_mul", 1.0)
+        size = max(0.35, turret_size * 0.34)
+        sweep = size * 1.15
+        half_l = ship.ship_length / 2
+        stern_battery = ship.ship_class in ("battleship", "cruiser")
+
+        layout = []
+        n = aa["mounts"]
+        for i in range(n):
+            t = 0.5 if n == 1 else i / (n - 1)
+            if stern_battery:
+                bl_frac = 0.30 if ship.ship_class == "battleship" else 0.22
+                bridge_edge = ship.ship_length * bl_frac / 2 + size + 0.15
+                z = -bridge_edge + (bridge_edge - half_l * 0.90) * t
+            else:
+                z = half_l * 0.62 - t * half_l * 1.05
+            side = 1 if i % 2 == 0 else -1
+            rail_x = self._beam_rail_x(ship, z, sweep * 0.8)
+            if rail_x < sweep * 0.5:
+                continue
+            layout.append((side * rail_x, z))
+        return layout
+
+    def _process_secondary_fire(self, player_id, msg):
+        """Server-authoritative secondary battery salvo (mode='secondary' in
+        the fire message). Mirrors process_fire but for the beam side turrets:
+        per-mount cooldowns, per-barrel muzzles, own ballistics."""
+        ship = self.ships.get(player_id)
+        if not ship or not ship.alive:
+            return
+        layout = self._get_secondary_layout(ship)
+        if not layout or not ship.secondary_cooldowns:
+            return
+
+        aim = msg.get("aim", {})
+        aim_x = aim.get("x", ship.pos_x)
+        aim_y = aim.get("y", 2)
+        aim_z = aim.get("z", ship.pos_z)
+
+        ship_dx = aim_x - ship.pos_x
+        ship_dz = aim_z - ship.pos_z
+        if math.sqrt(ship_dx * ship_dx + ship_dz * ship_dz) < 1:
+            local_aim_yaw = 0.0
+        else:
+            local_aim_yaw = math.atan2(ship_dx, ship_dz) - ship.heading
+
+        ready = [
+            i for i in range(len(layout))
+            if i < len(ship.secondary_cooldowns)
+            and ship.secondary_cooldowns[i] <= 0
+            and self._turret_can_aim(layout[i][2], layout[i][3], local_aim_yaw)
+        ]
+        if not ready:
+            return
+
+        cfg = get_ship_config(ship.level, ship.ship_class)
+        barrels = cfg.get("secondary", {}).get("barrels", 2)
+        turret_size = (0.8 + ship.ship_width * 0.10) * cfg.get("turret_mul", 1.0)
+        barrel_gap = turret_size * 0.55 * 0.55
+        spread_mult = 0.7 if ship.skills.is_active("precision") else 1.0
+        muzzle_speed = SECONDARY["muzzle_speed"]
+        cannon_drag = SECONDARY["drag"]
+
+        for i in ready:
+            ldx, ldz, _, _ = layout[i]
+            for b in range(barrels):
+                barrel_ldx = ldx + (b - (barrels - 1) / 2) * barrel_gap
+                ox, oz = self._turret_world_pos(ship, barrel_ldx, ldz)
+                direction = self._ballistic_direction(
+                    ox, 3.0, oz, aim_x, aim_y, aim_z,
+                    muzzle_speed=muzzle_speed,
+                )
+                barrel_dist = math.sqrt((aim_x - ox) ** 2 + (aim_z - oz) ** 2)
+                spread_dir = apply_cannon_spread(
+                    direction, barrel_dist, ship.ship_class,
+                    spread_mult=spread_mult,
+                )
+                self.projectile_mgr.fire(
+                    player_id, SECONDARY["damage"],
+                    (ox, 3.0, oz),
+                    spread_dir,
+                    muzzle_speed=muzzle_speed,
+                    drag=cannon_drag,
+                    weapon="secondary",
+                )
+            cd = SECONDARY["cooldown"]
+            if ship.skills.is_active("rapid_fire"):
+                cd *= 0.7
+            ship.secondary_cooldowns[i] = cd
+
     @staticmethod
     def _ballistic_direction(origin_x, origin_y, origin_z, aim_x, aim_y, aim_z, muzzle_speed=PROJECTILE_INITIAL_SPEED):
         """Compute a launch direction (unit vector) from a muzzle origin toward
@@ -312,6 +495,10 @@ class GameState:
         ship = self.ships.get(player_id)
         if not ship or not ship.alive:
             return
+
+        # Secondary battery salvo: separate layout, cooldowns and ballistics.
+        if msg.get("mode") == "secondary":
+            return self._process_secondary_fire(player_id, msg)
 
         # Check turret cooldowns
         ready_turrets = [
@@ -427,8 +614,6 @@ class GameState:
             player_id, tier, ship.level,
             ship.pos_x, ship.pos_z,
             heading, count=tube_count, spread=spread,
-            # Submarine torpedoes are homing (acoustic). Other classes dumb.
-            homing=(ship.ship_class == "submarine"),
         )
 
     def process_skill(self, player_id, msg):
@@ -556,19 +741,26 @@ class GameState:
         else:
             drops = sq.drop_torpedo()
             for (x, z, heading, tier) in drops:
+                # Aircraft torpedoes hit harder than hull-launched ones of the
+                # same tier (mirrors frontend CARRIER.airTorpedoDamageMul).
                 self.torpedo_mgr.fire(
                     player_id, tier, ship.level, x, z, heading,
                     count=1, spread="narrow",
+                    damage_mul=CARRIER["air_torpedo_damage_mul"],
                 )
 
     def process_asw_fire(self, player_id, msg):
         """Server-authoritative ASW (depth-charge) release.
 
-        The player aims at a water point (`msg["aim"]={x,z}`) — a last-known
-        sub position. A salvo of depth charges arcs out toward that point and
-        detonates on the water, AoE-damaging submarines within ASW_BLAST_RADIUS
-        (handled in ProjectileManager.update). The aim point is clamped to the
-        ship class's ASW `range` so charges can't be lobbed across the map.
+        Destroyers/cruisers make a CLOSE-RANGE hull drop: the aim point
+        (`msg["aim"]={x,z}`, a last-known sub position) is clamped into the
+        [min, range] band around the hull, and a salvo of charges arcs out
+        there. Charges splash, float for ASW_FUSE_DELAY seconds, then detonate
+        with a large AoE that only damages submarines (projectile.py).
+
+        Battleships call an air strike instead: the aim point (clamped to the
+        air range) becomes the centre of a target rectangle; _update_asw_planes
+        flies a plane out from over the ship and scatters the salvo across it.
         Only ships with an ASW fit (get_class_asw) may release; submerged subs
         can't fire (their launchers are underwater).
         """
@@ -593,19 +785,56 @@ class GameState:
         aim_x = float(aim.get("x", ship.pos_x))
         aim_z = float(aim.get("z", ship.pos_z))
 
-        # Clamp the aim point to the ship's ASW range (hard range limit).
-        max_range = asw["range"]
         dx = aim_x - ship.pos_x
         dz = aim_z - ship.pos_z
         dist = math.sqrt(dx * dx + dz * dz)
+
+        if asw.get("air"):
+            # ---- Battleship air strike: clamp the target-rectangle centre to
+            # the air range and launch a strike plane from over the ship.
+            if dist > asw["range"] and dist > 0:
+                scale = asw["range"] / dist
+                aim_x = ship.pos_x + dx * scale
+                aim_z = ship.pos_z + dz * scale
+            self._asw_planes.append({
+                "id": self._next_asw_plane_id,
+                "owner": player_id,
+                "x": ship.pos_x,
+                "z": ship.pos_z,
+                "heading": math.atan2(aim_x - ship.pos_x, aim_z - ship.pos_z),
+                "target_x": aim_x,
+                "target_z": aim_z,
+                "damage": tier_cfg["damage"],
+                "drops_left": tier_cfg["salvo"],
+                "drop_timer": 0.0,
+                "leave_timer": ASW_AIR["leave"],
+                "state": "cruise",   # cruise -> drop -> leave
+            })
+            self._next_asw_plane_id += 1
+            self._asw_cooldowns[player_id] = tier_cfg["cooldown"]
+            return
+
+        # ---- Surface hull drop: clamp the aim point into the [min, range]
+        # close-drop band around the hull.
+        min_range = asw.get("min", 0.0)
+        max_range = asw["range"]
         if dist > max_range:
-            scale = max_range / dist
+            scale = max_range / dist if dist > 0 else 0.0
             aim_x = ship.pos_x + dx * scale
             aim_z = ship.pos_z + dz * scale
+        elif dist < min_range:
+            # Push the drop point out to the near edge of the band along the
+            # same bearing (never drop onto own decks).
+            if dist > 0:
+                aim_x = ship.pos_x + dx / dist * min_range
+                aim_z = ship.pos_z + dz / dist * min_range
+            else:
+                aim_x = ship.pos_x
+                aim_z = ship.pos_z + min_range
 
         # Fire a salvo of depth charges spread around the clamped aim point.
-        # Each charge flies a short ballistic arc toward its sub-point and
-        # detonates on water impact (y<=0) in projectile.py.
+        # Each charge flies a short ballistic arc toward its sub-point, splashes
+        # and starts its fuse (see projectile.py).
         origin_y = 3.0
         salvo = tier_cfg["salvo"]
         spread = tier_cfg["spread"]
@@ -651,12 +880,66 @@ class GameState:
 
         self._asw_cooldowns[player_id] = tier_cfg["cooldown"]
 
+    def _update_asw_planes(self, dt):
+        """Advance battleship ASW strike planes.
+
+        cruise: fly from over the owning ship toward the marked rectangle.
+        drop: once over it, release one fused depth charge every ASW_AIR
+        interval at a random point inside the rectangle until the salvo runs
+        out. leave: keep flying straight for a few seconds, then despawn.
+        """
+        for plane in self._asw_planes:
+            if plane["state"] != "leave":
+                # Steer straight at the rectangle centre while approaching.
+                desired = math.atan2(plane["target_x"] - plane["x"], plane["target_z"] - plane["z"])
+                diff = desired - plane["heading"]
+                while diff > math.pi:
+                    diff -= 2 * math.pi
+                while diff < -math.pi:
+                    diff += 2 * math.pi
+                plane["heading"] += max(-2.0 * dt, min(2.0 * dt, diff))
+            plane["x"] += math.sin(plane["heading"]) * ASW_AIR["speed"] * dt
+            plane["z"] += math.cos(plane["heading"]) * ASW_AIR["speed"] * dt
+
+            if plane["state"] == "cruise":
+                dx = plane["target_x"] - plane["x"]
+                dz = plane["target_z"] - plane["z"]
+                if dx * dx + dz * dz <= (ASW_AIR["box"] * 0.5) ** 2:
+                    plane["state"] = "drop"
+            elif plane["state"] == "drop":
+                plane["drop_timer"] -= dt
+                if plane["drop_timer"] <= 0 and plane["drops_left"] > 0:
+                    plane["drop_timer"] = ASW_AIR["interval"]
+                    plane["drops_left"] -= 1
+                    # Random point inside the target rectangle.
+                    ox = random.uniform(-ASW_AIR["box"], ASW_AIR["box"])
+                    oz = random.uniform(-ASW_AIR["box"], ASW_AIR["box"])
+                    self.projectile_mgr.fire(
+                        plane["owner"], plane["damage"],
+                        (plane["target_x"] + ox, ASW_AIR["altitude"], plane["target_z"] + oz),
+                        (0.0, -1.0, 0.0),
+                        muzzle_speed=40.0,
+                        drag=0.02,
+                        weapon="depth_charge",
+                    )
+                    if plane["drops_left"] <= 0:
+                        plane["state"] = "leave"
+            elif plane["state"] == "leave":
+                plane["leave_timer"] -= dt
+
+        self._asw_planes = [
+            p for p in self._asw_planes
+            if not (p["state"] == "leave" and p["leave_timer"] <= 0)
+        ]
+
     def _fire_aa_defenses(self, dt):
         """Automatic AA point-defense pass.
 
         Each alive ship with an AA fit (`get_class_aa`) independently targets
         the nearest enemy squadron within AA range per mount, firing a flak
-        shell on that mount's cooldown. Friendly aircraft (same owner, or same
+        shell on that mount's cooldown from that mount's actual deck position
+        (mirror of the client's AA turret layout — shells leave the visible
+        mounts, not the ship centre). Friendly aircraft (same owner, or same
         team in team mode) are skipped. No-op when no aircraft are airborne.
         """
         squads = [sq for sq in self.aircraft_mgr.squadrons if sq.alive]
@@ -671,7 +954,10 @@ class GameState:
             tier_cfg = get_aa_tier(aa["tier"])
             if not tier_cfg:
                 continue
-            mounts = aa["mounts"]
+            layout = self._get_aa_layout(ship)
+            mounts = len(layout)
+            if mounts == 0:
+                continue
             cds = self._aa_cooldowns.get(pid)
             if cds is None or len(cds) != mounts:
                 cds = [0.0] * mounts
@@ -709,12 +995,10 @@ class GameState:
                 aim_x = best_sq.pos_x
                 aim_y = best_sq.altitude
                 aim_z = best_sq.pos_z
-                # Origin: a point above the deck (turret height). Each mount
-                # fires from roughly the same deck point — separate mounts are a
-                # rate-of-fire abstraction, not distinct muzzle positions.
-                ox = ship.pos_x
+                # Origin: this mount's deck position (turret height above it).
+                ldx, ldz = layout[m]
+                ox, oz = self._turret_world_pos(ship, ldx, ldz)
                 oy = 3.0
-                oz = ship.pos_z
                 # Direction toward the squadron (unit vector).
                 dx = aim_x - ox
                 dy = aim_y - oy
@@ -738,6 +1022,9 @@ class GameState:
                 for i in range(len(ship.turret_cooldowns)):
                     if ship.turret_cooldowns[i] > 0:
                         ship.turret_cooldowns[i] -= dt
+                for i in range(len(ship.secondary_cooldowns)):
+                    if ship.secondary_cooldowns[i] > 0:
+                        ship.secondary_cooldowns[i] = max(0.0, ship.secondary_cooldowns[i] - dt)
                 ship.skills.update(dt, ship)
         # Decay ASW release cooldowns.
         for pid in list(self._asw_cooldowns.keys()):
@@ -745,6 +1032,9 @@ class GameState:
                 self._asw_cooldowns[pid] = max(0.0, self._asw_cooldowns[pid] - dt)
             else:
                 del self._asw_cooldowns[pid]
+
+        # Advance battleship ASW strike planes (cruise -> scatter charges -> leave).
+        self._update_asw_planes(dt)
 
         # Update enemy turret cooldowns every tick
         for enemy in self.enemy_mgr.enemies:
@@ -874,6 +1164,12 @@ class GameState:
                 if dist >= min_dist:
                     continue
 
+                # A fully-submerged submarine passes UNDER surface hulls — no
+                # ramming contact at all. (Submerged subs may only be damaged
+                # by depth charges and torpedoes.)
+                if getattr(ship_a, "fully_submerged", False) or getattr(ship_b, "fully_submerged", False):
+                    continue
+
                 # Teammates don't damage each other but still push apart
                 same_team = (
                     ship_a.team is not None and ship_a.team == ship_b.team
@@ -962,6 +1258,17 @@ class GameState:
             "projs": self.projectile_mgr.get_snapshots(),
             "torps": self.torpedo_mgr.get_snapshots(),
             "airs": self.aircraft_mgr.get_snapshots(),
+            "aswPlanes": [
+                {
+                    "id": p["id"],
+                    "owner": p["owner"],
+                    "x": round(p["x"], 2),
+                    "z": round(p["z"], 2),
+                    "h": round(p["heading"], 4),
+                    "alt": ASW_AIR["altitude"],
+                }
+                for p in self._asw_planes
+            ],
             "enemies": self.enemy_mgr.get_snapshots(),
             "evts": self.events,
         }
@@ -976,6 +1283,17 @@ class GameState:
             "projs": self.projectile_mgr.get_snapshots(),
             "torps": self.torpedo_mgr.get_snapshots(),
             "enemies": self.enemy_mgr.get_snapshots(),
+            "aswPlanes": [
+                {
+                    "id": p["id"],
+                    "owner": p["owner"],
+                    "x": round(p["x"], 2),
+                    "z": round(p["z"], 2),
+                    "h": round(p["heading"], 4),
+                    "alt": ASW_AIR["altitude"],
+                }
+                for p in self._asw_planes
+            ],
         }
 
     def get_snapshot_at(self, tick):

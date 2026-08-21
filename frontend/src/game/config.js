@@ -62,17 +62,6 @@ export const SUBMARINE = {
   shellImmunityDepth: 1.5,
 };
 
-// ---- Submarine homing torpedoes (stage 2) ----
-// Submarine-launched torpedoes (tier 2/3) gently steer toward the nearest
-// spotted enemy within HOMING_ACQUIRE_RANGE. Turn rate is capped so a skilled
-// target can still dodge at close range. Range/damage are slightly weaker than
-// straight-running torpedoes to pay for the tracking.
-export const HOMING_TORPEDO = {
-  acquireRange: 600,     // m — only home on enemies within this radius
-  turnRate: 0.35,        // rad/s — max heading correction rate
-  damageMul: 0.7,        // homing torpedoes hit softer than dumb ones
-};
-
 // ---- Carrier aircraft (stage 3) ----
 // A carrier player toggles between steering the ship and flying a squadron.
 // While flying, the camera follows the squadron (not the ship) and WASD controls
@@ -138,25 +127,47 @@ export const CARRIER = {
                            // Bombs ALSO inherit the plane's forward ground
                            // speed, so together this yields a ballistic arc
                            // (forward throw + gravity) instead of a straight drop.
+  // Bomb scatter: each bomb of a salvo is aimed at a random point inside a
+  // uniform disc of this radius (m) centred on the predicted impact — the
+  // drop reticle drawn below. Must mirror game/config.py bomb_scatter_radius.
+  bombScatterRadius: 8,
   // Aim-assist guide lengths (used by the projection line / drop reticle).
   torpedoGuideRange: 600,  // m — how far ahead the torpedo track preview draws
+  // Aircraft-torpedo damage multiplier. Air-dropped torpedoes hit harder than
+  // ship-launched ones of the same tier (they must survive AA flak to deliver
+  // and the drop run is easy to dodge) — 1.5x rebalance: bombs were tuned down
+  // to 60% in the same pass. Must mirror game/config.py CARRIER
+  // air_torpedo_damage_mul.
+  airTorpedoDamageMul: 1.5,
+  // Auto-respawn: a squadron SHOT DOWN by AA fire re-launches from its carrier
+  // after this delay (crashes still need a manual T re-launch). The solo
+  // engine drives the player's wing; the wave-based enemy air groups respawn
+  // on their own spawn timer. Must mirror game/config.py CARRIER
+  // squadron_respawn_delay.
+  squadronRespawnDelay: 12,  // s
   // View transition.
   viewSwitchTime: 0.8,     // s to blend camera between ship and squadron
-  // Per-level air-group balance. Both air groups fire a 4-ordnance salvo per
-  // drop and carry a large ammo pool — the carrier's whole point is
-  // concentrated alpha from its air wing, so neither per-shot damage nor salvo
-  // size is throttled against level. Each group has: salvoSize (how many bombs/
-  // torpedoes release per click), cooldown (s between releases), per-shot
-  // damage, and ammo pool size. Must mirror game/config.py AIR_GROUP exactly.
+  // Per-level air-group balance. Torpedo bombers fire a 4-ordnance salvo per
+  // drop. Dive bombers drop a SCATTERED salvo: 8 bombs at reduced per-bomb
+  // damage, each aimed at a random point inside the drop reticle (see
+  // bombScatterRadius) — many small hits instead of the old all-or-nothing
+  // line abreast, so a single drop connects far more often. Bomber per-bomb
+  // damage was rebalanced to 60% of the pre-flak value (aircraft now face
+  // enemy AA fire; the damage moved to the torpedo group via
+  // CARRIER.airTorpedoDamageMul = 1.5). Bomber ammo pools are counted in bombs
+  // and doubled to keep the number of drops unchanged. Each group has: salvoSize
+  // (how many bombs/torpedoes release per click), cooldown (s between
+  // releases), per-shot damage, and ammo pool size. Must mirror
+  // game/config.py AIR_GROUP exactly.
   airGroup: {
     // lvl: { torpedo: {salvo, cd, dmg, ammo}, bomber: {salvo, cd, dmg, ammo} }
-    4:  { torpedo: { salvo: 4, cd: 3.5, dmg: 150, ammo: 16 }, bomber: { salvo: 4, cd: 4.0, dmg: 500, ammo: 16 } },
-    5:  { torpedo: { salvo: 4, cd: 3.3, dmg: 165, ammo: 18 }, bomber: { salvo: 4, cd: 3.8, dmg: 560, ammo: 18 } },
-    6:  { torpedo: { salvo: 4, cd: 3.0, dmg: 180, ammo: 20 }, bomber: { salvo: 4, cd: 3.6, dmg: 620, ammo: 20 } },
-    7:  { torpedo: { salvo: 4, cd: 2.8, dmg: 195, ammo: 22 }, bomber: { salvo: 4, cd: 3.4, dmg: 690, ammo: 22 } },
-    8:  { torpedo: { salvo: 4, cd: 2.6, dmg: 210, ammo: 24 }, bomber: { salvo: 4, cd: 3.2, dmg: 760, ammo: 24 } },
-    9:  { torpedo: { salvo: 4, cd: 2.4, dmg: 230, ammo: 26 }, bomber: { salvo: 4, cd: 3.0, dmg: 840, ammo: 26 } },
-    10: { torpedo: { salvo: 4, cd: 2.2, dmg: 250, ammo: 28 }, bomber: { salvo: 4, cd: 2.8, dmg: 920, ammo: 28 } },
+    4:  { torpedo: { salvo: 4, cd: 3.5, dmg: 150, ammo: 16 }, bomber: { salvo: 8, cd: 4.0, dmg: 150, ammo: 32 } },
+    5:  { torpedo: { salvo: 4, cd: 3.3, dmg: 165, ammo: 18 }, bomber: { salvo: 8, cd: 3.8, dmg: 168, ammo: 36 } },
+    6:  { torpedo: { salvo: 4, cd: 3.0, dmg: 180, ammo: 20 }, bomber: { salvo: 8, cd: 3.6, dmg: 186, ammo: 40 } },
+    7:  { torpedo: { salvo: 4, cd: 2.8, dmg: 195, ammo: 22 }, bomber: { salvo: 8, cd: 3.4, dmg: 207, ammo: 44 } },
+    8:  { torpedo: { salvo: 4, cd: 2.6, dmg: 210, ammo: 24 }, bomber: { salvo: 8, cd: 3.2, dmg: 228, ammo: 48 } },
+    9:  { torpedo: { salvo: 4, cd: 2.4, dmg: 230, ammo: 26 }, bomber: { salvo: 8, cd: 3.0, dmg: 252, ammo: 52 } },
+    10: { torpedo: { salvo: 4, cd: 2.2, dmg: 250, ammo: 28 }, bomber: { salvo: 8, cd: 2.8, dmg: 276, ammo: 56 } },
   },
 };
 
@@ -174,17 +185,47 @@ export function getAirGroupConfig(level) {
   return table[best];
 }
 
+// ---- Secondary battery (side guns) — must mirror game/config.py SECONDARY /
+// CLASS_SECONDARY ----
+// Secondaries are small-calibre dual-purpose turrets along both beams of
+// cruisers/battleships: a player-switchable (Q) damage supplement to the main
+// battery. Lower per-shell damage & faster reload than the main guns, flatter
+// faster shell (small calibre), mounted in the side battery positions.
+export const SECONDARY = {
+  muzzleSpeed: 320.0,
+  drag: 0.09,
+  damage: 40,
+  cooldown: 3.0,
+};
+
+// Per-class secondary fit. mounts = total casemate turrets (split evenly fore
+// and aft along both beams); barrels = guns per turret. Destroyers carry none
+// (their beam turrets stay AA mounts).
+export const CLASS_SECONDARY = {
+  cruiser:     { mounts: 4, barrels: 2 },
+  battleship:  { mounts: 6, barrels: 2 },
+};
+
+export function getClassSecondary(shipClass) {
+  if (!shipClass) return null;
+  const fit = CLASS_SECONDARY[shipClass];
+  if (!fit || !fit.mounts) return null;
+  return fit;
+}
+
 // ---- Anti-air (AA) flak — must mirror game/config.py AA_TIER / AA_DRAG /
 // AA_HIT_RADIUS / CLASS_AA ----
 // AA is an automatic point-defense: ships with AA mounts fire `weapon='flak'`
 // shells at the nearest enemy squadron in range. Values must match the server
 // exactly so client-predicted flak hits line up with the authoritative ones.
 export const AA_TIER = {
-  1: { range: 700,  muzzleSpeed: 180.0, damage: 8,  cooldown: 1.2 },
-  2: { range: 1000, muzzleSpeed: 220.0, damage: 12, cooldown: 0.9 },
+  1: { range: 700,  muzzleSpeed: 180.0, damage: 6,  cooldown: 1.5 },
+  2: { range: 1000, muzzleSpeed: 220.0, damage: 8,  cooldown: 1.2 },
 };
 export const AA_DRAG = 0.10;
-export const AA_HIT_RADIUS = 25.0;
+// Tight proximity radius (mirrors game/config.py): long-range flak mostly
+// misses, keeping the aircraft approach survivable.
+export const AA_HIT_RADIUS = 15.0;
 
 export function getAaTier(tier) {
   if (!tier) return null;
@@ -208,32 +249,45 @@ export function getClassAa(shipClass) {
 }
 
 // ---- Anti-submarine warfare (ASW) depth charges — must mirror game/config.py
-// ASW_TIER / ASW_MUZZLE_SPEED / ASW_DRAG / ASW_BLAST_RADIUS / CLASS_ASW ----
-// ASW is an aimed drop: aim at a water point, release a salvo of depth charges
-// that arc out and detonate with an AoE that damages submerged submarines (via
-// the `weapon='depth_charge'` shell-immunity bypass in projectile.js).
+// ASW_TIER / ASW_MUZZLE_SPEED / ASW_DRAG / ASW_FUSE_DELAY / ASW_BLAST_RADIUS /
+// ASW_AIR / CLASS_ASW ----
+// ASW is a CLOSE-RANGE drop. Destroyers/cruisers release a spread of depth
+// charges into a nearby water band (aim clamped to [min, range]; a fan/sector
+// indicator mirrors the band on screen). Charges splash, float for
+// ASW_FUSE_DELAY seconds, then detonate with a large AoE that ONLY damages
+// submarines. Battleships call an air strike instead: mark a rectangle on the
+// water, a plane flies out from over the ship and scatters charges across it.
 export const ASW_TIER = {
   1: { damage: 320, cooldown: 6.0, salvo: 6, spread: 35 },
   2: { damage: 460, cooldown: 5.0, salvo: 8, spread: 40 },
 };
-export const ASW_MUZZLE_SPEED = 70.0;
+export const ASW_MUZZLE_SPEED = 110.0;
 export const ASW_DRAG = 0.06;
-export const ASW_BLAST_RADIUS = 60.0;
+export const ASW_FUSE_DELAY = 3.0;   // s a charge floats before detonating
+export const ASW_BLAST_RADIUS = 100.0;
+export const ASW_AIR = {
+  range: 900,     // m — max target-rectangle distance from the ship
+  box: 70,        // m — half-size of the target rectangle
+  speed: 60,      // m/s — strike plane cruise speed
+  altitude: 80,   // m — release altitude
+  interval: 0.25, // s between charge releases
+  leave: 5.0,     // s the plane flies on before despawning
+};
 
 export function getAswTier(tier) {
   if (!tier) return null;
   return ASW_TIER[tier] ?? null;
 }
 
-// Per-class ASW fit. `range` is the max horizontal distance a charge may be
-// aimed at (the player's aim point is clamped to it from the ship). mirror
-// game/config.py CLASS_ASW. Battleship gets tier-1 ASW so it can defend itself.
+// Per-class ASW fit. Destroyer/cruiser hull racks clamp the aim point into the
+// [min, range] close-drop band; the battleship (air=true) marks a target
+// rectangle within `range` instead. mirror game/config.py CLASS_ASW.
 export const CLASS_ASW = {
-  destroyer:   { tier: 2, range: 700 },
-  cruiser:     { tier: 1, range: 550 },
-  battleship:  { tier: 1, range: 600 },
-  carrier:     { tier: 0, range: 0 },
-  submarine:   { tier: 0, range: 0 },
+  destroyer:   { tier: 2, range: 450, min: 60,  air: false },
+  cruiser:     { tier: 1, range: 320, min: 50,  air: false },
+  battleship:  { tier: 1, range: 900, min: 120, air: true },
+  carrier:     { tier: 0, range: 0,   min: 0,   air: false },
+  submarine:   { tier: 0, range: 0,   min: 0,   air: false },
 };
 
 export function getClassAsw(shipClass) {
@@ -241,4 +295,26 @@ export function getClassAsw(shipClass) {
   const fit = CLASS_ASW[shipClass];
   if (!fit || !fit.tier) return null;
   return fit;
+}
+
+// Clamp an aim point into a fit's drop band (surface hull drop): distance from
+// the ship lands in [fit.min, fit.range] along the same bearing. Returns the
+// clamped point. (Battleship air strikes only clamp to fit.range.)
+export function clampAswAim(shipPos, aim, fit) {
+  const dx = aim.x - shipPos.x;
+  const dz = aim.z - shipPos.z;
+  const dist = Math.sqrt(dx * dx + dz * dz);
+  const max = fit.range;
+  const min = fit.min || 0;
+  if (dist > max) {
+    if (dist === 0) return { x: shipPos.x + max, z: shipPos.z };
+    const s = max / dist;
+    return { x: shipPos.x + dx * s, z: shipPos.z + dz * s };
+  }
+  if (!fit.air && dist < min) {
+    if (dist === 0) return { x: shipPos.x, z: shipPos.z + min };
+    const s = min / dist;
+    return { x: shipPos.x + dx * s, z: shipPos.z + dz * s };
+  }
+  return { x: aim.x, z: aim.z };
 }

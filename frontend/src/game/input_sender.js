@@ -53,13 +53,14 @@ export class InputSender {
     this.ws.send(input);
   }
 
-  sendFire(aimTarget) {
+  sendFire(aimTarget, mode = 'gun') {
     this.seq++;
     const msg = {
       type: 'fire',
       seq: this.seq,
       ts: Date.now(),
       aim: { x: aimTarget.x, y: aimTarget.y, z: aimTarget.z },
+      mode,
     };
     this._pendingInputs.push(msg);
     this._recordSent(msg.seq);
@@ -174,6 +175,22 @@ export class InputSender {
       h: heading,
       tier,
       sp: spread === 'wide' ? 1 : 0,
+    };
+    this._pendingInputs.push(msg);
+    this._recordSent(msg.seq);
+    this.ws.send(msg);
+  }
+
+  // ASW (深水炸弹) release. aim = {x, z} water point (already band-clamped by
+  // the engine; the server clamps again authoritatively). Destroyer/cruiser
+  // make a close hull drop; the battleship marks an air-strike rectangle.
+  sendAswFire(aim) {
+    this.seq++;
+    const msg = {
+      type: 'asw_fire',
+      seq: this.seq,
+      ts: Date.now(),
+      aim: { x: aim.x, z: aim.z },
     };
     this._pendingInputs.push(msg);
     this._recordSent(msg.seq);

@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { LEVEL_CONFIG, getClassConfig } from './ship.js';
-import { applyCannonSpread, compensateDragPitch } from './turret.js';
+import { applyCannonSpread, compensateDragPitch, aimAaMountAtPoint, getTurretFireData } from './turret.js';
 import { buildShipModel, createMarkerSprite, CLASS_NAMES } from './ship_model.js';
-import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag, SUBMARINE } from './config.js';
+import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag, SUBMARINE, getClassAa, getAaTier, AA_DRAG,
+         getClassAsw, getAswTier, clampAswAim, ASW_MUZZLE_SPEED, ASW_DRAG, ASW_FUSE_DELAY, ASW_AIR } from './config.js';
+import { AswStrikePlane } from './asw.js';
 
 export const ENEMY_SCALE = {
   1:  { hp: 100,  damage: 20, count: 10, size: 10, score: 3 },
@@ -94,6 +96,10 @@ export class EnemyShip {
     this.size = cfg.length;
     this.torpedoCooldown = 10 + Math.random() * 10;
 
+    // ASW (sub hunting): salvo release cooldown + in-flight strike planes.
+    this.aswCooldown = 0;
+    this._aswPlanes = [];
+
     this.heading = Math.random() * Math.PI * 2;
     this.speed = 0;
     this.state = 'idle';
@@ -134,6 +140,10 @@ export class EnemyShip {
     this._turretBodies = model.turrets.map(t => t.group);
     this._turretPivots = model.turrets.map(t => t.barrelPivot);
     this._turretBarrelGroups = model.turrets.map(t => ({ meshes: t.barrels, barrelLen: t.barrelLen }));
+
+    // 防空炮座（与玩家 Ship 同构的旋回/俯仰机构），由 updateAaDefense 驱动
+    // —— 单人模式中敌方 AI 的自动防空火力。
+    this.aaMounts = (model.aaMounts || []).map(t => ({ ...t }));
 
     const hpWidth = cfg.length * 0.6;
     this.hpBarBg = new THREE.Mesh(
@@ -313,6 +323,8 @@ export class EnemyShip {
       }
     }
     this.torpedoCooldown -= dt;
+    if (this.aswCooldown > 0) this.aswCooldown = Math.max(0, this.aswCooldown - dt);
+    this._updateAswPlanes(dt, projectileManager);
 
     const dx = playerPos.x - this.mesh.position.x;
     const dz = playerPos.z - this.mesh.position.z;
@@ -364,10 +376,18 @@ export class EnemyShip {
     const ftDz = ft.z - this.mesh.position.z;
     const ftDist = Math.sqrt(ftDx * ftDx + ftDz * ftDz);
 
+    // Sub hunting: when the fire target is a submarine the guns stay silent
+    // (shells splash harmlessly over a submerged hull) and ASW-fitted ships
+    // answer with depth charges instead. Team units carry the live unit on
+    // fireTarget.ref; solo defaults to the player adapter.
+    const targetRef = (this.fireTarget && this.fireTarget.ref) || playerPos;
+    const targetIsSub = targetRef && targetRef.shipClass === 'submarine';
+
     // Fire whenever there is a valid fire target within detect range. This is
     // state-agnostic so both the solo FSM (chase/orbit) and the team FSMs
     // (engage/kite/focus_fire/suppress/etc.) all shoot when they have a target.
-    if (this.fireTarget && ftDist < ENEMY_DETECT_RANGE && this.state !== 'idle' && this.state !== 'reposition') {
+    // Submarine targets are excluded — they get the ASW treatment below.
+    if (this.fireTarget && ftDist < ENEMY_DETECT_RANGE && this.state !== 'idle' && this.state !== 'reposition' && !targetIsSub) {
       // Per-class muzzle speed: ships fire the same trajectory as the player
       // ship of the same class, so ranges match.
       const muzzleSpeed = getMuzzleSpeed(this.shipType);
@@ -450,7 +470,7 @@ export class EnemyShip {
     }
 
     // Enemy submarine: dive when close (handled in _updateEnemyDive) and launch
-    // homing torpedoes. Torpedoes work submerged, so the sub attacks from
+    // torpedoes. Torpedoes work submerged, so the sub attacks from
     // stealth — only depth charges (ASW) can answer it.
     if (this.shipType === 'submarine' && torpedoManager &&
         this.fireTarget && this.state !== 'idle' && this.state !== 'reposition' &&
@@ -460,8 +480,151 @@ export class EnemyShip {
       this.torpedoCooldown = 12;
     }
 
+    // ASW-fitted ships (destroyer/cruiser racks, battleship air strike) hunt a
+    // submarine fire target with depth charges on their own cooldown. Ships
+    // without a fit (submarines themselves) keep relying on the torpedo blocks
+    // above. Applies to team wingmen too — they share this fire pipeline.
+    if (targetIsSub && this.fireTarget && this.state !== 'idle' && this.state !== 'reposition') {
+      this._updateAswAttack(dt, ft, ftDist, projectileManager);
+    }
+
     // Advance dive state (sinks the mesh + sets fullySubmerged for ASW).
     this._updateEnemyDive(dt);
+  }
+
+  // Anti-submarine attack for ASW-fitted AI ships — the mirror of the solo
+  // engine's player-side _fireDepthCharges. Destroyer/cruiser racks lob a
+  // hull-drop salvo into the class's clamped band; the battleship dispatches an
+  // AswStrikePlane onto the target point (it releases the charges itself while
+  // overflying). Charges are faction-tagged depth_charge projectiles, so the
+  // existing splash → fuse → AoE path in projectile.js applies unchanged.
+  _updateAswAttack(dt, ft, ftDist, projectileManager) {
+    const fit = getClassAsw(this.shipType);
+    if (!fit || this.aswCooldown > 0) return;
+    const tierCfg = getAswTier(fit.tier);
+    if (!tierCfg || !projectileManager) return;
+    if (ftDist > fit.range) return;   // outside the drop band / air-strike range
+
+    // Lead the target through the fuse window so the pattern lands where the
+    // sub will be when the charges go off, not where it was spotted.
+    const lead = ASW_FUSE_DELAY * (ft.speed ?? 0);
+    const aim = {
+      x: ft.x + Math.sin(ft.heading ?? 0) * lead,
+      z: ft.z + Math.cos(ft.heading ?? 0) * lead,
+    };
+    const target = clampAswAim(this.mesh.position, aim, fit);
+
+    if (fit.air) {
+      this._aswPlanes.push(new AswStrikePlane(
+        this.scene, this.mesh.position.x, this.mesh.position.z, target, tierCfg, this.faction,
+      ));
+    } else {
+      // Surface hull drop: lob the salvo at sub-points around the clamped
+      // point (same scatter + ballistic arc as the player release).
+      const originY = 3.0;
+      for (let i = 0; i < tierCfg.salvo; i++) {
+        const ang = tierCfg.salvo > 1 ? (i / tierCfg.salvo) * Math.PI * 2 : 0;
+        const rad = tierCfg.salvo > 1 ? tierCfg.spread * (0.4 + 0.6 * ((i * 7) % 5) / 4) : 0;
+        const tx = target.x + Math.cos(ang) * rad;
+        const tz = target.z + Math.sin(ang) * rad;
+        const sdx = tx - this.mesh.position.x;
+        const sdz = tz - this.mesh.position.z;
+        const horiz = Math.sqrt(sdx * sdx + sdz * sdz);
+        let pitch, yaw;
+        if (horiz < 1) {
+          pitch = Math.PI / 4;
+          yaw = 0;
+        } else {
+          const v2 = ASW_MUZZLE_SPEED * ASW_MUZZLE_SPEED;
+          const v4 = v2 * v2;
+          const disc = v4 - GRAVITY * (GRAVITY * horiz * horiz + 2 * (0 - originY) * v2);
+          pitch = disc < 0 ? Math.PI / 6 : Math.atan((v2 - Math.sqrt(disc)) / (GRAVITY * horiz));
+          pitch = Math.max(0, Math.min(60 * Math.PI / 180, pitch));
+          yaw = Math.atan2(sdx, sdz);
+        }
+        projectileManager.fire(
+          new THREE.Vector3(this.mesh.position.x, originY, this.mesh.position.z),
+          new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)),
+          tierCfg.damage, this.faction, ASW_MUZZLE_SPEED, ASW_DRAG, 'depth_charge',
+        );
+      }
+    }
+    this.aswCooldown = tierCfg.cooldown;
+  }
+
+  // Advance this ship's in-flight ASW strike planes; each released charge
+  // becomes an enemy-owned depth_charge projectile through onDrop.
+  _updateAswPlanes(dt, projectileManager) {
+    for (let i = this._aswPlanes.length - 1; i >= 0; i--) {
+      const plane = this._aswPlanes[i];
+      plane.update(dt, (x, z, damage) => {
+        if (!projectileManager) return;
+        projectileManager.fire(
+          new THREE.Vector3(x, ASW_AIR.altitude, z),
+          new THREE.Vector3(0, -1, 0), damage, this.faction, 40, 0.02, 'depth_charge',
+        );
+      });
+      if (plane.done) {
+        plane.destroy();
+        this._aswPlanes.splice(i, 1);
+      }
+    }
+  }
+
+  // Tear down state that outlives updateShip: in-flight ASW strike planes stop
+  // being ticked once the ship dies, so they must be disposed here or their
+  // meshes would freeze mid-sky. Called from every death/clear path.
+  retire() {
+    for (const plane of this._aswPlanes) plane.destroy();
+    this._aswPlanes = [];
+  }
+
+  // Automatic AA point-defense for this enemy ship — the mirror of the solo
+  // engine's player-side _updateAaDefense: every AA mount trains on the nearest
+  // hostile (player-owned) squadron in range and fires flak on its own cooldown,
+  // tagged with this ship's faction so projectile.js's faction filter makes it
+  // hit only player aircraft. Submerged submarines keep their AA silent (the
+  // mounts are underwater). Driven by the solo engine's _updateEnemyAaDefense.
+  updateAaDefense(dt, hostiles, projectileManager) {
+    const mounts = this.aaMounts || [];
+    for (const m of mounts) {
+      if (m.cooldown > 0) m.cooldown = Math.max(0, m.cooldown - dt);
+    }
+    if (mounts.length === 0 || !hostiles || hostiles.length === 0 || !projectileManager) return;
+    if (!this.alive || this.fullySubmerged) return;
+    const aa = getClassAa(this.shipType);
+    if (!aa || !aa.tier) return;
+    const tierCfg = getAaTier(aa.tier);
+    if (!tierCfg) return;
+
+    const r2 = tierCfg.range * tierCfg.range;
+    const x = this.mesh.position.x;
+    const z = this.mesh.position.z;
+
+    for (const mount of mounts) {
+      // Nearest hostile squadron in range for this mount.
+      let best = null, bestD2 = r2;
+      for (const sq of hostiles) {
+        if (!sq || !sq.alive) continue;
+        const dx = sq.position.x - x;
+        const dz = sq.position.z - z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; best = sq; }
+      }
+      if (!best) continue;
+
+      // Train the mount; fire only once roughly on-target so the shell
+      // visually leaves the barrels pointing at the aircraft.
+      if (!aimAaMountAtPoint(mount, this.heading, best.position, dt)) continue;
+      if (mount.cooldown > 0) continue;
+
+      const barrels = mount.barrels.length;
+      for (let b = 0; b < barrels; b++) {
+        const { origin, direction } = getTurretFireData(mount, this.heading, b);
+        projectileManager.fire(origin, direction, tierCfg.damage, this.faction, tierCfg.muzzleSpeed, AA_DRAG, 'flak');
+      }
+      mount.cooldown = tierCfg.cooldown;
+    }
   }
 
   takeDamage(amount) {
@@ -617,7 +780,10 @@ export class EnemyManager {
   }
 
   clear() {
-    for (const e of this.enemies) this.scene.remove(e.mesh);
+    for (const e of this.enemies) {
+      if (e.retire) e.retire();
+      this.scene.remove(e.mesh);
+    }
     for (const e of this.explosions) {
       this.scene.remove(e.mesh);
       e.mesh.traverse(child => {
@@ -630,6 +796,7 @@ export class EnemyManager {
   }
 
   destroyEnemy(enemy) {
+    if (enemy.retire) enemy.retire();
     const pos = enemy.mesh.position.clone();
     pos.y += enemy.size / 2;
     this._createExplosion(pos, enemy.size);

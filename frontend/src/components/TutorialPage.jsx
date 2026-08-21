@@ -6,6 +6,7 @@ const SECTIONS = [
   { id: 'firing', title: '开火操作' },
   { id: 'scope', title: '瞄准系统' },
   { id: 'torpedo', title: '鱼雷发射' },
+  { id: 'asw', title: '深水炸弹' },
   { id: 'skills', title: '技能使用' },
   { id: 'single', title: '单人模式' },
   { id: 'multi', title: '多人模式' },
@@ -80,6 +81,8 @@ function FiringSection() {
           <div className="tutorial-key-item"><Key>2</Key> <span>切换到鱼雷等级 1</span></div>
           <div className="tutorial-key-item"><Key>3</Key> <span>切换到鱼雷等级 2</span></div>
           <div className="tutorial-key-item"><Key>4</Key> <span>切换到鱼雷等级 3</span></div>
+          <div className="tutorial-key-item"><Key>5</Key> <span>切换到副炮（巡洋舰/战列舰）</span></div>
+          <div className="tutorial-key-item"><Key>6</Key> <span>切换到深水炸弹（驱逐/巡洋/战列舰）</span></div>
         </div>
       </div>
 
@@ -157,6 +160,41 @@ function TorpedoSection() {
 
       <div className="tutorial-highlight">
         提示：不同舰船类型可用的鱼雷等级不同。驱逐舰拥有所有等级的鱼雷，巡洋舰只有等级 1，战列舰没有鱼雷。
+      </div>
+    </div>
+  );
+}
+
+function AswSection() {
+  return (
+    <div id="asw" className="tutorial-section">
+      <h2 className="tutorial-section-title">深水炸弹（反潜）</h2>
+
+      <div className="tutorial-subsection">
+        <h3 className="tutorial-subsection-title">选择深水炸弹</h3>
+        <p className="tutorial-text">
+          按 <Key>6</Key> 切换到深水炸弹。驱逐舰、巡洋舰和战列舰携带深水炸弹，潜艇和航母没有。
+        </p>
+      </div>
+
+      <div className="tutorial-subsection">
+        <h3 className="tutorial-subsection-title">驱逐舰 / 巡洋舰：近程投掷</h3>
+        <p className="tutorial-text">
+          切换到深水炸弹后，船身前方会显示一个<strong>扇形投掷区</strong>（类似鱼雷扇形提示）。准星决定的投掷点会被限制在船只近处，
+          左键点击即向该处投出一组深水炸弹。深水炸弹落水后会漂浮约 3 秒再引爆，对大范围内的<strong>潜艇</strong>造成大量伤害——对水面舰船无效。
+        </p>
+      </div>
+
+      <div className="tutorial-subsection">
+        <h3 className="tutorial-subsection-title">战列舰：飞机空投</h3>
+        <p className="tutorial-text">
+          战列舰的深水炸弹由飞机空投：切换到深水炸弹后，准星处的水面会显示一个<strong>方框选择区</strong>。左键确认后，
+          一架飞机会从战列舰头顶飞向该区域，随机投下若干枚深水炸弹，引爆与伤害机制相同。
+        </p>
+      </div>
+
+      <div className="tutorial-note">
+        提示：下潜的潜艇无法被普通火炮伤害，只能被深水炸弹和鱼雷击中。看到鱼雷航迹突然消失，多半是有潜艇埋伏——朝那里投一组深水炸弹。
       </div>
     </div>
   );
@@ -387,6 +425,7 @@ export default function TutorialPage() {
           <FiringSection />
           <ScopeSection />
           <TorpedoSection />
+          <AswSection />
           <SkillsSection />
           <SingleModeSection />
           <MultiModeSection />

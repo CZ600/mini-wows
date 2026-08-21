@@ -261,28 +261,37 @@ export function updateTurrets(ship, aimYaw, aimPitch, dt) {
 const _aimOrigin = new THREE.Vector3();
 
 export function aimTurretsAtPoint(ship, aimTarget, dt) {
-  if (!ship.turrets.length || !aimTarget) return null;
-
   // Per-class muzzle speed + drag: barrels must point along the same trajectory
   // the server fires, otherwise the gun elevation won't match the actual shell
   // arc (battleship shells lose almost no speed, so the drag compensation must
   // be far smaller than for a destroyer).
-  const muzzleSpeed = getMuzzleSpeed(ship.shipClass);
-  const cannonDrag = getCannonDrag(ship.shipClass);
+  return aimTurretList(
+    ship.turrets, ship.mesh, ship.heading, aimTarget, dt,
+    getMuzzleSpeed(ship.shipClass), getCannonDrag(ship.shipClass),
+  );
+}
 
-  // Ship-centred local yaw, used only for the front/rear fire-arc check.
-  const sdx = aimTarget.x - ship.mesh.position.x;
-  const sdz = aimTarget.z - ship.mesh.position.z;
+// Generic turret-group aiming, shared by the main battery, secondaries and AA
+// mounts (they all expose the same handles: group / barrelPivot / yawCenter /
+// yawRange / currentYaw / currentPitch). `yawSpeed` lets small mounts slew
+// faster than the main battery. Returns the ship-centred local aim yaw or null
+// when the group is empty.
+export function aimTurretList(turrets, shipMesh, shipHeading, aimTarget, dt, muzzleSpeed = INITIAL_SPEED, drag = PROJECTILE_DRAG, yawSpeed = MAX_YAW_SPEED) {
+  if (!turrets.length || !aimTarget) return null;
+
+  // Ship-centred local yaw, used only for the fire-arc check.
+  const sdx = aimTarget.x - shipMesh.position.x;
+  const sdz = aimTarget.z - shipMesh.position.z;
   let shipLocalYaw = 0;
   if (Math.sqrt(sdx * sdx + sdz * sdz) >= 1) {
-    shipLocalYaw = Math.atan2(sdx, sdz) - ship.heading;
+    shipLocalYaw = Math.atan2(sdx, sdz) - shipHeading;
   }
 
-  for (const turret of ship.turrets) {
+  for (const turret of turrets) {
     // Each turret computes its own ballistic yaw/pitch from its own position,
     // so the barrels physically point at the target.
     turret.body.getWorldPosition(_aimOrigin);
-    const { yaw, pitch } = calcBallisticAngles(_aimOrigin, aimTarget, ship.heading, muzzleSpeed, cannonDrag);
+    const { yaw, pitch } = calcBallisticAngles(_aimOrigin, aimTarget, shipHeading, muzzleSpeed, drag);
 
     // Clamp to this turret's arc, then slew toward it at a finite yaw rate.
     let diff = normalizeAngle(yaw - turret.yawCenter);
@@ -290,7 +299,7 @@ export function aimTurretsAtPoint(ship, aimTarget, dt) {
     const clampedTarget = turret.yawCenter + diff;
 
     const rotDiff = normalizeAngle(clampedTarget - turret.currentYaw);
-    const maxYawDelta = MAX_YAW_SPEED * dt;
+    const maxYawDelta = yawSpeed * dt;
     turret.currentYaw += Math.max(-maxYawDelta, Math.min(maxYawDelta, rotDiff));
     turret.group.rotation.y = turret.currentYaw;
 
@@ -383,4 +392,39 @@ export function getTurretFireData(turret, shipHeading, barrelIndex = 0) {
   turret.barrelPivot.localToWorld(muzzle);
 
   return { origin: muzzle, direction: { x: dirX, y: dirY, z: dirZ } };
+}
+
+// AA mounts aim straight at the target (flak is a proximity-fused straight-fly
+// shell — no ballistic elevation table needed), slewing fast like a small
+// mount. Full 360° training; pitch follows the direct line to the aircraft.
+const AA_YAW_SPEED = Math.PI * 1.8;
+
+export function aimAaMountAtPoint(mount, shipHeading, targetPos, dt) {
+  if (!mount || !targetPos) return false;
+  mount.body.getWorldPosition(_aimOrigin);
+  const dx = targetPos.x - _aimOrigin.x;
+  const dy = targetPos.y - _aimOrigin.y;
+  const dz = targetPos.z - _aimOrigin.z;
+  const horiz = Math.sqrt(dx * dx + dz * dz);
+  if (horiz < 1) return false;
+
+  const yaw = Math.atan2(dx, dz) - shipHeading;
+  let diff = normalizeAngle(yaw - mount.yawCenter);
+  diff = Math.max(-mount.yawRange, Math.min(mount.yawRange, diff));
+  const clampedTarget = mount.yawCenter + diff;
+
+  const rotDiff = normalizeAngle(clampedTarget - mount.currentYaw);
+  const maxYawDelta = AA_YAW_SPEED * dt;
+  mount.currentYaw += Math.max(-maxYawDelta, Math.min(maxYawDelta, rotDiff));
+  mount.group.rotation.y = mount.currentYaw;
+
+  const pitch = Math.max(0, Math.min(MAX_PITCH, Math.atan2(dy, horiz)));
+  mount.currentPitch = pitch;
+  mount.barrelPivot.rotation.x = -pitch;
+
+  // On-target check: yaw within ~8° of the commanded bearing (pitch follows
+  // instantly, only training has slew lag) — the mount is pointing close
+  // enough for the shell origin to read as aimed fire.
+  const yawErr = Math.abs(normalizeAngle(clampedTarget - mount.currentYaw));
+  return yawErr < 0.14;
 }

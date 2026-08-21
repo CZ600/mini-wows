@@ -9,12 +9,13 @@ import { InputSender } from './input_sender.js';
 import { EntityInterpolator } from './entity_interpolator.js';
 import { reconcile } from './reconciliation.js';
 import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag } from './config.js';
-import { CARRIER, getAirGroupConfig } from './config.js';
+import { CARRIER, getAirGroupConfig, SECONDARY, getClassAsw, getAswTier, clampAswAim } from './config.js';
 import { Ship, CLASS_CONFIG, getDriftConfig } from './ship.js';
-import { turretCanAim, applyCannonSpread, getTurretFireData, aimTurretsAtPoint } from './turret.js';
-import { ProjectileManager } from './projectile.js';
+import { turretCanAim, applyCannonSpread, getTurretFireData, aimTurretsAtPoint, aimTurretList, aimAaMountAtPoint } from './turret.js';
+import { ProjectileManager, weaponVisuals } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { Squadron } from './aircraft.js';
+import { AswAimIndicator, makeAswPlaneMesh } from './asw.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -68,12 +69,18 @@ export class MultiplayerEngine {
     this._ping = 0;
     this._aimTarget = new THREE.Vector3();
     this._currentFov = FOV_NORMAL;
+    // ASW (深水炸弹) state: local mirror of the server release cooldown (the
+    // server is authoritative), the aim indicator, server-flown battleship
+    // strike planes keyed by snapshot id, and the crosshair aim point this
+    // frame (for the indicator).
+    this._aswCooldown = 0;
+    this._aswPlanes = new Map();
+    this._lastAimTarget = null;
     this._torpedoCooldowns = [];
     this._localProjMgr = null;
     this._minimapTerrain = null;
-    this._projectileMeshes = new Map(); // id -> mesh
-    this._projectileGeometry = null;
-    this._projectileMaterial = null;
+    this._projectileMeshes = new Map(); // id -> { mesh, trail, trailData }
+    this._projVisualCache = new Map();  // `${weapon}|mine` -> { geometry, material }
     this.torpedoManager = null;
     this._myRespawns = 0;
     this._localTeam = null;
@@ -123,13 +130,15 @@ export class MultiplayerEngine {
     this._cCleanup = cCleanup;
     this.controls = new Controls(canvas);
     this.controls.setAudioManager(this.audio);
+    this.aswIndicator = new AswAimIndicator(this.scene);
     this.running = true;
     this.lastTime = performance.now();
     this._loop = this._loop.bind(this);
     this.animFrameId = requestAnimationFrame(this._loop);
 
-    this._projectileGeometry = new THREE.SphereGeometry(0.5, 8, 8);
-    this._projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xff6644 });
+    // Remote shell visuals are resolved per weapon on demand (see
+    // _updateProjectileVisuals) — small-calibre tracers for flak/secondaries,
+    // chunky shells for the main battery.
 
     // Wire up WS handlers
     this.ws.onMessage = (msg) => this._handleMessage(msg);
@@ -323,12 +332,19 @@ export class MultiplayerEngine {
     const level = this.localShip.level;
     if (!shipClass || level < 4) {
       this.controls.setTorpedoCapabilities({ availableTiers: [] });
+      this.controls.setAswCapability(false);
+      this.controls.setSecondaryCapability(false);
       return;
     }
     const cc = CLASS_CONFIG[shipClass]?.[level];
     if (cc) {
       this.controls.setTorpedoCapabilities({ availableTiers: cc.torpedoTiers });
     }
+    // ASW availability is per-class (destroyer/cruiser close drop, battleship
+    // air strike).
+    this.controls.setAswCapability(!!getClassAsw(shipClass));
+    // Secondaries follow the modeled side turrets (cruiser / battleship).
+    this.controls.setSecondaryCapability(!!(this.localShip.ship && this.localShip.ship.secondaryTurrets.length > 0));
   }
 
   _createLocalShipMesh() {
@@ -417,10 +433,13 @@ export class MultiplayerEngine {
       // drives the transition animation via ship.updateDiveTransition each tick.
       if (this.localShip.ship && serverState.dive !== undefined) {
         this.localShip.ship.diveDepth = serverState.dive;
-        // Reconstruct the target submerged flag + eased transition from depth.
         const DIVE_MAX = 4.0; // matches SUBMARINE.diveDepth
         this.localShip.ship.diveTransition = Math.min(1, serverState.dive / DIVE_MAX);
-        this.localShip.ship.submerged = serverState.dive > DIVE_MAX * 0.5;
+        // Prefer the server's explicit target flag (diveT); fall back to a
+        // depth heuristic for older servers that don't send it.
+        this.localShip.ship.submerged = serverState.diveT !== undefined
+          ? !!serverState.diveT
+          : serverState.dive > DIVE_MAX * 0.5;
       }
 
       // Track local team for friend/foe detection
@@ -501,12 +520,49 @@ export class MultiplayerEngine {
       this._updateAircraftVisuals(msg.airs);
     }
 
+    // Update battleship ASW strike planes from server data
+    if (msg.aswPlanes) {
+      this._updateAswPlaneVisuals(msg.aswPlanes);
+    }
+
     // Process events — render a visual explosion at the server-authoritative
     // impact point for every hit (so you see all combat, not just your own),
     // but only play the explosion sound when the local player is involved.
     if (msg.evts) {
       const me = String(this._myId ?? '');
       for (const evt of msg.evts) {
+        // Depth-charge detonation: always render the big delayed underwater
+        // burst (even a clean miss explodes), regardless of whether it hit.
+        if (evt.type === 'asw_blast') {
+          if (typeof evt.x === 'number' && typeof evt.z === 'number') {
+            const pos = new THREE.Vector3(evt.x, 0, evt.z);
+            this._localProjMgr?.spawnExplosion(pos, 0x66ccff, 14);
+            this._localProjMgr?._createSplash(pos);
+          }
+          continue;
+        }
+        // Flak air-burst: a shell that topped out without connecting pops at
+        // the apex of its arc — silent black puff (misses make no sound).
+        if (evt.type === 'flak_burst') {
+          if (typeof evt.x === 'number') {
+            this._localProjMgr?.spawnFlakBurst(new THREE.Vector3(evt.x, evt.y ?? 60, evt.z));
+          }
+          continue;
+        }
+        // Flak detonating on a squadron (air_hit) or shooting one down
+        // (air_destroyed): burst at the server-authoritative point. Sound only
+        // when the local player is involved (attacker or squadron owner).
+        if (evt.type === 'air_hit' || evt.type === 'air_destroyed') {
+          if (typeof evt.x === 'number') {
+            this._localProjMgr?.spawnFlakBurst(new THREE.Vector3(evt.x, evt.y ?? 80, evt.z), true);
+          }
+          const target = String(evt.target ?? '');
+          const attacker = String(evt.attacker ?? evt.destroyed_by ?? '');
+          if (target === me || attacker === me) {
+            this.audio.playExplosion(this._distToLocalShip(evt.x, evt.z));
+          }
+          continue;
+        }
         const isHit = evt.type === 'hit';
         const isDestroyed = evt.type === 'entity_destroyed';
         if (!isHit && !isDestroyed) continue;
@@ -573,11 +629,17 @@ export class MultiplayerEngine {
   }
 
   _updateProjectileVisuals(projs) {
-    // Only render remote player projectiles from server data
-    // Local player projectiles are rendered by _localProjMgr
+    // Render remote player projectiles from server data. The local player's
+    // shells and secondary shells are skipped (predicted by _localProjMgr);
+    // weapons WITHOUT local prediction (flak, depth charges, bombs) render the
+    // server copy even for the local player, so you can watch your own AA fire.
     const myId = String(this._myId ?? '');
     const remote = this._localProjMgr
-      ? projs.filter(p => String(p.owner) !== myId)
+      ? projs.filter(p => {
+          if (String(p.owner) !== myId) return true;
+          const w = p.w || 'shell';
+          return w !== 'shell' && w !== 'secondary';
+        })
       : projs;
     const activeIds = new Set();
 
@@ -585,7 +647,12 @@ export class MultiplayerEngine {
       activeIds.add(p.id);
       let entry = this._projectileMeshes.get(p.id);
       if (!entry) {
-        const mesh = new THREE.Mesh(this._projectileGeometry, this._projectileMaterial);
+        const isMine = String(p.owner) === myId;
+        const vis = weaponVisuals(p.w || 'shell', isMine ? 'player' : 'enemy');
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(vis.radius, 8, 8),
+          new THREE.MeshBasicMaterial({ color: vis.color }),
+        );
         this.scene.add(mesh);
 
         // Trail
@@ -593,8 +660,8 @@ export class MultiplayerEngine {
         const trailPositions = new Float32Array(60 * 3);
         trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
         const trailMat = new THREE.PointsMaterial({
-          color: 0xff6644,
-          size: 1.2,
+          color: vis.color,
+          size: vis.trailSize * 1.4,
           transparent: true,
           opacity: 0.85,
         });
@@ -1125,36 +1192,76 @@ export class MultiplayerEngine {
     let currentAimYaw = 0;
     if (this.localShip.ship && this.localShip.ship.turrets.length > 0) {
       const aimTarget = this._findAimTarget();
+      this._lastAimTarget = aimTarget;
       // Each turret aims at the aim point along its own line (no more parallel
       // fire). currentAimYaw is the ship-centred yaw used for the fire-arc check.
       currentAimYaw = aimTurretsAtPoint(this.localShip.ship, aimTarget, dt) ?? 0;
       for (const t of this.localShip.ship.turrets) {
         if (t.cooldown > 0) t.cooldown -= dt;
       }
-    }
 
-    // Fire handling — server-authoritative: only consume when turrets actually fire
-    if (this.localShip.alive && this.controls.wantsFire) {
-      const isTorpedo = this.controls.weaponMode === 'torpedo' && this.localShip.ship.torpedoTubes.length > 0;
-      if (isTorpedo) {
-        // Torpedoes: send fire to server, don't consume wantsFire (server-authoritative)
-        this._fireTorpedoes();
-        this.controls.consumeFire();
-      } else {
-        // Guns: only consume wantsFire if turrets actually fire
-        const ship = this.localShip.ship;
-        const canFireNow = !ship.fullySubmerged
-          && ship.turrets.some(t => t.cooldown <= 0 && turretCanAim(t, currentAimYaw));
-        if (canFireNow) {
-          this._fireGuns(currentAimYaw);
-          this.controls.consumeFire();
+      // Secondary battery: trains only while selected; local cooldowns gate the
+      // predicted salvo (server cooldowns are authoritative for damage).
+      let secondaryAimYaw = 0;
+      if (this.localShip.ship.secondaryTurrets.length > 0) {
+        for (const t of this.localShip.ship.secondaryTurrets) {
+          if (t.cooldown > 0) t.cooldown = Math.max(0, t.cooldown - dt);
         }
-        // If can't fire yet (turret rotating or on cooldown), DON'T consume — keep wantsFire for next frame
+        if (this.controls.weaponMode === 'secondary') {
+          secondaryAimYaw = aimTurretList(
+            this.localShip.ship.secondaryTurrets, this.localShip.ship.mesh, this.localShip.heading,
+            aimTarget, dt, SECONDARY.muzzleSpeed, SECONDARY.drag, Math.PI * 1.5,
+          ) ?? 0;
+        }
+      }
+
+      // AA mounts: visual training on the nearest hostile squadron (server
+      // fires the actual flak). Snapshot airs drive the target positions.
+      this._updateAaVisualAim(dt);
+
+      // Fire handling — server-authoritative: only consume when turrets
+      // actually fire. Secondary mode uses the side battery instead.
+      if (this.localShip.alive && this.controls.wantsFire && !this.localShip.ship.fullySubmerged) {
+        if (this.controls.weaponMode === 'secondary' && this.localShip.ship.secondaryTurrets.length > 0) {
+          const ready = this.localShip.ship.secondaryTurrets.some(
+            t => t.cooldown <= 0 && turretCanAim(t, secondaryAimYaw),
+          );
+          if (ready) {
+            this._fireSecondaries(aimTarget, secondaryAimYaw);
+            this.controls.consumeFire();
+          }
+        } else if (this.controls.weaponMode === 'asw') {
+          // Depth charges (深水炸弹): server-authoritative drop/air-strike.
+          // Gated by the local cooldown mirror; consumed so a held click
+          // doesn't spam the server between frames.
+          if (this._aswCooldown <= 0) {
+            this._fireDepthCharges(aimTarget);
+            this.controls.consumeFire();
+          }
+        } else {
+          const isTorpedo = this.controls.weaponMode === 'torpedo' && this.localShip.ship.torpedoTubes.length > 0;
+          if (isTorpedo) {
+            // Torpedoes: send fire to server, don't consume wantsFire (server-authoritative)
+            this._fireTorpedoes();
+            this.controls.consumeFire();
+          } else {
+            // Guns: only consume wantsFire if turrets actually fire
+            const ship = this.localShip.ship;
+            const canFireNow = ship.turrets.some(t => t.cooldown <= 0 && turretCanAim(t, currentAimYaw));
+            if (canFireNow) {
+              this._fireGuns(currentAimYaw);
+              this.controls.consumeFire();
+            }
+            // If can't fire yet (turret rotating or on cooldown), DON'T consume — keep wantsFire for next frame
+          }
+        }
       }
     }
 
     // Update torpedo cooldowns
     this._updateTorpedoCooldowns(dt);
+    // Local mirror of the server's ASW release cooldown (display gating only).
+    if (this._aswCooldown > 0) this._aswCooldown = Math.max(0, this._aswCooldown - dt);
 
     // Torpedo aim fan
     if (this.torpedoManager && this.localShip.ship) {
@@ -1173,6 +1280,10 @@ export class MultiplayerEngine {
         stats ? stats.range : 400
       );
     }
+
+    // Depth-charge aim indicator — close-range fan band (DD/CA) or target
+    // rectangle for the battleship air strike.
+    this._updateAswIndicator();
 
     // Update torpedo visuals (trails, fan arcs)
     if (this.torpedoManager) {
@@ -1272,6 +1383,8 @@ export class MultiplayerEngine {
     // HUD update
     if (this.onHudUpdate && this.localShip.ship) {
       const ship = this.localShip.ship;
+      const aswFit = getClassAsw(this.localShip.shipClass);
+      const aswTierCfg = aswFit ? getAswTier(aswFit.tier) : null;
       this.onHudUpdate({
         fps: Math.round(this._fps),
         hp: this.localShip.hp,
@@ -1287,6 +1400,11 @@ export class MultiplayerEngine {
           maxCooldown: ship.fireCooldown,
           isFront: t.isFront,
         })),
+        secondaryTurrets: ship.secondaryTurrets.map(t => ({
+          cooldown: t.cooldown,
+          maxCooldown: SECONDARY.cooldown,
+        })),
+        hasSecondary: ship.secondaryTurrets.length > 0,
         weaponMode: this.controls.weaponMode,
         torpedoTier: this.controls.torpedoTier,
         torpedoSpread: this.controls.torpedoSpread,
@@ -1301,6 +1419,15 @@ export class MultiplayerEngine {
         gear: this.controls.gear,
         skills: this.localShip.skl,
         squadron: this._squadronHud(),
+        hasAsw: !!aswTierCfg,
+        aswAir: !!(aswFit && aswFit.air),
+        aswCooldown: this._aswCooldown,
+        aswMaxCooldown: aswTierCfg ? aswTierCfg.cooldown : 0,
+        // Submarine dive state for the weapon-bar slot (B key indicator).
+        dive: this.localShip.shipClass === 'submarine' && ship ? {
+          target: !!ship.submerged,          // server-authoritative target state
+          transition: ship.diveTransition || 0,
+        } : null,
       });
     }
 
@@ -1386,6 +1513,68 @@ export class MultiplayerEngine {
     }
   }
 
+  // Predicted secondary-battery salvo (Q-switched side turrets). Mirrors
+  // _fireGuns: local prediction shells + one server fire message with
+  // mode='secondary' so the authoritative server fires from the same mounts.
+  _fireSecondaries(aimTarget, secondaryAimYaw) {
+    if (!this.localShip.ship) return;
+    const ship = this.localShip.ship;
+    let anyFired = false;
+
+    const skl = this.localShip.skl || {};
+    const precisionActive = (skl.ps && skl.ps.a > 0) || false;
+    const rapidFireActive = (skl.rf && skl.rf.a > 0) || false;
+    const spreadMult = precisionActive ? 0.7 : 1.0;
+    const cdMult = rapidFireActive ? 0.7 : 1.0;
+    const barrels = ship.secondaryTurrets[0].barrels.length;
+
+    for (const turret of ship.secondaryTurrets) {
+      if (turret.cooldown <= 0 && turretCanAim(turret, secondaryAimYaw)) {
+        if (this._localProjMgr) {
+          for (let b = 0; b < barrels; b++) {
+            const { origin, direction } = getTurretFireData(turret, this.localShip.heading, b);
+            const tdx = aimTarget.x - origin.x;
+            const tdz = aimTarget.z - origin.z;
+            const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+            const dir = applyCannonSpread(direction, tdist, this.localShip.shipClass, spreadMult);
+            this._localProjMgr.fire(origin, dir, SECONDARY.damage, 'player', SECONDARY.muzzleSpeed, SECONDARY.drag, 'secondary');
+          }
+        }
+        turret.cooldown = SECONDARY.cooldown * cdMult;
+        anyFired = true;
+      }
+    }
+    if (anyFired) {
+      this.inputSender.sendFire({ x: aimTarget.x, y: aimTarget.y, z: aimTarget.z, mode: 'secondary' });
+      this.audio.playFire(this.localShip.shipClass);
+    }
+  }
+
+  // Visual-only AA training in multiplayer: the server fires the flak, the
+  // local mounts just track the nearest hostile squadron from the snapshot so
+  // the barrels point where the shells come from. Team mode simplification:
+  // anything not owned by me is treated as hostile for the visual pass.
+  _updateAaVisualAim(dt) {
+    const ship = this.localShip?.ship;
+    if (!ship || !ship.aaMounts || ship.aaMounts.length === 0) return;
+    let best = null, bestD2 = Infinity;
+    for (const id in this._airVisuals) {
+      const e = this._airVisuals[id];
+      if (!e || !e.mesh) continue;
+      if (e.owner === this._myId) continue;
+      const p = e.mesh.position;
+      const dx = p.x - this.localShip.pos_x;
+      const dz = p.z - this.localShip.pos_z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; best = p; }
+    }
+    if (!best) return;
+    for (const m of ship.aaMounts) {
+      if (m.cooldown > 0) m.cooldown = Math.max(0, m.cooldown - dt);
+      aimAaMountAtPoint(m, this.localShip.heading, best, dt);
+    }
+  }
+
   _fireTorpedoes() {
     if (!this.localShip.ship) return;
     const ship = this.localShip.ship;
@@ -1410,6 +1599,71 @@ export class MultiplayerEngine {
       this._torpedoCooldowns[idx] = cd;
     }
     this.audio.playTorpedoLaunch();
+  }
+
+  // Depth-charge (深水炸弹) release — server-authoritative. The aim point is
+  // pre-clamped to the class band so the local indicator matches where the
+  // server will actually drop / strike (the server clamps again anyway).
+  // Destroyer/cruiser: close-range hull drop. Battleship: air strike (the
+  // server flies the plane and scatters the charges itself).
+  _fireDepthCharges(aimTarget) {
+    const fit = getClassAsw(this.localShip.shipClass);
+    const tierCfg = fit ? getAswTier(fit.tier) : null;
+    if (!fit || !tierCfg || !aimTarget) return;
+    const clamped = clampAswAim(
+      { x: this.localShip.pos_x, z: this.localShip.pos_z }, aimTarget, fit,
+    );
+    this.inputSender.sendAswFire(clamped);
+    this._aswCooldown = tierCfg.cooldown;
+    this.audio.playFire(this.localShip.shipClass);
+  }
+
+  // Refresh the depth-charge aim indicator from the crosshair aim point.
+  _updateAswIndicator() {
+    if (!this.aswIndicator || !this.localShip) return;
+    const fit = getClassAsw(this.localShip.shipClass);
+    const tierCfg = fit ? getAswTier(fit.tier) : null;
+    const active = this.controls.weaponMode === 'asw' && this.localShip.alive
+      && fit && tierCfg && this.playerView === 'ship' && this._lastAimTarget;
+    if (!active) {
+      this.aswIndicator.update(false, null, null, null, null, null, null);
+      return;
+    }
+    const shipPos = { x: this.localShip.pos_x, z: this.localShip.pos_z };
+    const aim = { x: this._lastAimTarget.x, z: this._lastAimTarget.z };
+    this.aswIndicator.update(
+      true, fit.air ? 'air' : 'drop', shipPos, aim,
+      clampAswAim(shipPos, aim, fit), fit, tierCfg,
+    );
+  }
+
+  // Render server-flown battleship ASW strike planes from the snapshot
+  // (`aswPlanes`: id/owner/x/z/h/alt). Mirrors _updateAircraftVisuals.
+  _updateAswPlaneVisuals(planes) {
+    if (!planes || !this.scene) return;
+    const activeIds = new Set();
+    for (const p of planes) {
+      activeIds.add(p.id);
+      let entry = this._aswPlanes.get(p.id);
+      if (!entry) {
+        const mesh = makeAswPlaneMesh(String(p.owner) === String(this._myId) ? 0x66ccff : 0xffa940);
+        this.scene.add(mesh);
+        entry = { mesh };
+        this._aswPlanes.set(p.id, entry);
+      }
+      entry.mesh.position.set(p.x, p.alt ?? 80, p.z);
+      entry.mesh.rotation.y = p.h ?? 0;
+    }
+    for (const [id, entry] of this._aswPlanes) {
+      if (!activeIds.has(id)) {
+        this.scene.remove(entry.mesh);
+        entry.mesh.traverse(child => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        });
+        this._aswPlanes.delete(id);
+      }
+    }
   }
 
   _updateTorpedoCooldowns(dt) {
@@ -1464,8 +1718,8 @@ export class MultiplayerEngine {
       maxHp: sq ? sq.maxHp : CARRIER.aircraftHp,
       altitude: sq ? sq.altitude : CARRIER.aircraftAltitude,
       maxAlt: CARRIER.aircraftMaxAlt, minAlt: CARRIER.aircraftCrashAlt,
-      torpedo: { ammo: tAmmo, maxAmmo: cfg.torpedo.ammo, cd: tCd, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo },
-      bomber: { ammo: bAmmo, maxAmmo: cfg.bomber.ammo, cd: bCd, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo },
+      torpedo: { ammo: tAmmo, maxAmmo: cfg.torpedo.ammo, cd: tCd, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo, autoPilot, autoPhase },
+      bomber: { ammo: bAmmo, maxAmmo: cfg.bomber.ammo, cd: bCd, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo, autoPilot, autoPhase },
     };
   }
 
@@ -1560,6 +1814,19 @@ export class MultiplayerEngine {
       }
       this._torpedoVisuals = {};
     }
+    // Drop ASW strike-plane meshes + hide the aim indicator; reset the local
+    // cooldown mirror so a new round starts ready to drop.
+    for (const entry of this._aswPlanes.values()) {
+      this.scene.remove(entry.mesh);
+      entry.mesh.traverse(child => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
+    }
+    this._aswPlanes = new Map();
+    this._aswCooldown = 0;
+    this._lastAimTarget = null;
+    if (this.aswIndicator) this.aswIndicator.update(false, null, null, null, null, null, null);
   }
 
   // Carrier: flip the local view + spawn a local visual squadron. The server

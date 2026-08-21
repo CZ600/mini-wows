@@ -1,21 +1,20 @@
 import math
 import numpy as np
-from game.config import TORPEDO_HIT_RADIUS, get_torpedo_stats, HOMING_TORPEDO
+from game.config import TORPEDO_HIT_RADIUS, get_torpedo_stats
 
 
 class ServerTorpedo:
     __slots__ = [
-        "torp_id", "owner", "tier", "damage", "homing", "heading",
+        "torp_id", "owner", "tier", "damage", "heading",
         "x", "z", "vx", "vz",
         "speed", "range", "distance", "alive",
     ]
 
-    def __init__(self, torp_id, owner, tier, damage, x, z, heading, speed, range_, homing=False):
+    def __init__(self, torp_id, owner, tier, damage, x, z, heading, speed, range_):
         self.torp_id = torp_id
         self.owner = owner
         self.tier = tier
         self.damage = damage
-        self.homing = homing
         self.heading = heading
         self.x = x
         self.z = z
@@ -48,15 +47,15 @@ class TorpedoManager:
         self.torpedoes = []
         self._next_id = 0
 
-    def fire(self, owner, tier, level, x, z, heading, count=1, spread="narrow", homing=False):
+    def fire(self, owner, tier, level, x, z, heading, count=1, spread="narrow", damage_mul=1.0):
         stats = get_torpedo_stats(tier, level)
         if not stats:
             return []
 
-        damage = (50 + tier * 20) * 3
-        # Homing torpedoes trade raw damage for tracking ability.
-        if homing:
-            damage = round(damage * HOMING_TORPEDO["damage_mul"])
+        # damage_mul scales the tier-formula hit damage — used by AIRCRAFT
+        # torpedo drops (CARRIER["air_torpedo_damage_mul"]); ship-launched
+        # torpedoes leave it at 1.
+        damage = round((50 + tier * 20) * 3 * damage_mul)
         angles = self._calc_spread(count, spread)
         created = []
 
@@ -65,7 +64,6 @@ class TorpedoManager:
             torp = ServerTorpedo(
                 self._next_id, owner, tier, damage,
                 x, z, angle, stats["speed"], stats["range"],
-                homing=homing,
             )
             self._next_id += 1
             self.torpedoes.append(torp)
@@ -83,41 +81,6 @@ class TorpedoManager:
 
     def update(self, dt, ships):
         events = []
-
-        # Homing: steer each homing torpedo toward its nearest enemy ship within
-        # acquire range before integrating position. Authoritative in multiplayer.
-        acquire2 = HOMING_TORPEDO["acquire_range"] ** 2
-        for t in self.torpedoes:
-            if not t.alive or not t.homing:
-                continue
-            best_d2 = acquire2
-            best_ship = None
-            for pid, s in ships.items():
-                if not s.alive or pid == t.owner:
-                    continue
-                # Skip friendlies in team mode
-                if s.team and t.owner in ships:
-                    owner_ship = ships.get(t.owner)
-                    if owner_ship and owner_ship.team == s.team:
-                        continue
-                dx = s.pos_x - t.x
-                dz = s.pos_z - t.z
-                d2 = dx * dx + dz * dz
-                if d2 < best_d2:
-                    best_d2 = d2
-                    best_ship = s
-            if best_ship is not None:
-                desired = math.atan2(best_ship.pos_x - t.x, best_ship.pos_z - t.z)
-                diff = desired - t.heading
-                while diff > math.pi:
-                    diff -= 2 * math.pi
-                while diff < -math.pi:
-                    diff += 2 * math.pi
-                max_step = HOMING_TORPEDO["turn_rate"] * dt
-                step = max(-max_step, min(max_step, diff))
-                t.heading += step
-                t.vx = math.sin(t.heading) * t.speed
-                t.vz = math.cos(t.heading) * t.speed
 
         for t in self.torpedoes:
             if t.alive:

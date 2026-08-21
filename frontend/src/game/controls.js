@@ -53,9 +53,12 @@ export class Controls {
     this.torpedoSpread = 'narrow';
     this._availableTiers = [1, 2, 3];
     // ASW (anti-submarine depth charges) capability for the current ship. Set
-    // from the resolved class config; the Q-key weapon switch is a no-op when
+    // from the resolved class config; the 6-key weapon select skips it when
     // the ship has no ASW fit (e.g. carrier / submarine).
     this._hasAsw = false;
+    // Secondary battery capability (cruiser / battleship side turrets), bound
+    // to the 5 key.
+    this._hasSecondary = false;
 
     this._onKeyDown = (e) => {
       if (e.key == null) return;
@@ -79,15 +82,6 @@ export class Controls {
         } else if (k === 'h' && !e.repeat) {
           this.skillActivations.push('precision');
           e.preventDefault();
-        } else if (k === 'q' && !e.repeat && !this.scoped) {
-          // ASW (depth-charge) weapon toggle. Only ships with an ASW fit can
-          // select this mode; pressing Q again returns to the main gun so the
-          // player can swap back quickly. (While scoped, Q instead trims the
-          // scope height — see the next branch.)
-          if (this._hasAsw) {
-            this.weaponMode = this.weaponMode === 'asw' ? 'gun' : 'asw';
-            e.preventDefault();
-          }
         } else if (k === 'q' && !e.repeat && this.scoped) {
           const step = this.heightOffset > 0
             ? this.heightOffset * 0.25 + 3
@@ -152,10 +146,26 @@ export class Controls {
             }
           }
           e.preventDefault();
-        } else if ((k === '5' || k === '6') && !e.repeat) {
-          // Carrier air-group launch / switch. 5 = torpedo bombers (鱼雷机),
-          // 6 = dive bombers (轰炸机). Ignored by non-carriers in the engine.
-          this.squadronLaunchRequests.push(k === '5' ? 'torpedo' : 'bomber');
+        } else if (k === '5' && !e.repeat) {
+          // 5 = secondary battery (副炮) on cruisers/battleships. Ships that
+          // carry none fall through to the carrier torpedo-bomber launch —
+          // carriers are exactly the ships with no secondaries, so the two
+          // roles never collide on one hull.
+          if (this._hasSecondary) {
+            this.weaponMode = 'secondary';
+          } else {
+            this.squadronLaunchRequests.push('torpedo');
+          }
+          e.preventDefault();
+        } else if (k === '6' && !e.repeat) {
+          // 6 = depth charges (深水炸弹) on destroyers/cruisers (close drop)
+          // and battleships (air strike). Ships that carry none fall through
+          // to the carrier dive-bomber launch.
+          if (this._hasAsw) {
+            this.weaponMode = 'asw';
+          } else {
+            this.squadronLaunchRequests.push('bomber');
+          }
           e.preventDefault();
         } else if (k === 'y' && !e.repeat) {
           // Carrier squadron auto-pilot toggle (auto-attack). Ignored by
@@ -289,6 +299,17 @@ export class Controls {
 
   get hasAsw() {
     return this._hasAsw;
+  }
+
+  setSecondaryCapability(hasSecondary) {
+    this._hasSecondary = !!hasSecondary;
+    if (!this._hasSecondary && this.weaponMode === 'secondary') {
+      this.weaponMode = 'gun';
+    }
+  }
+
+  get hasSecondary() {
+    return this._hasSecondary;
   }
 
   setAudioManager(audio) {

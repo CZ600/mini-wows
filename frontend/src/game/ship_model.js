@@ -13,7 +13,7 @@
 
 import * as THREE from 'three';
 import { applyHalfLambert } from './scene.js';
-import { getClassAa } from './config.js';
+import { getClassAa, getClassSecondary } from './config.js';
 
 // 阵营文字标记用的船种中文名。
 export const CLASS_NAMES = {
@@ -573,6 +573,36 @@ const YAW_RANGE_BRIDGE = 2.6;
 
 export function buildTurretDefs(cfg, shipClass) {
   const defs = [];
+
+  if (shipClass === 'carrier') {
+    // 航母自卫炮：小口径炮塔贴飞行甲板两舷边缘布置 —— 艏组占艏段、
+    // 艉组占艉段、左右交替，甲板中线完全留空给舰载机滑跑（真实航母的
+    // 5 英寸炮也都挂在甲板边 gallery 上，绝不占中线）。站位避开防空炮
+    // 阵列的 z 带（[-0.215L, 0.31L]，见 buildAaMounts 的舷侧分支）与
+    // 右舷岛。炮座高度对齐飞行甲板顶面：甲板顶 = deckY + 0.1 + 0.4
+    // （buildCarrierSuperstructure），炮塔落位基准是 deckYAt + 0.15 + y，
+    // 故 y = 0.35 —— 超射座（pedestal）正好藏进飞行甲板厚度里，只在
+    // 甲板面与炮室之间露出一段炮座环。
+    const size = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
+    const edgeX = (cfg.width * 0.98) / 2 - size * 0.5;
+    const lay = (n, zNear, zFar, firstSide) => {
+      for (let i = 0; i < n; i++) {
+        const s = n === 1 ? 0.5 : i / (n - 1);
+        defs.push({
+          z: zNear + (zFar - zNear) * s,
+          x: ((i % 2 === 0 ? 1 : -1) * firstSide) * edgeX,
+          y: 0.35,
+          yawCenter: zNear > 0 ? 0 : Math.PI,
+          yawRange: YAW_RANGE_BRIDGE,
+          isFront: zNear > 0,
+        });
+      }
+    };
+    lay(cfg.frontTurrets, cfg.length * 0.42, cfg.length * 0.33, 1);
+    lay(cfg.backTurrets, -cfg.length * 0.28, -cfg.length * 0.42, -1);
+    return defs;
+  }
+
   const yawRange = cfg.hasBridge ? YAW_RANGE_BRIDGE : YAW_RANGE_FULL;
   const turretMul = cfg.turretMul || 1.0;
   const barrels = cfg.barrels || 1;
@@ -585,8 +615,8 @@ export function buildTurretDefs(cfg, shipClass) {
   // 炮室后角会切进舰桥（穿模）。
   const sweepR = Math.sqrt((housingWidth / 2) ** 2 + (turretSize * TURRET_HOUSING_LEN_MUL / 2) ** 2);
   // 舰桥（干舷建筑）实际半长占船长的比例 —— 必须与 buildSurfaceSuperstructure
-  // 里的 bl 分段保持一致（战列 0.30/2、驱逐 0.25/2、其余 0.28/2）。
-  const deckHalfFrac = shipClass === 'battleship' ? 0.15 : shipClass === 'destroyer' ? 0.125 : 0.14;
+  // 里的 bl 分段保持一致（战列 0.30/2、驱逐 0.20/2、其余 0.22/2）。
+  const deckHalfFrac = shipClass === 'battleship' ? 0.15 : shipClass === 'destroyer' ? 0.10 : 0.11;
 
   let frontCenter = cfg.length * 0.2;
   let backCenter = -cfg.length * 0.2;
@@ -682,11 +712,12 @@ function addGlassBand(parent, mats, w, h, l, yAbs) {
 function buildSurfaceSuperstructure(cfg, deckY, mats, turretTopZ, shipClass, deckYAt) {
   const isBB = shipClass === 'battleship';
   const isDD = shipClass === 'destroyer';
-  // 巡洋/驱逐舰的舰桥比例适当放大（炮塔缩小后腾出的甲板空间给建筑），
-  // 烟囱/桅杆/救生艇等一切细节都从这三个量派生，自动跟随。
+  // 巡洋/驱逐舰的舰桥长度比例压低（配合 lengthMul 拉长的船体）：舰桥取
+  // 绝对值更短、船长更长，侧影上炮塔与舰桥合计占船长比例明显下降，
+  // 整船更修长。烟囱/桅杆/救生艇等一切细节都从这三个量派生，自动跟随。
   const bw = cfg.width * (isBB ? 0.52 : isDD ? 0.44 : 0.50);
   const bh = cfg.height * (isBB ? 1.05 : isDD ? 0.88 : 1.08);
-  const bl = cfg.length * (isBB ? 0.30 : isDD ? 0.25 : 0.28);
+  const bl = cfg.length * (isBB ? 0.30 : isDD ? 0.20 : 0.22);
   const parts = [];
 
   // 低干舷建筑基底。
@@ -936,11 +967,13 @@ function buildCarrierSuperstructure(cfg, deckY, mats) {
   flightDeck.position.set(0, deckY + fdH / 2 + 0.1, 0);
   parts.push(flightDeck);
 
-  // 右舷岛。
+  // 右舷岛：紧凑矮岛 —— 高度约为主炮塔量级（cfg.height 的 0.8 倍），
+  // 宽/长只占甲板的一小条。航母的舰桥只是航海/航空管制舱，绝不像战列
+  // 舰宝塔那样高耸（过高的岛会吃掉飞行甲板的可用宽度与观感）。
   const islandX = fdW * 0.32;
-  const islandW = cfg.width * 0.22;
-  const islandL = cfg.length * 0.18;
-  const islandH = cfg.height * 1.6;
+  const islandW = cfg.width * 0.16;
+  const islandL = cfg.length * 0.13;
+  const islandH = cfg.height * 0.8;
 
   const island = new THREE.Mesh(new THREE.BoxGeometry(islandW, islandH, islandL), mats.super);
   island.position.set(islandX, deckY + fdH + islandH / 2 + 0.1, -cfg.length * 0.05);
@@ -1156,54 +1189,153 @@ export function buildShipModel(cfg, shipClass) {
     });
   }
 
-  // 防空炮座（装饰）。
-  buildAaMounts(group, cfg, shipClass, deckYAt, mats, hullOpts);
+  // 副炮塔（战列/巡洋侧舷）与防空炮塔（船尾/舷侧阵列）。
+  const secondaryTurrets = buildSecondaryMounts(group, cfg, shipClass, deckYAt, mats, hullOpts);
+  const aaMounts = buildAaMounts(group, cfg, shipClass, deckYAt, mats, hullOpts);
 
-  return { group, mats, turrets, deckY, hasBridge, scopedCameraHeight, turretSize };
+  return { group, mats, turrets, secondaryTurrets, aaMounts, deckY, hasBridge, scopedCameraHeight, turretSize };
 }
 
-// 沿两舷散布小口径防空炮。railX 依据船体实际半宽内收，避免在收窄的
-// 艏/艉段悬空。
+// ============================================================================
+// 副炮（side battery）与防空炮（AA）炮塔阵列
+// ============================================================================
+
+// 副炮射界：炮塔中线朝舷外（±90°），左右各 ~120°——艏艉正前方各留 ~30°
+// 盲区，与真实副炮的背板遮挡射界一致。
+const SECONDARY_YAW_RANGE = 2.1;
+
+// 沿舰桥前后的可用甲板段均匀布 n 个站位（把 [艉缘, -bridgeEdge] 和
+// [bridgeEdge, 艏缘] 两段展开成一条连续线段均匀取样）。返回 z 数组。
+function foreAftStations(n, bridgeEdge, maxZ) {
+  const out = [];
+  const totalLen = 2 * (maxZ - bridgeEdge);
+  for (let i = 0; i < n; i++) {
+    const s = n === 1 ? 0.5 : i / (n - 1);
+    const u = s * totalLen;
+    out.push(u <= maxZ - bridgeEdge ? -maxZ + u : bridgeEdge + (u - (maxZ - bridgeEdge)));
+  }
+  return out;
+}
+
+// 该站位的舷侧安全半宽（炮塔不得悬出收窄的艏/艉段甲板边缘）。
+function beamRailX(z, cfg, hullOpts, keepOut) {
+  const halfL = cfg.length / 2;
+  const stationT = Math.max(0, Math.min(1, (z + halfL) / cfg.length));
+  const localHalf = hullHalfBeamFraction(stationT, hullOpts) * cfg.width * 0.5;
+  return Math.min(cfg.width * 0.36, localHalf - keepOut);
+}
+
+// 副炮阵列：战列/巡洋沿两舷布置的小口径双联装炮塔（主炮的伤害补充），
+// 布置在舰桥前后的侧舷甲板上，每座都有与主炮同构的旋回/俯仰机构。
+function buildSecondaryMounts(group, cfg, shipClass, deckYAt, mats, hullOpts) {
+  const fit = getClassSecondary(shipClass);
+  if (!fit || fit.mounts <= 0) return [];
+  const barrels = fit.barrels || 2;
+  const mainTurretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
+  const size = mainTurretSize * 0.55;
+  const barrelLen = size * 1.9;
+  const barrelGap = size * 0.55;
+  const housingWidth = turretHousingWidth(size, barrels);
+  const sweep = Math.sqrt((housingWidth / 2) ** 2 + (size * TURRET_HOUSING_LEN_MUL / 2) ** 2);
+
+  // 舰桥前后侧舷段（与 buildSurfaceSuperstructure 的 bl 一致）。
+  const blFrac = shipClass === 'battleship' ? 0.30 : 0.22;
+  const bridgeEdge = cfg.length * blFrac / 2 + sweep + 0.15;
+  const maxZ = cfg.length * 0.37;
+  const perSide = Math.ceil(fit.mounts / 2);
+
+  const turrets = [];
+  for (const sideSign of [1, -1]) {
+    for (const z of foreAftStations(perSide, bridgeEdge, maxZ)) {
+      const railX = beamRailX(z, cfg, hullOpts, sweep * 0.8);
+      if (railX < sweep * 0.5) continue; // 站位太窄（收窄的艏/艉），跳过
+      const t = buildTurret(mats, size, barrels, barrelLen, barrelGap);
+      t.group.position.set(sideSign * railX, deckYAt(z) + 0.12, z);
+      group.add(t.group);
+      turrets.push({
+        group: t.group,
+        body: t.body,
+        barrelPivot: t.barrelPivot,
+        barrels: t.barrels,
+        barrelLen: t.barrelLen,
+        barrelGap: t.barrelGap,
+        currentYaw: sideSign * Math.PI / 2,
+        currentPitch: 0,
+        cooldown: 0,
+        yawCenter: sideSign * Math.PI / 2,
+        yawRange: SECONDARY_YAW_RANGE,
+        side: sideSign,
+      });
+    }
+  }
+  return turrets;
+}
+
+// 防空炮阵列：全回旋小口径双联装炮塔（自动点防御，玩家不可操控）。
+// 战列/巡洋的侧舷甲板让给了副炮 → 防空集中到船尾阵形（舰桥后缘到艉部，
+// 两舷交错）；驱逐/航母沿用舷侧散布（艏段到艉段交错）。
 function buildAaMounts(group, cfg, shipClass, deckYAt, mats, hullOpts) {
   const aa = getClassAa(shipClass);
-  if (!aa || aa.mounts <= 0) return;
+  if (!aa || aa.mounts <= 0) return [];
   const mainTurretSize = (0.8 + cfg.width * 0.10) * (cfg.turretMul || 1.0);
-  const mountSize = Math.max(0.35, mainTurretSize * 0.32);
+  const size = Math.max(0.35, mainTurretSize * 0.34);
+  const barrels = 2;
+  const barrelLen = size * 2.2;
+  const barrelGap = size * 0.42;
+  const sweep = size * 1.15;
   const halfL = cfg.length / 2;
-  const barrelLen = mountSize * 1.1;
-  for (let i = 0; i < aa.mounts; i++) {
-    const side = (i % 2 === 0) ? 1 : -1;
-    const t = aa.mounts === 1 ? 0.5 : i / (aa.mounts - 1);
-    const z = halfL * 0.62 - t * halfL * 1.05;
-    // 该站的船体半宽（t 参数以艉→艏方向与放样一致）。
-    const stationT = (z + halfL) / cfg.length;
-    const localHalf = hullHalfBeamFraction(stationT, hullOpts) * cfg.width * 0.5;
-    const railX = Math.min(cfg.width * 0.34, localHalf - mountSize * 0.75);
+  const sternBattery = shipClass === 'battleship' || shipClass === 'cruiser';
 
-    const mount = new THREE.Group();
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(mountSize * 0.5, mountSize * 0.6, mountSize * 0.3, 8),
-      mats.turret,
-    );
-    mount.add(base);
-    const housing = new THREE.Mesh(
-      new THREE.BoxGeometry(mountSize, mountSize * 0.8, mountSize),
-      mats.turret,
-    );
-    housing.position.y = mountSize * 0.4;
-    mount.add(housing);
-    for (let b = 0; b < 2; b++) {
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05, 0.06, barrelLen, 6),
-        mats.barrel,
-      );
-      barrel.rotation.x = Math.PI / 2 - 0.6;
-      barrel.position.set((b - 0.5) * mountSize * 0.35, mountSize * 0.4, barrelLen * 0.35);
-      housing.add(barrel);
+  const stations = [];
+  if (sternBattery) {
+    // 船尾阵列：从舰桥后缘向艉封板推进，两舷交错。
+    const blFrac = shipClass === 'battleship' ? 0.30 : 0.22;
+    const bridgeEdge = cfg.length * blFrac / 2 + size + 0.15;
+    for (let i = 0; i < aa.mounts; i++) {
+      const t = aa.mounts === 1 ? 0.5 : i / (aa.mounts - 1);
+      stations.push({ z: -bridgeEdge + (bridgeEdge - halfL * 0.90) * t, side: i % 2 === 0 ? 1 : -1 });
     }
-    mount.position.set(side * railX, deckYAt(z) + 0.15, z);
-    group.add(mount);
+  } else {
+    // 舷侧阵列（驱逐/航母）：艏段到艉段交错散布。
+    for (let i = 0; i < aa.mounts; i++) {
+      const t = aa.mounts === 1 ? 0.5 : i / (aa.mounts - 1);
+      stations.push({ z: halfL * 0.62 - t * halfL * 1.05, side: i % 2 === 0 ? 1 : -1 });
+    }
+    // 航母：右舷岛占 z∈[-0.115L, 0.015L]（见 buildCarrierSuperstructure），
+    // 落进该段的右舷站位翻到左舷，避免防空炮整座埋进岛里。
+    if (shipClass === 'carrier') {
+      const islLo = -cfg.length * 0.115, islHi = cfg.length * 0.015;
+      for (const st of stations) {
+        if (st.side === 1 && st.z >= islLo && st.z <= islHi) st.side = -1;
+      }
+    }
   }
+
+  const mounts = [];
+  // 航母的飞行甲板盖住船体甲板：防空炮座抬到飞行甲板之上才可见。
+  const mountYOff = shipClass === 'carrier' ? 0.62 : 0.1;
+  for (const { z, side } of stations) {
+    const railX = beamRailX(z, cfg, hullOpts, sweep * 0.8);
+    if (railX < sweep * 0.5) continue;
+    const t = buildTurret(mats, size, barrels, barrelLen, barrelGap);
+    t.group.position.set(side * railX, deckYAt(z) + mountYOff, z);
+    group.add(t.group);
+    mounts.push({
+      group: t.group,
+      body: t.body,
+      barrelPivot: t.barrelPivot,
+      barrels: t.barrels,
+      barrelLen: t.barrelLen,
+      barrelGap: t.barrelGap,
+      currentYaw: 0,
+      currentPitch: 0,
+      cooldown: 0,
+      yawCenter: 0,
+      yawRange: Math.PI,   // 全回旋
+      side,
+    });
+  }
+  return mounts;
 }
 
 // ============================================================================

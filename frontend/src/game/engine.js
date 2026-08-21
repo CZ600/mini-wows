@@ -3,7 +3,7 @@ import { createScene, createRenderer, createCamera } from './scene.js';
 import { createWater } from './water.js';
 import { Terrain } from './terrain.js';
 import { Ship, LEVEL_CONFIG, CLASS_CONFIG, getClassConfig } from './ship.js';
-import { getTurretFireData, turretCanAim, applyCannonSpread, aimTurretsAtPoint } from './turret.js';
+import { getTurretFireData, turretCanAim, applyCannonSpread, aimTurretsAtPoint, aimTurretList, aimAaMountAtPoint } from './turret.js';
 import { ProjectileManager } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { EnemyManager, ENEMY_SCALE } from './enemy.js';
@@ -16,8 +16,10 @@ import { Squadron, CarrierAirWing, SquadronManager } from './aircraft.js';
 import { CARRIER, getAirGroupConfig } from './config.js';
 import {
   getClassAa, getAaTier, AA_DRAG,
-  getClassAsw, getAswTier, ASW_MUZZLE_SPEED, ASW_DRAG, GRAVITY as CFG_GRAVITY,
+  getClassAsw, getAswTier, clampAswAim, ASW_MUZZLE_SPEED, ASW_DRAG, ASW_AIR, GRAVITY as CFG_GRAVITY,
+  SECONDARY,
 } from './config.js';
+import { AswAimIndicator, AswStrikePlane } from './asw.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -80,13 +82,14 @@ export class GameEngine {
     // Carrier patrol path (M-key map). null = manual control; otherwise the
     // carrier autopilots along this closed waypoint loop.
     this.carrierPatrol = null;
-    // AA / ASW state. _aaCooldowns is per-mount flak cooldowns for the player's
-    // ship; _aswCooldown is the player's depth-charge release cooldown.
+    // AA / ASW state. AA mount cooldowns live on ship.aaMounts (ticked in
+    // Ship.update); _aswCooldown is the player's depth-charge release cooldown.
     // _enemySquadrons holds hostile squadrons (enemy carriers' wings) that the
-    // player's AA + flak-hit detection target.
-    this._aaCooldowns = null;
+    // player's AA + flak-hit detection target. _aswStrikes holds the player's
+    // in-flight battleship ASW strike planes (solo/team local simulation).
     this._aswCooldown = 0;
     this._enemySquadrons = [];
+    this._aswStrikes = [];
   }
 
   // The object the camera follows + input routes to. Ship or the active
@@ -180,6 +183,7 @@ export class GameEngine {
     this.water = createWater(this.scene);
     this.terrain = new Terrain(this.scene, null, null);
     this._minimapTerrain = this.terrain.generateMinimapImage();
+    this.aswIndicator = new AswAimIndicator(this.scene);
     this.audio = new AudioManager();
     this.controls = new Controls(canvas);
     this.controls.setAudioManager(this.audio);
@@ -274,8 +278,23 @@ export class GameEngine {
       get heading() { return ship.heading; },
       get speed() { return ship.speed; },
       get alive() { return ship.alive; },
+      // Exposed so AI fire-targets can recognise a submarine player (ASW ships
+      // switch from guns to depth charges against it — see enemy.js).
+      get shipClass() { return ship.shipClass; },
       mesh: ship.mesh,
       ref: ship,
+    };
+  }
+
+  // Solo-mode player position for the enemy manager: live x/z plus the ship
+  // class, so ASW-fitted enemies can tell when they are hunting the player's
+  // submarine (team mode reads the same info off fireTarget.ref).
+  _soloPlayerPos() {
+    const pos = this.ship.position;
+    return {
+      get x() { return pos.x; },
+      get z() { return pos.z; },
+      shipClass: this.ship.shipClass,
     };
   }
 
@@ -518,6 +537,8 @@ export class GameEngine {
     for (const u of this.teamUnits) {
       if (u.alive && u.hp <= 0) {
         u.alive = false;
+        // Dispose in-flight ASW strike planes before the unit stops ticking.
+        if (u.retire) u.retire();
         this.scene.remove(u.mesh);
         this.enemiesDestroyed++;
         const pos = u.mesh.position.clone();
@@ -730,6 +751,8 @@ export class GameEngine {
     this._updateAaDefense(dt);
     if (this._aswCooldown > 0) this._aswCooldown = Math.max(0, this._aswCooldown - dt);
     this._refreshAswTargets();
+    this._updateAswStrikes(dt);
+    this._updateAswIndicator(this._lastAimTarget);
 
     this.projectileManager.update(dt, this.ship, this.reds, this._collectAllSquadrons());
     if (this.torpedoManager) {
@@ -758,6 +781,9 @@ export class GameEngine {
     }
     // Enemy strike aircraft (the AA target) — same as the solo loop.
     this._updateEnemySquadrons(dt);
+    // Team AA: reds flak the player's carrier squadrons, wingmen flak the
+    // enemy strike planes (both were missing from this loop before).
+    this._updateTeamAaDefense(dt);
 
     // Central friendly-fire / cross-faction damage resolution.
     this._applyTeamDamage();
@@ -779,6 +805,8 @@ export class GameEngine {
     this._checkTeamEnd();
 
     if (this.onHudUpdate) {
+      const aswFit = getClassAsw(this.shipClass);
+      const aswTierCfg = aswFit ? getAswTier(aswFit.tier) : null;
       const friendliesAlive = (this.ship && this.ship.alive ? 1 : 0) +
         this.friendlies.filter(u => u && (u.isWingman || u instanceof FriendlyAIShip) && u.alive).length;
       this.onHudUpdate({
@@ -796,6 +824,11 @@ export class GameEngine {
           maxCooldown: this.ship.fireCooldown,
           isFront: t.isFront,
         })),
+        secondaryTurrets: this.ship.secondaryTurrets.map(t => ({
+          cooldown: t.cooldown,
+          maxCooldown: SECONDARY.cooldown,
+        })),
+        hasSecondary: this.ship.secondaryTurrets.length > 0,
         torpedoTubes: this._torpedoCooldowns.map((cd, i) => ({
           index: i, cooldown: cd,
           side: this.ship.torpedoTubes[i]?.side || 'port', ready: cd <= 0,
@@ -806,6 +839,15 @@ export class GameEngine {
         gear: this.controls.gear,
         skills: this.skills.toSnapshot(),
         squadron: this._squadronHud(),
+        hasAsw: !!aswTierCfg,
+        aswAir: !!(aswFit && aswFit.air),
+        aswCooldown: this._aswCooldown,
+        aswMaxCooldown: aswTierCfg ? aswTierCfg.cooldown : 0,
+        // Submarine dive state for the weapon-bar slot (B key indicator).
+        dive: this.shipClass === 'submarine' && this.ship ? {
+          target: !!this.ship.submerged,          // 目标状态（true=要下潜）
+          transition: this.ship.diveTransition,   // 0=水面 .. 1=完全潜没
+        } : null,
         // Team-specific.
         mode: 'team',
         friendliesAlive,
@@ -855,10 +897,20 @@ export class GameEngine {
   // and feel are identical; only the bookkeeping (level/score) is omitted.
   _teamPlayerFire(dt) {
     const aimTarget = this._findAimTargetTeam();
+    this._lastAimTarget = aimTarget;
 
     let currentAimYaw = 0;
     if (this.ship.turrets.length > 0) {
       currentAimYaw = aimTurretsAtPoint(this.ship, aimTarget, dt) ?? 0;
+    }
+
+    // Secondary battery training mirrors the solo flow.
+    let secondaryAimYaw = 0;
+    if (this.ship.secondaryTurrets.length > 0 && this.controls.weaponMode === 'secondary') {
+      secondaryAimYaw = aimTurretList(
+        this.ship.secondaryTurrets, this.ship.mesh, this.ship.heading, aimTarget, dt,
+        SECONDARY.muzzleSpeed, SECONDARY.drag, Math.PI * 1.5,
+      ) ?? 0;
     }
 
     if (this.playerView === 'ship' && this.controls.consumeFire()) {
@@ -866,6 +918,29 @@ export class GameEngine {
         this._fireTorpedoes();
       } else if (this.controls.weaponMode === 'asw') {
         this._fireDepthCharges(aimTarget);
+      } else if (this.controls.weaponMode === 'secondary' && this.ship.secondaryTurrets.length > 0) {
+        let anyFired = false;
+        const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
+        const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
+        const barrels = this.ship.secondaryTurrets[0].barrels.length;
+        for (const turret of this.ship.secondaryTurrets) {
+          if (turret.cooldown <= 0 && turretCanAim(turret, secondaryAimYaw)) {
+            for (let b = 0; b < barrels; b++) {
+              const { origin, direction } = getTurretFireData(turret, this.ship.heading, b);
+              const tdx = aimTarget.x - origin.x;
+              const tdz = aimTarget.z - origin.z;
+              const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+              this.projectileManager.fire(
+                origin,
+                applyCannonSpread(direction, tdist, this.shipClass, spreadMult),
+                SECONDARY.damage, 'player', SECONDARY.muzzleSpeed, SECONDARY.drag, 'secondary',
+              );
+            }
+            turret.cooldown = SECONDARY.cooldown * cdMult;
+            anyFired = true;
+          }
+        }
+        if (anyFired) this.audio.playFire(this.shipClass);
       } else if (!this.ship.fullySubmerged) {
         // Submerged submarines cannot fire their deck gun (it's underwater).
         let anyFired = false;
@@ -927,6 +1002,7 @@ export class GameEngine {
     if (!this.shipClass || this.level < 4) {
       this.controls.setTorpedoCapabilities({ availableTiers: [] });
       this.controls.setAswCapability(false);
+      this.controls.setSecondaryCapability(false);
       return;
     }
     const cc = CLASS_CONFIG[this.shipClass]?.[this.level];
@@ -934,9 +1010,11 @@ export class GameEngine {
       this.controls.setTorpedoCapabilities({ availableTiers: cc.torpedoTiers });
     }
     // ASW availability is per-class (not per-level): a ship can lob depth
-    // charges iff its class has an ASW fit. AA needs no capability flag (it's
-    // automatic point-defense).
+    // charges iff its class has an ASW fit. Secondaries likewise (cruiser /
+    // battleship side batteries). AA needs no capability flag (it's automatic
+    // point-defense).
     this.controls.setAswCapability(!!getClassAsw(this.shipClass));
+    this.controls.setSecondaryCapability(!!(this.ship && this.ship.secondaryTurrets.length > 0));
   }
 
   _findSafeSpawn() {
@@ -1301,6 +1379,9 @@ export class GameEngine {
         this.controls.viewMode = 'ship';
         if (this.onSquadronCrash) this.onSquadronCrash(this.airWing.activeType);
       }
+      // A squadron shot down by enemy AA re-launches from the carrier on a
+      // timer (crashes still need a manual T).
+      this._updateSquadronRespawn(dt);
       if (this.playerView === 'squadron') {
         this.airWing.updateGuides();
         this._updateSquadronFire();
@@ -1313,7 +1394,7 @@ export class GameEngine {
     if (!this.ship.alive) {
       this.audio.updateEngineBySpeed(0, this.ship.maxSpeed);
       this.projectileManager.update(dt, this.ship, this.enemyManager.enemies);
-      this.enemyManager.update(dt, this.ship.position, this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
+      this.enemyManager.update(dt, this._soloPlayerPos(), this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
       this.renderer.render(this.scene, this.camera);
       if (!this._gameOverFired && this.onGameOver) {
         this._gameOverFired = true;
@@ -1335,11 +1416,52 @@ export class GameEngine {
       currentAimYaw = aimTurretsAtPoint(this.ship, aimTarget, dt) ?? 0;
     }
 
+    // Secondary battery: only trains while the player has it selected (the
+    // side turrets hold their last bearing otherwise). Small mounts slew
+    // faster than the main battery.
+    let secondaryAimYaw = 0;
+    if (this.ship.secondaryTurrets.length > 0) {
+      if (this.controls.weaponMode === 'secondary') {
+        secondaryAimYaw = aimTurretList(
+          this.ship.secondaryTurrets, this.ship.mesh, this.ship.heading, aimTarget, dt,
+          SECONDARY.muzzleSpeed, SECONDARY.drag, Math.PI * 1.5,
+        ) ?? 0;
+      }
+    }
+
     if (this.playerView === 'ship' && this.controls.consumeFire()) {
       if (this.controls.weaponMode === 'torpedo' && this.ship.torpedoTubes.length > 0) {
         this._fireTorpedoes();
       } else if (this.controls.weaponMode === 'asw') {
         this._fireDepthCharges(aimTarget);
+      } else if (this.controls.weaponMode === 'secondary' && this.ship.secondaryTurrets.length > 0) {
+        // Secondary battery salvo: each side turret fires on its own cooldown,
+        // one shell per barrel from that turret's own muzzles (same structure
+        // as the main battery, smaller calibre ballistics).
+        let anyFired = false;
+        const spreadMult = this.skills.isActive('precision') ? 0.7 : 1.0;
+        const cdMult = this.skills.isActive('rapid_fire') ? 0.7 : 1.0;
+        const barrels = this.ship.secondaryTurrets[0].barrels.length;
+        for (const turret of this.ship.secondaryTurrets) {
+          if (turret.cooldown <= 0 && turretCanAim(turret, secondaryAimYaw)) {
+            for (let b = 0; b < barrels; b++) {
+              const { origin, direction } = getTurretFireData(turret, this.ship.heading, b);
+              const tdx = aimTarget.x - origin.x;
+              const tdz = aimTarget.z - origin.z;
+              const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+              this.projectileManager.fire(
+                origin,
+                applyCannonSpread(direction, tdist, this.shipClass, spreadMult),
+                SECONDARY.damage, 'player', SECONDARY.muzzleSpeed, SECONDARY.drag, 'secondary',
+              );
+            }
+            turret.cooldown = SECONDARY.cooldown * cdMult;
+            anyFired = true;
+          }
+        }
+        if (anyFired) {
+          this.audio.playFire(this.shipClass);
+        }
       } else if (!this.ship.fullySubmerged) {
         // Submerged submarines cannot fire their deck gun (it's underwater).
         let anyFired = false;
@@ -1374,6 +1496,8 @@ export class GameEngine {
     this._updateAaDefense(dt);
     if (this._aswCooldown > 0) this._aswCooldown = Math.max(0, this._aswCooldown - dt);
     this._refreshAswTargets();
+    this._updateAswStrikes(dt);
+    this._updateAswIndicator(aimTarget);
 
     this.projectileManager.update(dt, this.ship, this.enemyManager.enemies, this._collectAllSquadrons());
     if (this.torpedoManager) {
@@ -1395,7 +1519,11 @@ export class GameEngine {
       );
     }
     this._updateTorpedoCooldowns(dt);
-    this.enemyManager.update(dt, this.ship.position, this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
+    this.enemyManager.update(dt, this._soloPlayerPos(), this.ship.heading, this.ship.speed, this.projectileManager, this.camera, this.torpedoManager);
+    // Enemy ships fight back against the player's aircraft: every red ship's AA
+    // battery auto-targets the nearest friendly squadron in range (solo mode
+    // only — multiplayer AA is server-authoritative).
+    this._updateEnemyAaDefense(dt);
     // Enemy strike aircraft (the AA target): spawn waves that fly in, bomb the
     // player, and leave — so AA + flak hit detection have something to shoot.
     this._updateEnemySquadrons(dt);
@@ -1432,6 +1560,8 @@ export class GameEngine {
     }
 
     if (this.onHudUpdate) {
+      const aswFit = getClassAsw(this.shipClass);
+      const aswTierCfg = aswFit ? getAswTier(aswFit.tier) : null;
       this.onHudUpdate({
         fps: Math.round(this._fps),
         hp: this.ship.hp,
@@ -1446,6 +1576,11 @@ export class GameEngine {
           maxCooldown: this.ship.fireCooldown,
           isFront: t.isFront,
         })),
+        secondaryTurrets: this.ship.secondaryTurrets.map(t => ({
+          cooldown: t.cooldown,
+          maxCooldown: SECONDARY.cooldown,
+        })),
+        hasSecondary: this.ship.secondaryTurrets.length > 0,
         currentThreshold: LEVEL_THRESHOLDS[this.level - 1] || 0,
         nextThreshold: this.level < LEVEL_THRESHOLDS.length ? LEVEL_THRESHOLDS[this.level] : null,
         weaponMode: this.controls.weaponMode,
@@ -1463,6 +1598,15 @@ export class GameEngine {
         gear: this.controls.gear,
         skills: this.skills.toSnapshot(),
         squadron: this._squadronHud(),
+        hasAsw: !!aswTierCfg,
+        aswAir: !!(aswFit && aswFit.air),
+        aswCooldown: this._aswCooldown,
+        aswMaxCooldown: aswTierCfg ? aswTierCfg.cooldown : 0,
+        // Submarine dive state for the weapon-bar slot (B key indicator).
+        dive: this.shipClass === 'submarine' && this.ship ? {
+          target: !!this.ship.submerged,          // 目标状态（true=要下潜）
+          transition: this.ship.diveTransition,   // 0=水面 .. 1=完全潜没
+        } : null,
       });
     }
 
@@ -1623,6 +1767,36 @@ export class GameEngine {
     this._resetSquadronOrbit();
   }
 
+  // Auto-respawn: a squadron SHOT DOWN by enemy AA re-launches from the
+  // carrier after CARRIER.squadronRespawnDelay seconds — per squadron, so a
+  // surviving wingmate keeps flying (only the dead one is rebuilt at the
+  // carrier's CURRENT position/heading). Crashes (player error) are excluded:
+  // those still need a manual T, keeping a small skill penalty. The enemy air
+  // groups respawn symmetrically on their own wave timer
+  // (_updateEnemySquadrons). If the player was flying the shot-down squadron
+  // they are already back in ship view (see the crash fallback) and stay
+  // there — the revived squadron just cruises until taken over.
+  _updateSquadronRespawn(dt) {
+    if (!this.airWing || !this.ship || !this.ship.alive) return;
+    if (!this._squadronRespawnTimers) this._squadronRespawnTimers = { torpedo: 0, bomber: 0 };
+    for (const type of ['torpedo', 'bomber']) {
+      const sq = this.airWing[type];
+      if (sq.alive || !sq.shotDown) {
+        this._squadronRespawnTimers[type] = 0;
+        continue;
+      }
+      if (this._squadronRespawnTimers[type] <= 0) {
+        this._squadronRespawnTimers[type] = CARRIER.squadronRespawnDelay;
+      }
+      this._squadronRespawnTimers[type] -= dt;
+      if (this._squadronRespawnTimers[type] <= 0) {
+        this._squadronRespawnTimers[type] = 0;
+        sq.relaunchAt(this.ship.position.x, this.ship.position.z, this.ship.heading);
+        if (this.onSquadronRespawn) this.onSquadronRespawn(type);
+      }
+    }
+  }
+
   // Squadron fire: left-click releases a salvo from the ACTIVE squadron (its own
   // type). `sq`/`type` override the active squadron — used by auto-pilot when a
   // specific squadron requests its own-type drop.
@@ -1641,7 +1815,10 @@ export class GameEngine {
       const drops = sq.dropTorpedo();
       if (drops.length > 0) {
         for (const d of drops) {
-          this.torpedoManager.fire(d.origin, d.heading, d.tier, this.level, 1, 'narrow', 'player');
+          // Aircraft torpedoes hit harder than hull-launched ones of the same
+          // tier (CARRIER.airTorpedoDamageMul) — mirrors the server's carrier
+          // drop handling.
+          this.torpedoManager.fire(d.origin, d.heading, d.tier, this.level, 1, 'narrow', 'player', CARRIER.airTorpedoDamageMul);
         }
         if (this.audio) this.audio.playTorpedoLaunch();
       }
@@ -1683,9 +1860,7 @@ export class GameEngine {
       this.level,
       readyTubes.length,
       spread,
-      'player',
-      // Submarine torpedoes are homing (acoustic). Other classes fire dumb.
-      this.shipClass === 'submarine'
+      'player'
     );
 
     const cd = this._getTorpedoCooldown();
@@ -1695,10 +1870,17 @@ export class GameEngine {
     this.audio.playTorpedoLaunch();
   }
 
-  // Player ASW (depth-charge) release: aim at a water point, lob a salvo of
-  // depth charges toward it. Each charge detonates on water impact with an AoE
-  // that damages submarines (incl. fully-submerged) — see projectile.js. The
-  // aim point is clamped to the ship class's ASW range (hard range limit).
+  // Player ASW (深水炸弹) release.
+  //
+  // Destroyers/cruisers make a CLOSE-RANGE hull drop: the aim point is clamped
+  // into the class's [min, range] band and a salvo of depth charges arcs out
+  // there. Charges splash, float ASW_FUSE_DELAY seconds, then detonate with a
+  // large AoE that only damages submarines — see projectile.js.
+  //
+  // Battleships call an AIR STRIKE instead: the aim point (clamped to the air
+  // range) marks the centre of a target rectangle; an AswStrikePlane flies out
+  // from over the ship and scatters the salvo across the rectangle with the
+  // same fuse/AoE rules.
   _fireDepthCharges(aimTarget) {
     if (!this.ship || !this.ship.alive) return;
     if (this.ship.fullySubmerged) return;       // launchers underwater
@@ -1710,17 +1892,21 @@ export class GameEngine {
     if (this._aswCooldown == null) this._aswCooldown = 0;
     if (this._aswCooldown > 0) return;
 
-    // Clamp the aim point to the ship's ASW range.
-    let ax = aimTarget.x, az = aimTarget.z;
-    const dx = ax - this.ship.position.x;
-    const dz = az - this.ship.position.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist > asw.range) {
-      const s = asw.range / dist;
-      ax = this.ship.position.x + dx * s;
-      az = this.ship.position.z + dz * s;
+    const target = clampAswAim(this.ship.position, aimTarget, asw);
+
+    if (asw.air) {
+      // Battleship: launch a strike plane from over the ship toward the marked
+      // rectangle; it releases the fused charges itself as it overflies it.
+      const strike = new AswStrikePlane(
+        this.scene, this.ship.position.x, this.ship.position.z, target, tierCfg,
+      );
+      this._aswStrikes.push(strike);
+      this._aswCooldown = tierCfg.cooldown;
+      if (this.audio) this.audio.playFire('carrier');
+      return;
     }
 
+    // Surface hull drop: lob the salvo at sub-points around the clamped point.
     const originY = 3.0;
     const salvo = tierCfg.salvo;
     const spread = tierCfg.spread;
@@ -1728,8 +1914,8 @@ export class GameEngine {
       // Spread sub-points in a small disc around the clamped aim point.
       const ang = salvo > 1 ? (i / salvo) * Math.PI * 2 : 0;
       const rad = salvo > 1 ? spread * (0.4 + 0.6 * ((i * 7) % 5) / 4) : 0;
-      const tx = ax + Math.cos(ang) * rad;
-      const tz = az + Math.sin(ang) * rad;
+      const tx = target.x + Math.cos(ang) * rad;
+      const tz = target.z + Math.sin(ang) * rad;
       // Short ballistic arc toward the sub-point (mirrors the server calc).
       const sdx = tx - this.ship.position.x;
       const sdz = tz - this.ship.position.z;
@@ -1760,57 +1946,94 @@ export class GameEngine {
     if (this.audio) this.audio.playFire(this.shipClass);
   }
 
-  // Automatic AA point-defense for the PLAYER's ship: each mount fires flak at
-  // the nearest enemy squadron in AA range, on its own cooldown. Enemy aircraft
-  // come from this.airWing (enemy carriers' wings) + any squadron manager wings
-  // marked hostile. Mirrors the server _fire_aa_defenses. Friendly aircraft
-  // (this.airWing when the player is a carrier) are never targeted.
+  // Advance in-flight battleship ASW strike planes (solo/team local sim — the
+  // multiplayer server flies its own and the engine only renders the snapshot).
+  // Each released charge becomes a normal `weapon='depth_charge'` projectile
+  // that splashes and detonates on its fuse.
+  _updateAswStrikes(dt) {
+    for (let i = this._aswStrikes.length - 1; i >= 0; i--) {
+      const strike = this._aswStrikes[i];
+      strike.update(dt, (x, z, damage) => {
+        this.projectileManager.fire(
+          new THREE.Vector3(x, ASW_AIR.altitude, z),
+          new THREE.Vector3(0, -1, 0), damage, 'player', 40, 0.02, 'depth_charge',
+        );
+      });
+      if (strike.done) {
+        strike.destroy();
+        this._aswStrikes.splice(i, 1);
+      }
+    }
+  }
+
+  // Refresh the depth-charge aim indicator (fan band for surface ships, target
+  // rectangle for battleship air strikes). aimTarget is the crosshair's world
+  // point this frame (stored by the loops).
+  _updateAswIndicator(aimTarget) {
+    if (!this.aswIndicator) return;
+    const fit = getClassAsw(this.shipClass);
+    const tierCfg = fit ? getAswTier(fit.tier) : null;
+    const active = this.controls.weaponMode === 'asw' && this.ship && this.ship.alive
+      && this.playerView === 'ship' && fit && tierCfg;
+    if (!active || !aimTarget) {
+      this.aswIndicator.update(false, null, null, null, null, null, null);
+      return;
+    }
+    const clamped = clampAswAim(this.ship.position, aimTarget, fit);
+    this.aswIndicator.update(
+      true, fit.air ? 'air' : 'drop', this.ship.position,
+      { x: aimTarget.x, z: aimTarget.z }, clamped, fit, tierCfg,
+    );
+  }
+
+  // Automatic AA point-defense for the PLAYER's ship: each AA turret trains on
+  // the nearest hostile squadron in range (full 360° + elevation, straight-line
+  // aim like a proximity-fused shell) and fires from its own raised muzzle once
+  // trained, on its own cooldown. Enemy aircraft come from this.airWing (enemy
+  // carriers' wings) + any squadron manager wings marked hostile. Mirrors the
+  // server _fire_aa_defenses (which fires from the same mount positions).
+  // Friendly aircraft (this.airWing when the player is a carrier) are never
+  // targeted. Fully automatic — the player cannot control AA.
   _updateAaDefense(dt) {
     if (!this.ship || !this.ship.alive) return;
     const aa = getClassAa(this.shipClass);
-    if (!aa) return;
+    const mounts = this.ship.aaMounts || [];
+    if (!aa || !aa.tier || mounts.length === 0) return;
     const tierCfg = getAaTier(aa.tier);
     if (!tierCfg) return;
 
-    // Cooldown array sized to mount count.
-    if (!this._aaCooldowns || this._aaCooldowns.length !== aa.mounts) {
-      this._aaCooldowns = new Array(aa.mounts).fill(0);
-    }
-    // Gather hostile squadrons (everything that is NOT the player's own wing).
     const hostiles = this._collectHostileSquadrons();
-    if (hostiles.length === 0) {
-      for (let m = 0; m < aa.mounts; m++) {
-        if (this._aaCooldowns[m] > 0) this._aaCooldowns[m] = Math.max(0, this._aaCooldowns[m] - dt);
-      }
-      return;
-    }
     const r2 = tierCfg.range * tierCfg.range;
-    for (let m = 0; m < aa.mounts; m++) {
-      if (this._aaCooldowns[m] > 0) {
-        this._aaCooldowns[m] = Math.max(0, this._aaCooldowns[m] - dt);
-        continue;
-      }
-      // Nearest hostile squadron in range.
+    const shipX = this.ship.position.x;
+    const shipZ = this.ship.position.z;
+
+    for (const mount of mounts) {
+      // Nearest hostile squadron in range for this mount.
       let best = null, bestD2 = r2;
       for (const sq of hostiles) {
         if (!sq || !sq.alive) continue;
-        const dx = sq.position.x - this.ship.position.x;
-        const dz = sq.position.z - this.ship.position.z;
+        const dx = sq.position.x - shipX;
+        const dz = sq.position.z - shipZ;
         const d2 = dx * dx + dz * dz;
         if (d2 < bestD2) { bestD2 = d2; best = sq; }
       }
       if (!best) continue;
-      const ox = this.ship.position.x, oy = 3.0, oz = this.ship.position.z;
-      const dx = best.position.x - ox;
-      const dy = best.position.y - oy;
-      const dz = best.position.z - oz;
-      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-      this.projectileManager.fire(
-        new THREE.Vector3(ox, oy, oz),
-        new THREE.Vector3(dx / d, dy / d, dz / d),
-        tierCfg.damage, 'player', tierCfg.muzzleSpeed, AA_DRAG, 'flak',
-      );
-      this._aaCooldowns[m] = tierCfg.cooldown;
+
+      // Train the mount (fast slew); fire only once roughly on-target so the
+      // shell visually leaves the barrels pointing at the aircraft.
+      if (!aimAaMountAtPoint(mount, this.ship.heading, best.position, dt)) continue;
+      if (mount.cooldown > 0) continue;
+
+      const barrels = mount.barrels.length;
+      for (let b = 0; b < barrels; b++) {
+        const { origin, direction } = getTurretFireData(mount, this.ship.heading, b);
+        this.projectileManager.fire(
+          origin,
+          direction,
+          tierCfg.damage, 'player', tierCfg.muzzleSpeed, AA_DRAG, 'flak',
+        );
+      }
+      mount.cooldown = tierCfg.cooldown;
     }
   }
 
@@ -1821,6 +2044,46 @@ export class GameEngine {
     const out = [];
     // Enemy air wings owned by the engine (added by stage-4 enemy carriers).
     if (this._enemySquadrons) out.push(...this._enemySquadrons);
+    return out;
+  }
+
+  // Enemy-side AA auto-defense (solo mode): the mirror of _updateAaDefense —
+  // every enemy ship's AA battery trains on the nearest PLAYER squadron (the
+  // carrier air wing) in range and fires faction-tagged flak at it. The hit
+  // itself resolves in projectile.js (enemy flak only damages player-owned
+  // squadrons). No-op unless the player is a carrier with aircraft airborne.
+  _updateEnemyAaDefense(dt) {
+    if (!this.enemyManager) return;
+    this._runAaDefense(dt, this.enemyManager.enemies, this._playerWingSquadrons());
+  }
+
+  // Team-mode AA: the red ships flak the player's carrier squadrons (mirroring
+  // the solo behaviour), and the wingmen flak the engine-spawned enemy strike
+  // planes — both were previously never driven in the team loop.
+  _updateTeamAaDefense(dt) {
+    this._runAaDefense(dt, this.reds, this._playerWingSquadrons());
+    const wingmen = (this.teamUnits || []).filter(u => u && u.isWingman);
+    this._runAaDefense(dt, wingmen, this._enemySquadrons || []);
+  }
+
+  // Drive every listed unit's automatic AA mounts against the given hostile
+  // squadrons. Faction tagging on the projectiles keeps friendly fire out
+  // (projectile.js skips squadrons whose owner matches the shooter faction).
+  _runAaDefense(dt, units, hostiles) {
+    for (const u of (units || [])) {
+      if (!u.updateAaDefense) continue;
+      u.updateAaDefense(dt, hostiles, this.projectileManager);
+    }
+  }
+
+  // The player's live carrier squadrons, as a hostile list for red AA.
+  _playerWingSquadrons() {
+    const wing = this.airWing;
+    const out = [];
+    if (wing) {
+      if (wing.torpedo && wing.torpedo.alive) out.push(wing.torpedo);
+      if (wing.bomber && wing.bomber.alive) out.push(wing.bomber);
+    }
     return out;
   }
 
@@ -1840,7 +2103,14 @@ export class GameEngine {
 
     // Cull dead / departed squadrons.
     this._enemySquadrons = (this._enemySquadrons || []).filter(sq => {
-      if (!sq.alive) { sq.destroy && sq.destroy(); return false; }
+      if (!sq.alive) {
+        // Shot down by the player's AA — mirror the player-side auto respawn:
+        // the replacement wave re-departs within squadronRespawnDelay instead
+        // of waiting out the full wave cadence.
+        this._enemySquadronTimer = Math.min(this._enemySquadronTimer, CARRIER.squadronRespawnDelay);
+        sq.destroy && sq.destroy();
+        return false;
+      }
       const dx = sq.position.x - this.ship.position.x;
       const dz = sq.position.z - this.ship.position.z;
       if (Math.hypot(dx, dz) > 4000) { sq.destroy && sq.destroy(); return false; }
@@ -1956,8 +2226,11 @@ export class GameEngine {
         hp: CARRIER.aircraftHp, maxHp: CARRIER.aircraftHp,
         altitude: CARRIER.aircraftAltitude,
         maxAlt: CARRIER.aircraftMaxAlt, minAlt: CARRIER.aircraftCrashAlt,
-        torpedo: { ammo: 0, maxAmmo: cfg.torpedo.ammo, cd: 0, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo },
-        bomber: { ammo: 0, maxAmmo: cfg.bomber.ammo, cd: 0, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo },
+        torpedo: { ammo: 0, maxAmmo: cfg.torpedo.ammo, cd: 0, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo, autoPilot: false },
+        bomber: { ammo: 0, maxAmmo: cfg.bomber.ammo, cd: 0, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo, autoPilot: false },
+        // Auto-respawn countdowns (s remaining, 0 = none pending) for shot-down
+        // squadrons — available for HUD display.
+        respawn: { torpedo: 0, bomber: 0 },
       };
     }
     const t = wing.torpedo, b = wing.bomber;
@@ -1983,8 +2256,14 @@ export class GameEngine {
       hp: active.hp, maxHp: active.maxHp,
       altitude: active.altitude,
       maxAlt: CARRIER.aircraftMaxAlt, minAlt: CARRIER.aircraftCrashAlt,
-      torpedo: { ammo: t.ammo, maxAmmo: t.maxAmmo, cd: t.cd, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo },
-      bomber: { ammo: b.ammo, maxAmmo: b.maxAmmo, cd: b.cd, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo },
+      torpedo: { ammo: t.ammo, maxAmmo: t.maxAmmo, cd: t.cd, maxCd: cfg.torpedo.cd, salvo: cfg.torpedo.salvo, autoPilot: !!t.autoPilot, autoPhase: t._autoPhase || 'idle' },
+      bomber: { ammo: b.ammo, maxAmmo: b.maxAmmo, cd: b.cd, maxCd: cfg.bomber.cd, salvo: cfg.bomber.salvo, autoPilot: !!b.autoPilot, autoPhase: b._autoPhase || 'idle' },
+      // Auto-respawn countdowns (s remaining, 0 = none pending) for shot-down
+      // squadrons — available for HUD display.
+      respawn: {
+        torpedo: Math.max(0, this._squadronRespawnTimers?.torpedo || 0),
+        bomber: Math.max(0, this._squadronRespawnTimers?.bomber || 0),
+      },
     };
   }
 
@@ -2016,6 +2295,12 @@ export class GameEngine {
     this.playerView = 'ship';
     if (this.controls) this.controls.viewMode = 'ship';
     this.carrierPatrol = null;
+    // Drop any in-flight local ASW strike planes + reset the release cooldown.
+    for (const strike of this._aswStrikes) strike.destroy();
+    this._aswStrikes = [];
+    this._aswCooldown = 0;
+    this._lastAimTarget = null;
+    if (this.aswIndicator) this.aswIndicator.update(false, null, null, null, null, null, null);
   }
 
   destroy() {
@@ -2043,5 +2328,9 @@ export class GameEngine {
     this.friendlies = [];
     this.reds = [];
     if (this.renderer) this.renderer.dispose();
+    if (this.aswIndicator) this.aswIndicator.destroy();
+    for (const strike of this._aswStrikes) strike.destroy();
+    this._aswStrikes = [];
+    this._lastAimTarget = null;
   }
 }

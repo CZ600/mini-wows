@@ -1,7 +1,30 @@
 import * as THREE from 'three';
-import { GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG, AA_HIT_RADIUS, ASW_BLAST_RADIUS } from './config.js';
+import { GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG, AA_HIT_RADIUS, ASW_BLAST_RADIUS, ASW_FUSE_DELAY } from './config.js';
 
 const TRAIL_LENGTH = 30;
+
+// Per-weapon shell visuals: small-calibre guns (secondaries, AA) throw slim
+// tracers, the main battery keeps the chunky shell. Flak gets a hot tracer
+// colour so AA fire reads differently from gun salvos at a glance.
+const WEAPON_VISUALS = {
+  shell:         { radius: 0.3,  trailSize: 0.8,  playerColor: 0xffaa00, enemyColor: 0xff6644 },
+  secondary:     { radius: 0.16, trailSize: 0.45, playerColor: 0xffc23d, enemyColor: 0xff7a55 },
+  flak:          { radius: 0.10, trailSize: 0.32, playerColor: 0xfff2a8, enemyColor: 0xffe14a },
+  depth_charge:  { radius: 0.35, trailSize: 0.7,  playerColor: 0xffaa00, enemyColor: 0xff6644 },
+  bomb:          { radius: 0.25, trailSize: 0.6,  playerColor: 0xffaa00, enemyColor: 0xff6644 },
+};
+
+function weaponVisuals(weapon, owner) {
+  const v = WEAPON_VISUALS[weapon] || WEAPON_VISUALS.shell;
+  return {
+    radius: v.radius,
+    trailSize: v.trailSize,
+    color: owner === 'player' ? v.playerColor : v.enemyColor,
+  };
+}
+
+// Shared with multiplayer_engine for snapshot-driven remote shells.
+export { weaponVisuals };
 
 export class ProjectileManager {
   constructor(scene, terrain, audio) {
@@ -14,9 +37,10 @@ export class ProjectileManager {
   }
 
   fire(origin, direction, damage, owner, muzzleSpeed = PROJECTILE_INITIAL_SPEED, drag = PROJECTILE_DRAG, weapon = 'shell') {
+    const vis = weaponVisuals(weapon, owner);
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.3, 8, 8),
-      new THREE.MeshBasicMaterial({ color: owner === 'player' ? 0xffaa00 : 0xff6644 })
+      new THREE.SphereGeometry(vis.radius, 8, 8),
+      new THREE.MeshBasicMaterial({ color: vis.color })
     );
     mesh.position.copy(origin);
     this.scene.add(mesh);
@@ -25,8 +49,8 @@ export class ProjectileManager {
     const trailPositions = new Float32Array(TRAIL_LENGTH * 3);
     trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
     const trailMat = new THREE.PointsMaterial({
-      color: owner === 'player' ? 0xffaa44 : 0xff6644,
-      size: 0.8,
+      color: vis.color,
+      size: vis.trailSize,
       transparent: true,
       opacity: 0.7,
     });
@@ -47,6 +71,9 @@ export class ProjectileManager {
       owner,
       weapon,
       lifetime: 0,
+      // Depth-charge fuse (s). null while airborne; armed to ASW_FUSE_DELAY on
+      // water entry, then counts down to the delayed underwater detonation.
+      fuse: null,
     });
   }
 
@@ -54,6 +81,25 @@ export class ProjectileManager {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.lifetime += dt;
+
+      // A charge that has splashed bobs at the surface while its fuse runs
+      // down; it detonates (AoE submarines only) when the fuse expires.
+      if (p.fuse !== null) {
+        p.fuse -= dt;
+        p.mesh.position.y = 0.35 + Math.sin(p.lifetime * 3) * 0.12;
+        if (p.fuse <= 0) {
+          this._detonateDepthCharge(p, ship);
+          this.scene.remove(p.mesh);
+          p.mesh.geometry.dispose();
+          p.mesh.material.dispose();
+          this.scene.remove(p.trail);
+          p.trail.geometry.dispose();
+          p.trail.material.dispose();
+          this.projectiles.splice(i, 1);
+        }
+        continue;
+      }
+
       const drag = 1.0 - (p.drag ?? PROJECTILE_DRAG) * dt;
       p.velocity.multiplyScalar(drag);
       p.velocity.y -= GRAVITY * dt;
@@ -63,14 +109,12 @@ export class ProjectileManager {
 
       let hit = false;
 
-      // Depth-charge detonation: when a depth charge reaches the water it
-      // detonates with an AoE that damages every submarine within blast radius
-      // — including fully-submerged ones (which are otherwise shell-immune).
-      // The submerged-immunity bypass for `weapon='depth_charge'` is already
-      // wired in the ship-hit branch below; this handles the AoE spread.
+      // Depth charges never resolve as direct hull hits — they splash, then
+      // detonate on the fuse with a submarines-only AoE (below).
       if (p.weapon === 'depth_charge' && p.mesh.position.y <= 0) {
-        this._detonateDepthCharge(p, ship);
-        hit = true;
+        p.fuse = ASW_FUSE_DELAY;
+        p.mesh.position.y = 0.35;
+        this._createSplash(p.mesh.position.clone());
       } else if (p.mesh.position.y <= 0) {
         // Water — splash only, no explosion sound (a miss into the sea is silent).
         this._createSplash(p.mesh.position.clone());
@@ -95,7 +139,9 @@ export class ProjectileManager {
       // from just below the keel up to the top of the shortest turret
       // (deck + 0.15 + turretSize * 0.9, the lowest non-superfiring housing),
       // so high-arc shells that clip a turret roof still count as a hit.
-      if (!hit && p.owner === 'enemy' && ship && ship.alive) {
+      // Depth charges never resolve as direct hull hits (they splash and
+      // detonate on the fuse only) — skip them in both direct-hit branches.
+      if (!hit && p.owner === 'enemy' && p.weapon !== 'depth_charge' && ship && ship.alive) {
         const sp = ship.mesh.position;
         const relX = p.mesh.position.x - sp.x;
         const relZ = p.mesh.position.z - sp.z;
@@ -124,7 +170,7 @@ export class ProjectileManager {
       }
 
       // Hit enemy
-      if (!hit && p.owner === 'player') {
+      if (!hit && p.owner === 'player' && p.weapon !== 'depth_charge') {
         for (const enemy of enemies) {
           if (!enemy.alive) continue;
           const ep = enemy.mesh.position;
@@ -192,12 +238,21 @@ export class ProjectileManager {
           const dz = sp.z - pos.z;
           if (dx * dx + dy * dy + dz * dz <= r2) {
             sq.takeDamage(p.damage);
-            this._explode(pos.clone(), 0xffe14a, 4);
+            this.spawnFlakBurst(pos.clone(), true);
             if (this.audio && p.owner === 'player') this.audio.playExplosion(this._distToPlayer(pos, ship));
             hit = true;
             break;
           }
         }
+      }
+
+      // Flak air-burst: a proximity-fused shell that tops out without
+      // connecting self-destructs at the apex of its arc — a silent black
+      // puff (misses are quiet; only hits get sound). Mirrors the server's
+      // flak apex cut in projectile.py.
+      if (!hit && p.weapon === 'flak' && p.velocity.y <= 0) {
+        this.spawnFlakBurst(p.mesh.position.clone());
+        hit = true;
       }
 
       if (!hit && p.lifetime > PROJECTILE_MAX_LIFETIME) hit = true;
@@ -281,9 +336,9 @@ export class ProjectileManager {
   }
 
   // Detonate a depth charge: AoE-damage every submarine within ASW_BLAST_RADIUS
-  // (horizontal). Fully-submerged subs are included (the depth_charge weapon
-  // bypasses shell immunity server-side). A big underwater burst is rendered
-  // at the detonation point.
+  // (horizontal) — surfaced or fully-submerged. Other ship classes take no
+  // damage at all (the blast is shaped to threaten submarines only). A big
+  // delayed underwater burst is rendered at the detonation point.
   _detonateDepthCharge(p, playerShip) {
     const pos = p.mesh.position;
     const targets = this._aswTargets || [];
@@ -293,6 +348,10 @@ export class ProjectileManager {
       if (s.shipClass !== 'submarine') continue;
       // Don't hit the shooter's own sub (player depth-charging their own hull).
       if (s === playerShip && p.owner === 'player') continue;
+      // Same-faction subs are skipped too: AI depth-charging a hostile sub must
+      // not friendly-fire a nearby friendly one (EnemyShip-family units expose
+      // .faction; the player Ship relies on the identity check above).
+      if (s.faction && s.faction === p.owner) continue;
       const sp = s.position || (s.mesh && s.mesh.position);
       if (!sp) continue;
       const dx = sp.x - pos.x;
@@ -302,7 +361,7 @@ export class ProjectileManager {
       }
     }
     // Big underwater detonation burst (lighter, wider than a shell hit).
-    this._explode(pos.clone(), 0x66ccff, 9);
+    this._explode(pos.clone(), 0x66ccff, 14);
     this._createSplash(pos.clone());
     if (this.audio && p.owner === 'player') this.audio.playExplosion(this._distToPlayer(pos, playerShip));
   }
@@ -344,6 +403,29 @@ export class ProjectileManager {
     particles.position.copy(position);
     this.scene.add(particles);
     this.explosions.push({ mesh: particles, lifetime: 0, duration: 0.6, maxSize: maxSize * 0.8 });
+  }
+
+  // Flak air-burst: a brief hot flash swallowed by a lingering dark smoke
+  // puff — the classic "black flak burst" read. `hit` sizes the effect up for
+  // proximity detonations on aircraft; misses get the small quiet version.
+  // Shared by the solo engine (local flak) and the multiplayer engine
+  // (server `flak_burst` / `air_hit` events) — never plays sound itself.
+  spawnFlakBurst(position, hit = false) {
+    const flash = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.95 })
+    );
+    flash.position.copy(position);
+    this.scene.add(flash);
+    this.explosions.push({ mesh: flash, lifetime: 0, duration: hit ? 0.35 : 0.22, maxSize: hit ? 4 : 2.5 });
+
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0x2c2c28, transparent: true, opacity: 0.8 })
+    );
+    puff.position.copy(position);
+    this.scene.add(puff);
+    this.explosions.push({ mesh: puff, lifetime: 0, duration: 1.4, maxSize: hit ? 7 : 5 });
   }
 
   _createSplash(position) {

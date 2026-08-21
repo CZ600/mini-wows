@@ -18,25 +18,28 @@ export const LEVEL_CONFIG = {
 };
 
 export const CLASS_CONFIG = {
+  // lengthMul stretches the hull (width/height untouched): destroyer/cruiser
+  // hulls run long and slim — turrets & bridge take a smaller share of the
+  // hull length, so the silhouette reads sleek rather than stubby.
   destroyer: {
-    4:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 1 },
-    5:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 1 },
-    6:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
-    7:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
-    8:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
-    9:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
-    10: { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 8, sizeMul: 0.55, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    4:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 1 },
+    5:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 4, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 1 },
+    6:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    7:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 5, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    8:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    9:  { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 6, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
+    10: { hpMul: 0.6,  speedMul: 1.4, turnMul: 0.7, damageMul: 0.7, cooldownMul: 1.0, torpedoTiers: [1, 2, 3], torpedoTubeCount: 8, sizeMul: 0.55, lengthMul: 1.28, turretMul: 0.65, spacingMul: 0.7, barrels: 2 },
   },
   // turretMul 0.8/0.65: cruiser & destroyer turrets scaled down — with the
   // longer (1.7x) gunhouses they otherwise blanket most of the deck.
   cruiser: {
-    4:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 1 },
-    5:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 1 },
-    6:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
-    7:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
-    8:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
-    9:  { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
-    10: { hpMul: 1.0,  speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    4:  { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 1 },
+    5:  { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 1 },
+    6:  { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 2, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    7:  { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    8:  { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 3, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    9:  { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
+    10: { hpMul: 1.0, speedMul: 1.0, turnMul: 1.0, damageMul: 1.3, cooldownMul: 0.7, torpedoTiers: [1], torpedoTubeCount: 4, sizeMul: 0.85, lengthMul: 1.22, turretMul: 0.8, spacingMul: 0.85, barrels: 2 },
   },
   // Battleship: Lv6-7 double turrets; Lv8-10 triple turrets in A-B-X layout
   // (2 front + 1 back). get_class_config keeps DPM constant via the
@@ -73,14 +76,16 @@ export const CLASS_CONFIG = {
   // self-defense guns, no torpedoes. Its real power is aircraft (stage 3);
   // stage 1 ships it as a heavy, under-armed platform so it can be picked and
   // fought while the aircraft system is built out.
+  // turretMul 0.5: small deck-edge DP mounts (laid out along both flight-deck
+  // edges in buildTurretDefs) — the deck centreline stays clear for aircraft.
   carrier: {
-    4:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
-    5:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
-    6:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
-    7:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
-    8:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
-    9:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
-    10: { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.8, spacingMul: 1.0, barrels: 1 },
+    4:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
+    5:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
+    6:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
+    7:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
+    8:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
+    9:  { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
+    10: { hpMul: 1.2, speedMul: 0.6, turnMul: 1.5, damageMul: 0.4, cooldownMul: 1.0, torpedoTiers: [], torpedoTubeCount: 0, sizeMul: 1.1, turretMul: 0.5, spacingMul: 1.0, barrels: 1 },
   },
 };
 
@@ -224,9 +229,9 @@ export class Ship {
   }
 
   _buildMesh(cfg) {
-    // 全部视觉建模（放样船体/贴图/上层建筑/炮塔/防空炮座）在 ship_model.js
-    // 中程序化生成，并与敌方舰船共用同一套代码 —— 双方涂装一致，阵营只靠
-    // 血条颜色与文字标记区分。
+    // 全部视觉建模（放样船体/贴图/上层建筑/炮塔/副炮/防空炮塔）在
+    // ship_model.js 中程序化生成，并与敌方舰船共用同一套代码 —— 双方涂装
+    // 一致，阵营只靠血条颜色与文字标记区分。
     const model = buildShipModel(cfg, this.shipClass);
     this.mesh = model.group;
     this.hasBridge = model.hasBridge;
@@ -248,6 +253,10 @@ export class Ship {
       yawRange: t.yawRange,
       isFront: t.isFront,
     }));
+    // 副炮塔（战列/巡洋）与防空炮塔：与主炮塔同构的旋回/俯仰机构，
+    // 各自维护冷却。副炮由玩家切换操控，防空全自动。
+    this.secondaryTurrets = (model.secondaryTurrets || []).map(t => ({ ...t }));
+    this.aaMounts = (model.aaMounts || []).map(t => ({ ...t }));
   }
 
   _initWake() {
@@ -501,6 +510,14 @@ export class Ship {
 
     for (const t of this.turrets) {
       if (t.cooldown > 0) t.cooldown -= dt;
+    }
+    // Secondary battery + AA mounts tick their own cooldowns here too (AA
+    // cooldowns are consumed by the engine's auto-defense pass).
+    for (const t of this.secondaryTurrets) {
+      if (t.cooldown > 0) t.cooldown = Math.max(0, t.cooldown - dt);
+    }
+    for (const m of this.aaMounts) {
+      if (m.cooldown > 0) m.cooldown = Math.max(0, m.cooldown - dt);
     }
   }
 

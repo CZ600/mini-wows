@@ -5,7 +5,7 @@ from game.config import (
     GRAVITY, PROJECTILE_INITIAL_SPEED, PROJECTILE_MAX_LIFETIME, PROJECTILE_DRAG,
     CANNON_SPREAD_BASE, CANNON_SPREAD_VERTICAL_MULT, CANNON_SPREAD_MAX_SIGMA,
     CANNON_SPREAD_CLASS,
-    AA_HIT_RADIUS, ASW_BLAST_RADIUS,
+    AA_HIT_RADIUS, ASW_BLAST_RADIUS, ASW_FUSE_DELAY,
 )
 
 
@@ -14,6 +14,15 @@ class ServerProjectile:
         "proj_id", "owner", "damage", "weapon",
         "x", "y", "z", "px", "py", "pz",
         "vx", "vy", "vz", "lifetime", "alive", "drag",
+        # Depth-charge fuse: None while airborne; counts down from
+        # ASW_FUSE_DELAY once the charge splashes into the water. When it
+        # reaches 0 the charge is flagged `detonate` and the manager resolves
+        # the underwater AoE (submarines only).
+        "fuse", "detonate",
+        # Flak air-burst: set when a flak shell reaches the top of its arc
+        # without a proximity hit. Purely cosmetic — the manager turns it into
+        # a `flak_burst` event so clients render the black puff (no sound).
+        "airburst",
     ]
 
     def __init__(self, proj_id, owner, damage, origin, direction, muzzle_speed=PROJECTILE_INITIAL_SPEED, drag=PROJECTILE_DRAG, weapon="shell"):
@@ -30,10 +39,22 @@ class ServerProjectile:
         self.drag = drag
         self.lifetime = 0.0
         self.alive = True
+        self.fuse = None
+        self.detonate = False
+        self.airburst = False
 
     def update(self, dt):
         self.lifetime += dt
         self.px, self.py, self.pz = self.x, self.y, self.z
+
+        # Depth charges that have splashed float at the surface while their
+        # fuse runs down; they only detonate (via the manager) when it expires.
+        if self.fuse is not None:
+            self.fuse -= dt
+            if self.fuse <= 0:
+                self.alive = False
+                self.detonate = True
+            return
 
         # Drag: speed decays over time (non-ideal trajectory)
         drag = 1.0 - self.drag * dt
@@ -46,7 +67,24 @@ class ServerProjectile:
         self.y += self.vy * dt
         self.z += self.vz * dt
 
+        # Flak shells are proximity-fused AA rounds: one that reaches the top
+        # of its arc (vy flips negative) without connecting self-destructs
+        # there — the classic air burst — instead of flying the full arc down
+        # into the sea. Purely cosmetic (the manager emits a `flak_burst`
+        # event); it also stops tracking for hits, trimming AA's envelope.
+        if self.weapon == "flak" and self.vy <= 0:
+            self.alive = False
+            self.airburst = True
+            return
+
         if self.y <= 0:
+            if self.weapon == "depth_charge":
+                # Water entry: park at the surface and arm the fuse. The charge
+                # bobs here (snapshot keeps it visible) until it detonates.
+                self.y = 0.0
+                self.vx = self.vy = self.vz = 0.0
+                self.fuse = ASW_FUSE_DELAY
+                return
             self.alive = False
             return
         if self.lifetime > PROJECTILE_MAX_LIFETIME:
@@ -59,6 +97,9 @@ class ServerProjectile:
             "y": round(self.y, 2),
             "z": round(self.z, 2),
             "owner": self.owner,
+            # Weapon kind so clients can render small-calibre tracers (flak /
+            # secondary) thinner than main-battery shells.
+            "w": self.weapon,
         }
 
 
@@ -140,6 +181,20 @@ class ProjectileManager:
             if p.alive:
                 p.update(dt)
 
+        # Flak air-bursts: shells flagged by update() exploded at the top of
+        # their arc. Visual-only event — clients render a silent black puff
+        # (hits keep their own `air_hit` explosions with sound).
+        for p in self.projectiles:
+            if p.airburst:
+                p.airburst = False
+                events.append({
+                    "type": "flak_burst",
+                    "attacker": p.owner,
+                    "x": round(p.x, 2),
+                    "y": round(p.y, 2),
+                    "z": round(p.z, 2),
+                })
+
         # Terrain collision
         if terrain:
             for p in self.projectiles:
@@ -175,6 +230,12 @@ class ProjectileManager:
 
             for p in self.projectiles:
                 if not p.alive:
+                    continue
+
+                # Depth charges never resolve as direct hull hits: they lob over
+                # the surface, splash, then detonate on their fuse with an AoE
+                # that only affects submarines (handled after this loop).
+                if p.weapon == "depth_charge":
                     continue
 
                 # Transform prev and curr into each ship's local space (inverse heading)
@@ -319,23 +380,33 @@ class ProjectileManager:
                             break
 
         # ---- Depth-charge detonation (ASW) ----
-        # A depth_charge detonates when it hits the water (y<=0), dealing its
-        # damage to every submarine within ASW_BLAST_RADIUS (horizontal). This is
-        # the ASW payload: it bypasses the fully-submerged shell immunity (see
-        # the ship loop above) so submerged subs — otherwise invulnerable to
-        # shells — can be hunted. One detonation can hit multiple subs.
+        # A charge splashes into the water, floats for ASW_FUSE_DELAY seconds,
+        # then detonates (`detonate` flag set in ServerProjectile.update). The
+        # blast damages EVERY alive submarine within ASW_BLAST_RADIUS — surfaced
+        # or fully-submerged — and nothing else. This is the ASW payload: it
+        # bypasses the fully-submerged shell immunity (see the ship loop above)
+        # so submerged subs — otherwise invulnerable to shells — can be hunted.
+        # One detonation can hit multiple subs. An `asw_blast` event is always
+        # emitted so clients render the underwater burst even on a clean miss.
         if self.projectiles:
             blast2 = ASW_BLAST_RADIUS * ASW_BLAST_RADIUS
             for p in self.projectiles:
-                if not p.alive or p.weapon != "depth_charge":
+                if not p.detonate:
                     continue
-                if p.y > 0:
-                    continue  # still airborne; detonates on water impact
-                # Detonate. Damage every alive submarine within blast radius.
+                p.detonate = False
+                events.append({
+                    "type": "asw_blast",
+                    "attacker": p.owner,
+                    "x": round(p.x, 2),
+                    "y": 0.0,
+                    "z": round(p.z, 2),
+                })
+                # Damage every alive submarine within blast radius.
                 for pid, ship in ships.items():
                     if not ship.alive or pid == p.owner:
                         continue
-                    # Only submarines are ASW targets.
+                    # Only submarines are ASW targets; other ships shrug the
+                    # underwater blast off entirely.
                     if getattr(ship, "ship_class", None) != "submarine":
                         continue
                     # Team mode: don't depth-charge teammates.
@@ -367,7 +438,6 @@ class ProjectileManager:
                                 "y": 0.0,
                                 "z": round(p.z, 2),
                             })
-                p.alive = False
 
         # Clean up dead projectiles
         self.projectiles = [p for p in self.projectiles if p.alive]

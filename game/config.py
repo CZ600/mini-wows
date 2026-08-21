@@ -140,15 +140,6 @@ SUBMARINE = {
     "shell_immunity_depth": 1.5,   # immune to shells once deeper than this (m)
 }
 
-# ---- Submarine homing torpedoes (stage 2) ----
-# Submarine-launched torpedoes (tier 2/3) gently steer toward the nearest
-# spotted enemy within acquire_range. Must mirror frontend config.js.
-HOMING_TORPEDO = {
-    "acquire_range": 600,    # m — only home on enemies within this radius
-    "turn_rate":     0.35,   # rad/s — max heading correction rate
-    "damage_mul":    0.7,    # homing torpedoes hit softer than dumb ones
-}
-
 # ---- Carrier aircraft (stage 3) ----
 # A carrier player toggles between steering the ship and flying a squadron.
 # Must mirror frontend/src/game/config.js CARRIER. Two air groups share one
@@ -176,22 +167,42 @@ CARRIER = {
                                # Bombs ALSO inherit the plane's forward ground
                                # speed, so together this yields a ballistic arc
                                # (forward throw + gravity) instead of a drop.
+    # Bomb scatter: each bomb of a salvo is aimed at a random point inside a
+    # uniform disc of this radius (m) centred on the predicted impact — the
+    # drop reticle the client draws. More, weaker bombs scattered across the
+    # circle connect far more often than a tight line that either all hits or
+    # all misses. Must mirror frontend CARRIER.bombScatterRadius.
+    "bomb_scatter_radius": 8.0,
+    # Aircraft-torpedo damage multiplier: air-dropped torpedoes hit harder than
+    # ship-launched ones of the same tier (bombs were tuned to 60% in the same
+    # rebalance). Must mirror frontend CARRIER.airTorpedoDamageMul.
+    "air_torpedo_damage_mul": 1.5,
+    # Auto-respawn delay for a squadron shot down by AA (mirrors frontend
+    # CARRIER.squadronRespawnDelay; kept for config parity — the server keeps
+    # re-launches manual/player-driven).
+    "squadron_respawn_delay": 12,  # s
     "view_switch_time":  0.8,  # s — client-side camera blend
 }
 
-# Per-level air-group balance. Both air groups fire a 4-ordnance salvo per drop
-# and carry a large ammo pool — the carrier's whole point is concentrated alpha
-# from its air wing, so neither per-shot damage nor salvo size is throttled
-# against level. lvl -> {torpedo, bomber} where each group is
-# {salvo, cd, dmg, ammo}. Must mirror frontend airGroup exactly.
+# Per-level air-group balance. Torpedo bombers fire a 4-ordnance salvo per
+# drop. Dive bombers drop a SCATTERED salvo: 8 bombs at reduced per-bomb
+# damage, each aimed at a random point inside the drop reticle (see
+# bomb_scatter_radius) — many small hits instead of the old all-or-
+# nothing line abreast, so a single drop connects far more often. Bomber
+# per-bomb damage was rebalanced to 60% of the pre-flak value (aircraft now
+# face enemy AA fire; the damage moved to the torpedo group via
+# CARRIER["air_torpedo_damage_mul"] = 1.5). Bomber ammo pools are counted in
+# bombs and doubled to keep the number of drops unchanged. lvl ->
+# {torpedo, bomber} where each group is {salvo, cd, dmg, ammo}. Must mirror
+# frontend airGroup exactly.
 AIR_GROUP = {
-    4:  {"torpedo": {"salvo": 4, "cd": 3.5, "dmg": 150, "ammo": 16}, "bomber": {"salvo": 4, "cd": 4.0, "dmg": 500, "ammo": 16}},
-    5:  {"torpedo": {"salvo": 4, "cd": 3.3, "dmg": 165, "ammo": 18}, "bomber": {"salvo": 4, "cd": 3.8, "dmg": 560, "ammo": 18}},
-    6:  {"torpedo": {"salvo": 4, "cd": 3.0, "dmg": 180, "ammo": 20}, "bomber": {"salvo": 4, "cd": 3.6, "dmg": 620, "ammo": 20}},
-    7:  {"torpedo": {"salvo": 4, "cd": 2.8, "dmg": 195, "ammo": 22}, "bomber": {"salvo": 4, "cd": 3.4, "dmg": 690, "ammo": 22}},
-    8:  {"torpedo": {"salvo": 4, "cd": 2.6, "dmg": 210, "ammo": 24}, "bomber": {"salvo": 4, "cd": 3.2, "dmg": 760, "ammo": 24}},
-    9:  {"torpedo": {"salvo": 4, "cd": 2.4, "dmg": 230, "ammo": 26}, "bomber": {"salvo": 4, "cd": 3.0, "dmg": 840, "ammo": 26}},
-    10: {"torpedo": {"salvo": 4, "cd": 2.2, "dmg": 250, "ammo": 28}, "bomber": {"salvo": 4, "cd": 2.8, "dmg": 920, "ammo": 28}},
+    4:  {"torpedo": {"salvo": 4, "cd": 3.5, "dmg": 150, "ammo": 16}, "bomber": {"salvo": 8, "cd": 4.0, "dmg": 150, "ammo": 32}},
+    5:  {"torpedo": {"salvo": 4, "cd": 3.3, "dmg": 165, "ammo": 18}, "bomber": {"salvo": 8, "cd": 3.8, "dmg": 168, "ammo": 36}},
+    6:  {"torpedo": {"salvo": 4, "cd": 3.0, "dmg": 180, "ammo": 20}, "bomber": {"salvo": 8, "cd": 3.6, "dmg": 186, "ammo": 40}},
+    7:  {"torpedo": {"salvo": 4, "cd": 2.8, "dmg": 195, "ammo": 22}, "bomber": {"salvo": 8, "cd": 3.4, "dmg": 207, "ammo": 44}},
+    8:  {"torpedo": {"salvo": 4, "cd": 2.6, "dmg": 210, "ammo": 24}, "bomber": {"salvo": 8, "cd": 3.2, "dmg": 228, "ammo": 48}},
+    9:  {"torpedo": {"salvo": 4, "cd": 2.4, "dmg": 230, "ammo": 26}, "bomber": {"salvo": 8, "cd": 3.0, "dmg": 252, "ammo": 52}},
+    10: {"torpedo": {"salvo": 4, "cd": 2.2, "dmg": 250, "ammo": 28}, "bomber": {"salvo": 8, "cd": 2.8, "dmg": 276, "ammo": 56}},
 }
 
 
@@ -204,6 +215,35 @@ def get_air_group_config(level):
             best = l
     return AIR_GROUP[best]
 
+# ---- Secondary battery (side guns) ----
+# Small-calibre dual turrets along both beams of cruisers/battleships: a
+# player-switchable (Q) damage supplement to the main battery. Lower per-shell
+# damage & faster reload than the main guns, flatter faster shell.
+# Must mirror frontend config.js SECONDARY / CLASS_SECONDARY.
+SECONDARY = {
+    "muzzle_speed": 320.0,
+    "drag": 0.09,
+    "damage": 40,
+    "cooldown": 3.0,
+}
+
+# Per-class secondary fit. mounts = total side turrets (split evenly along
+# both beams); barrels = guns per turret. Destroyers carry none (their beam
+# turrets stay AA mounts).
+CLASS_SECONDARY = {
+    "cruiser":     {"mounts": 4, "barrels": 2},
+    "battleship":  {"mounts": 6, "barrels": 2},
+}
+
+def get_class_secondary(ship_class):
+    """Resolve a ship class's secondary fit. Returns None when absent."""
+    if not ship_class:
+        return None
+    fit = CLASS_SECONDARY.get(ship_class)
+    if not fit or not fit.get("mounts"):
+        return None
+    return fit
+
 # ---- Anti-air (AA) flak ----
 # AA is an automatic point-defense: each tick every ship with AA mounts fires
 # `weapon="flak"` shells at the nearest enemy squadron within `range`. AA only
@@ -212,16 +252,21 @@ def get_air_group_config(level):
 #
 # Per-tier balance: range, muzzle speed, per-shell damage and fire cooldown per
 # mount. AA damage is light per shell (squadrons have aircraft_hp=100); the
-# threat comes from sustained fire across several mounts.
+# threat comes from sustained fire across several mounts. Deliberately weak
+# per-shell (2026-08 rebalance): aircraft kept dying on the way in, so damage
+# and mount tempo were cut and the proximity radius tightened — squadrons now
+# survive the approach and only bleed hp to close-in, sustained fire.
 AA_TIER = {
-    1: {"range": 700,  "muzzle_speed": 180.0, "damage": 8,  "cooldown": 1.2},
-    2: {"range": 1000, "muzzle_speed": 220.0, "damage": 12, "cooldown": 0.9},
+    1: {"range": 700,  "muzzle_speed": 180.0, "damage": 6,  "cooldown": 1.5},
+    2: {"range": 1000, "muzzle_speed": 220.0, "damage": 8,  "cooldown": 1.2},
 }
 # Shell drag for flak (heavier than main guns so it stays short-ranged).
 AA_DRAG = 0.10
 # Hit radius: a flak shell detonates within this distance (m) of a squadron's
-# lead position, so dense AA still threatens a fast-moving squadron.
-AA_HIT_RADIUS = 25.0
+# lead position. Kept tight (15 m ≈ the gravity droop of a short-range shot) so
+# long-range flak mostly bursts harmlessly and only the point-defense envelope
+# connects — that's the dodge window attacking aircraft are meant to have.
+AA_HIT_RADIUS = 15.0
 
 def get_aa_tier(tier):
     """Resolve an AA tier's stats (tier 0 / None -> no AA, returns None)."""
@@ -255,37 +300,55 @@ def get_class_aa(ship_class):
     return fit
 
 # ---- Anti-submarine warfare (ASW) depth charges ----
-# ASW is an aimed drop: the player aims at a water point (a last-known sub
-# position) and releases a spread of depth charges. Charges arc out ballistically,
-# then detonate on the water with an AoE that damages any submarine in radius —
-# including fully-submerged ones, via the existing `weapon="depth_charge"` shell
-# immunity bypass (projectile.py). Must mirror frontend config.js ASW / ASW_TIER
-# / CLASS_ASW.
+# ASW is a CLOSE-RANGE drop. Destroyers/cruisers lob a spread of depth charges
+# into a nearby water band (the aim point is clamped to [min, range] from the
+# hull — a fan/sector indicator mirrors this band on the client). Charges
+# splash into the water, then sink for ASW_FUSE_DELAY seconds before
+# detonating with a large AoE that ONLY damages submarines (surface ships are
+# untouched). Battleships instead call an air strike: the player marks a target
+# rectangle on the water, a plane flies out from over the battleship and
+# scatters its charges across that rectangle (same fuse + AoE rules).
+# Must mirror frontend config.js ASW / ASW_TIER / CLASS_ASW / ASW_AIR.
 ASW_TIER = {
     1: {"damage": 320, "cooldown": 6.0, "salvo": 6,  "spread": 35},
     2: {"damage": 460, "cooldown": 5.0, "salvo": 8,  "spread": 40},
 }
-# Charge ballistics: low arc + moderate muzzle so the spread lands short-range.
-ASW_MUZZLE_SPEED = 70.0
+# Charge ballistics: a fast, flat-ish lob so a band-edge drop (~450 m) lands
+# in ~4 s — depth charging is a close-range, quick-reaction tool.
+ASW_MUZZLE_SPEED = 110.0
 ASW_DRAG = 0.06
-# Detonation AoE radius (m). A charge deals full damage to every submarine whose
-# horizontal distance from the detonation point is within this.
-ASW_BLAST_RADIUS = 60.0
-# Per-class ASW fit. tier selects the ASW_TIER row; range is the MAXIMUM
-# horizontal distance a charge may be aimed at (the player's aim point is
-# clamped to this from the ship). tier 0 = no ASW.
-#   destroyer    = 反潜专精 (tier 2)
-#   cruiser      = light ASW (tier 1)
-#   battleship   = medium ASW (tier 1)  — added so BBs can defend against subs
+# Fuse delay (s): a charge floats/sinks at its splash point for this long
+# before detonating, giving submerged subs a window to evade.
+ASW_FUSE_DELAY = 3.0
+# Detonation AoE radius (m). A charge deals full damage to every submarine
+# (surfaced or submerged) whose horizontal distance from the detonation point
+# is within this. Surface ships of other classes are never damaged.
+ASW_BLAST_RADIUS = 100.0
+# Battleship air-delivered ASW strike parameters.
+ASW_AIR = {
+    "range":    900,   # m — max distance of the target rectangle centre from the ship
+    "box":      70,    # m — half-size of the target rectangle the charges scatter in
+    "speed":    60,    # m/s — strike plane cruise speed
+    "altitude": 80,    # m — release altitude
+    "interval": 0.25,  # s between individual charge releases
+    "leave":    5.0,   # s the plane keeps flying off-map before despawning
+}
+# Per-class ASW fit. tier selects the ASW_TIER row. Surface ships (destroyer,
+# cruiser) use the close-range hull drop: `min`/`range` clamp the aim band.
+# The battleship uses air=true: `range` caps the target rectangle distance
+# instead. tier 0 = no ASW.
+#   destroyer    = 反潜专精 (tier 2, close-range hull racks)
+#   cruiser      = light ASW (tier 1, close-range hull racks)
+#   battleship   = air-dropped ASW strike (tier 1)
 #   carrier      = none
 #   submarine    = none
 # Must mirror frontend config.js CLASS_ASW.
 CLASS_ASW = {
-    "destroyer":   {"tier": 2, "range": 700},
-    "cruiser":     {"tier": 1, "range": 550},
-    "battleship":  {"tier": 1, "range": 600},
-    "carrier":     {"tier": 0, "range": 0},
-    "submarine":   {"tier": 0, "range": 0},
+    "destroyer":   {"tier": 2, "range": 450, "min": 60,  "air": False},
+    "cruiser":     {"tier": 1, "range": 320, "min": 50,  "air": False},
+    "battleship":  {"tier": 1, "range": 900, "min": 120, "air": True},
+    "carrier":     {"tier": 0, "range": 0,   "min": 0,   "air": False},
+    "submarine":   {"tier": 0, "range": 0,   "min": 0,   "air": False},
 }
 
 def get_class_asw(ship_class):
@@ -362,34 +425,34 @@ LEVEL_CONFIG = {
 
 CLASS_CONFIG = {
     "destroyer": {
-        4:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 1},
-        5:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 1},
-        6:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
-        7:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
-        8:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
-        9:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
-        10: {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 8, "size_mul": 0.55, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        4:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 1},
+        5:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 4, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 1},
+        6:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        7:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 5, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        8:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        9:  {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 6, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
+        10: {"hp_mul": 0.6,  "speed_mul": 1.4, "turn_mul": 0.7, "damage_mul": 0.7, "cooldown_mul": 1.0, "torpedo_tiers": [1, 2, 3], "torpedo_tubes": 8, "size_mul": 0.55, "length_mul": 1.28, "turret_mul": 0.75, "spacing_mul": 0.7, "barrels": 2},
     },
     "cruiser": {
-        4:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 1},
-        5:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 1},
-        6:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
-        7:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
-        8:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
-        9:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
-        10: {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        4:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 1},
+        5:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 1},
+        6:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 2, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        7:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        8:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 3, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        9:  {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
+        10: {"hp_mul": 1.0, "speed_mul": 1.0, "turn_mul": 1.0, "damage_mul": 1.3, "cooldown_mul": 0.7, "torpedo_tiers": [1], "torpedo_tubes": 4, "size_mul": 0.85, "length_mul": 1.22, "turret_mul": 1.0, "spacing_mul": 0.85, "barrels": 2},
     },
     # Battleship: Lv6-7 double turrets; Lv8-10 triple turrets in A-B-X layout
     # (2 front + 1 back). The layout override keeps total DPM constant via the
     # equivalent-barrels factor applied in get_class_config().
     "battleship": {
-        4:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 1},
-        5:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 1},
-        6:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 2},
-        7:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 2},
-        8:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 1},
-        9:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 1},
-        10: {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 2},
+        4:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 1},
+        5:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 1},
+        6:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 2},
+        7:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 2},
+        8:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 1},
+        9:  {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 1},
+        10: {"hp_mul": 1.4, "speed_mul": 0.7, "turn_mul": 1.4, "damage_mul": 3.075, "cooldown_mul": 1.2, "torpedo_tiers": [], "torpedo_tubes": 0, "size_mul": 1.0, "length_mul": 1.18, "turret_mul": 1.0, "spacing_mul": 1.0, "barrels": 3, "front_turrets": 2, "back_turrets": 2},
     },
     # Submarine: very fragile, slow on the surface, relies on torpedoes.
     # A single deck gun (front_turrets=1, back_turrets=0) keeps DPM low.
@@ -491,18 +554,21 @@ def get_class_config(ship_class, level):
         "front_turrets": front_turrets,
         "back_turrets": back_turrets,
         "has_bridge": base["has_bridge"],
-        "length": round(base["length"] * sm),
+        # length_mul stretches the hull (width/height untouched) — slim, long
+        # destroyer/cruiser hulls; mirrors frontend CLASS_CONFIG lengthMul.
+        "length": round(base["length"] * sm * cc.get("length_mul", 1.0)),
         "width": round(base["width"] * sm, 1),
         "height": round(base["height"] * sm, 1),
         "torpedo_tiers": cc["torpedo_tiers"],
         "torpedo_tubes": cc["torpedo_tubes"],
         "turret_mul": cc.get("turret_mul", 1.0),
         "barrels": barrels,
-        # AA/ASW fit for this class. Resolved here so callers (ServerShip,
-        # game_state AA fire loop, snapshots) read one place. Each is a
-        # {tier, mounts/range} dict or None.
+        # AA/ASW/secondary fit for this class. Resolved here so callers
+        # (ServerShip, game_state fire loops, snapshots) read one place. Each
+        # is a {tier, mounts/range} dict or None.
         "aa": get_class_aa(ship_class),
         "asw": get_class_asw(ship_class),
+        "secondary": get_class_secondary(ship_class),
     }
 
 

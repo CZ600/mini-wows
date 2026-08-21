@@ -33,6 +33,9 @@ class ServerShip:
         self.speed = 0.0
 
         self.turret_cooldowns = [0.0] * (cfg["front_turrets"] + cfg["back_turrets"])
+        # Secondary battery (side turrets) cooldowns — one slot per mount.
+        secondary = cfg.get("secondary") or {}
+        self.secondary_cooldowns = [0.0] * secondary.get("mounts", 0)
         self.skills = ShipSkills()
 
         # Submarine dive state. Fields exist on every ship (always surfaced) so
@@ -201,6 +204,8 @@ class ServerShip:
             "skl": self.skills.to_snapshot(),
             # Submarine dive state (0 = surfaced, >0 = current depth in m).
             # Clients use this to hide the mesh of enemy submarines that are
-            # fully submerged and to skip their minimap blip.
+            # fully submerged and to skip their minimap blip. diveT is the
+            # TARGET submerged flag (drives the HUD dive-slot direction).
             "dive": round(self.dive_depth, 2),
+            "diveT": bool(self.submerged),
         }
