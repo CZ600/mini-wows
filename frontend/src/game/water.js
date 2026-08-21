@@ -17,8 +17,9 @@ import { SUN_DIR } from './scene.js';
 //  [片元层 · 细浪] 9 个倍频细浪(42m~2.8m)只算法线梯度、不算位移，
 //    逐像素求值无网格分辨率限制，波光锐利；每倍频按距离淡出防摩尔纹。
 //  [光影] Gerstner 折叠雅可比驱动的白沫(波峰翻卷处起沫)、双瓣太阳
-//    高光 + 逐格闪烁耀斑(波光粼粼)、Fresnel 天空反射、波背次表面散射、
-//    缓慢漂移的云影(海面明暗斑驳)。
+//    高光 + 逐格闪烁耀斑、Fresnel 天空反射、波背次表面散射、
+//    缓慢漂移的云影(海面明暗斑驳)。整体为哑光取向：镜面高光、耀斑
+//    闪点与掠射天空反射均大幅收敛，海面不再有刺眼的镜面亮斑。
 //
 // 对外接口与旧版一致：返回 Mesh，material.uniforms 含 time / uCameraPos，
 // engine 每帧更新这两个 uniform 即可。波幅峰值控制在 ~2.6m，
@@ -236,10 +237,13 @@ export function createWater(scene) {
       water += sunColor * vec3(0.012, 0.034, 0.036) * ndl * sunVis * 2.0;
 
       // ---- Fresnel 天空反射(水面的"天光") ----
+      // 哑光：掠射角反射上限从 ~1.0 压到 ~0.5，天空反射再去饱和压暗，
+      // 水体本色占比提高，海面不再像镜面。
       float ndv = max(dot(n, V), 1e-3);
-      float F = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+      float F = 0.02 + 0.48 * pow(1.0 - ndv, 5.0);
       vec3 R = reflect(-V, n);
       vec3 sky = sampleSky(R, uSunDir);
+      sky = mix(vec3(dot(sky, vec3(0.299, 0.587, 0.114))), sky, 0.72) * 0.82;
       vec3 color = water * (1.0 - F) + sky * F;
 
       // ---- 次表面散射：逆光时波背透出青绿 ----
@@ -248,21 +252,23 @@ export function createWater(scene) {
       color += vec3(0.05, 0.32, 0.26) * sss * 0.5 * sunVis;
 
       // ---- 太阳高光：近处锐利闪烁 + 远处渐宽成"耀斑光路" ----
+      // 哑光：强度减半以上、指数略降(光斑更宽更柔)，退化为暗淡的柔光。
       vec3 H = normalize(V + uSunDir);
       float ndh = max(dot(n, H), 0.0);
       float distT = smoothstep(60.0, 3500.0, dist);
-      float specSharp = pow(ndh, mix(720.0, 60.0, distT));
-      float specBroad = pow(ndh, mix(48.0, 14.0, distT));
-      vec3 spec = sunColor * (specSharp * mix(2.4, 0.35, distT) + specBroad * 0.16) * sunVis;
+      float specSharp = pow(ndh, mix(560.0, 48.0, distT));
+      float specBroad = pow(ndh, mix(40.0, 12.0, distT));
+      vec3 spec = sunColor * (specSharp * mix(1.05, 0.16, distT) + specBroad * 0.10) * sunVis;
 
       // ---- 耀斑闪点：~0.5m 网格里随机倾斜的微镜面，朝半程向量对齐时爆闪 ----
+      // 哑光：爆闪幅度与闪烁对比都大幅收敛，只留零星微光。
       float sparkleAmt = (1.0 - smoothstep(250.0, 700.0, dist)) * sunVis;
       vec2 cell = floor(mod(p * 1.9, 512.0));
       vec3 h3 = hash3(cell);
       vec3 jit = normalize(vec3((h3.x - 0.5) * 1.6, 0.55, (h3.y - 0.5) * 1.6));
-      float flick = 0.5 + 0.5 * sin(time * 7.0 + h3.z * 40.0);
+      float flick = 0.65 + 0.35 * sin(time * 7.0 + h3.z * 40.0);
       float glint = pow(max(dot(jit, H), 0.0), 260.0) * flick;
-      spec += sunColor * glint * sparkleAmt * 2.8;
+      spec += sunColor * glint * sparkleAmt * 0.7;
       color += spec;
 
       // ---- 白沫：波峰折叠(雅可比)起沫 + 细浪过陡翻白，顺风拉丝、随波漂移 ----

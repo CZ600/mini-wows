@@ -8,6 +8,8 @@
 //   - 程序化 Canvas 贴图：船体钢板焊缝/锈痕/水线带、钢质甲板板缝、
 //     飞行甲板中线、上层建筑板缝 —— 全部模块级缓存，多舰共享；
 //   - 主炮塔：倾斜装甲炮室（顶面收窄后移）+ 圆柱炮座 + 锥形炮管（带套筒）；
+//   - 副炮：成对布置在上层建筑两舷的侧舷甲板上，下有低矮圆形炮座，
+//     朝舷外射击，艏/艉甲板留给防空炮与系泊设备，两类炮位不混布；
 //   - 上层建筑：双层舰桥 + 深色玻璃带、后倾椭圆烟囱、桅杆 + 雷达天线、
 //     测距仪、救生艇、防浪板；潜艇/航母有各自的专用轮廓。
 
@@ -1204,19 +1206,6 @@ export function buildShipModel(cfg, shipClass) {
 // 盲区，与真实副炮的背板遮挡射界一致。
 const SECONDARY_YAW_RANGE = 2.1;
 
-// 沿舰桥前后的可用甲板段均匀布 n 个站位（把 [艉缘, -bridgeEdge] 和
-// [bridgeEdge, 艏缘] 两段展开成一条连续线段均匀取样）。返回 z 数组。
-function foreAftStations(n, bridgeEdge, maxZ) {
-  const out = [];
-  const totalLen = 2 * (maxZ - bridgeEdge);
-  for (let i = 0; i < n; i++) {
-    const s = n === 1 ? 0.5 : i / (n - 1);
-    const u = s * totalLen;
-    out.push(u <= maxZ - bridgeEdge ? -maxZ + u : bridgeEdge + (u - (maxZ - bridgeEdge)));
-  }
-  return out;
-}
-
 // 该站位的舷侧安全半宽（炮塔不得悬出收窄的艏/艉段甲板边缘）。
 function beamRailX(z, cfg, hullOpts, keepOut) {
   const halfL = cfg.length / 2;
@@ -1225,8 +1214,12 @@ function beamRailX(z, cfg, hullOpts, keepOut) {
   return Math.min(cfg.width * 0.36, localHalf - keepOut);
 }
 
-// 副炮阵列：战列/巡洋沿两舷布置的小口径双联装炮塔（主炮的伤害补充），
-// 布置在舰桥前后的侧舷甲板上，每座都有与主炮同构的旋回/俯仰机构。
+// 副炮阵列：战列/巡洋的小口径双联装炮塔（主炮的伤害补充），成对布置在
+// 上层建筑（干舷建筑）两侧的侧舷甲板上 —— 与真实战舰一致：副炮贴着
+// 舰桥建筑两舷朝舷外射击，艏/艉段甲板整段让给防空炮与系泊设备，两类
+// 炮位不再挤在一起。每座副炮下方是低矮的圆形炮座，把炮塔从甲板上稍
+// 微撑起（与主炮超射炮座同款式）；旋回/俯仰机构与主炮同构，炮口起点
+// 随炮座抬高，弹道解算按炮塔世界坐标进行，无需特殊处理。
 function buildSecondaryMounts(group, cfg, shipClass, deckYAt, mats, hullOpts) {
   const fit = getClassSecondary(shipClass);
   if (!fit || fit.mounts <= 0) return [];
@@ -1236,21 +1229,48 @@ function buildSecondaryMounts(group, cfg, shipClass, deckYAt, mats, hullOpts) {
   const barrelLen = size * 1.9;
   const barrelGap = size * 0.55;
   const housingWidth = turretHousingWidth(size, barrels);
-  const sweep = Math.sqrt((housingWidth / 2) ** 2 + (size * TURRET_HOUSING_LEN_MUL / 2) ** 2);
+  const housingLen = size * TURRET_HOUSING_LEN_MUL;
+  const sweep = Math.sqrt((housingWidth / 2) ** 2 + (housingLen / 2) ** 2);
 
-  // 舰桥前后侧舷段（与 buildSurfaceSuperstructure 的 bl 一致）。
-  const blFrac = shipClass === 'battleship' ? 0.30 : 0.22;
-  const bridgeEdge = cfg.length * blFrac / 2 + sweep + 0.15;
-  const maxZ = cfg.length * 0.37;
+  // 干舷建筑尺寸（必须与 buildSurfaceSuperstructure 的取值一致）：副炮
+  // 站位沿其两舷侧铺开。
+  const isBB = shipClass === 'battleship';
+  const bw = cfg.width * (isBB ? 0.52 : 0.50);
+  const bl = cfg.length * (isBB ? 0.30 : 0.22);
+  const houseHalfX = bw * 0.85 / 2;
+
+  // 每舷站位：沿建筑长度均匀铺开，艏端让出前舰桥塔楼，艉端止于建筑
+  // 后壁之前（烟囱在中线上，不与舷侧炮位冲突）。
   const perSide = Math.ceil(fit.mounts / 2);
-
   const turrets = [];
   for (const sideSign of [1, -1]) {
-    for (const z of foreAftStations(perSide, bridgeEdge, maxZ)) {
-      const railX = beamRailX(z, cfg, hullOpts, sweep * 0.8);
-      if (railX < sweep * 0.5) continue; // 站位太窄（收窄的艏/艉），跳过
+    for (let i = 0; i < perSide; i++) {
+      const s = perSide === 1 ? 0.5 : i / (perSide - 1);
+      const z = bl * (0.18 - 0.50 * s);
+
+      // 炮塔中心取在建筑侧壁外的侧舷甲板上：回旋扫掠不切建筑侧壁，
+      // 也不压侧壁低处扣着的救生艇（尺寸式与 buildSurfaceSuperstructure
+      // 一致）；外侧不悬出该站位处的船舷。
+      const stationT = Math.max(0, Math.min(1, 0.5 + z / cfg.length));
+      const localHalf = hullHalfBeamFraction(stationT, hullOpts) * cfg.width * 0.5;
+      const boatR = Math.max(0.12, bw * 0.055);
+      const boatOuterX = houseHalfX + boatR * 0.9 + boatR;
+      const x = Math.min(
+        localHalf - housingWidth * 0.5 - 0.06,
+        Math.max(houseHalfX + sweep + 0.05, boatOuterX + housingWidth * 0.5 + 0.08),
+      );
+
+      // 低矮圆形炮座：把炮塔从甲板上稍微撑起。
+      const pedestalH = size * 0.3;
+      const pedestal = new THREE.Mesh(
+        new THREE.CylinderGeometry(housingWidth * 0.42, housingWidth * 0.5, pedestalH, 14),
+        mats.turret,
+      );
+      pedestal.position.set(sideSign * x, deckYAt(z) + pedestalH / 2, z);
+      group.add(pedestal);
+
       const t = buildTurret(mats, size, barrels, barrelLen, barrelGap);
-      t.group.position.set(sideSign * railX, deckYAt(z) + 0.12, z);
+      t.group.position.set(sideSign * x, deckYAt(z) + pedestalH, z);
       group.add(t.group);
       turrets.push({
         group: t.group,
@@ -1272,8 +1292,9 @@ function buildSecondaryMounts(group, cfg, shipClass, deckYAt, mats, hullOpts) {
 }
 
 // 防空炮阵列：全回旋小口径双联装炮塔（自动点防御，玩家不可操控）。
-// 战列/巡洋的侧舷甲板让给了副炮 → 防空集中到船尾阵形（舰桥后缘到艉部，
-// 两舷交错）；驱逐/航母沿用舷侧散布（艏段到艉段交错）。
+// 副炮已移至舰桥两舷侧甲板，艏/艉甲板不再与副炮混布 → 战列/巡洋防空保持
+// 船尾集中阵形（舰桥后缘到艉部，两舷交错）；驱逐/航母沿用舷侧散布
+// （艏段到艉段交错）。
 function buildAaMounts(group, cfg, shipClass, deckYAt, mats, hullOpts) {
   const aa = getClassAa(shipClass);
   if (!aa || aa.mounts <= 0) return [];
