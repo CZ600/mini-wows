@@ -16,6 +16,7 @@ import { ProjectileManager, weaponVisuals } from './projectile.js';
 import { TorpedoManager, TORPEDO_TIERS } from './torpedo.js';
 import { Squadron } from './aircraft.js';
 import { AswAimIndicator, makeAswPlaneMesh } from './asw.js';
+import { updateFpsEMA } from './fps.js';
 
 const CAM_DIST = 30;
 const CAM_HEIGHT = 15;
@@ -1003,7 +1004,7 @@ export class MultiplayerEngine {
 
     const dt = Math.min((time - this.lastTime) / 1000, 0.1);
     this.lastTime = time;
-    this._fps += ((1 / dt) - this._fps) * 0.05;
+    this._fps = updateFpsEMA(this._fps, dt);
 
     if (this.water) {
       this.water.material.uniforms['time'].value += dt * 0.5;
@@ -1178,14 +1179,7 @@ export class MultiplayerEngine {
       this.localShip.ship.velocityHeading = this.localShip.velocityHeading;
       this.localShip.ship.speed = this.localShip.speed;
       this.localShip.ship.position.set(this.localShip.pos_x, 0, this.localShip.pos_z);
-      if (Math.abs(this.localShip.speed) > 1) {
-        this.localShip.ship._wakeEmitAccum += Math.abs(this.localShip.speed) * 5 * dt;
-        while (this.localShip.ship._wakeEmitAccum >= 1) {
-          this.localShip.ship._emitWake();
-          this.localShip.ship._wakeEmitAccum -= 1;
-        }
-      }
-      this.localShip.ship._updateWake(dt);
+      this.localShip.ship.tickWake(dt);
     }
 
     // Turret aiming & cooldown

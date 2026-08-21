@@ -259,8 +259,15 @@ export class Ship {
     this.aaMounts = (model.aaMounts || []).map(t => ({ ...t }));
   }
 
+  // ── 航行水花系统 ──────────────────────────────────────────────
+  // 两层结构：
+  //   1. 粒子（THREE.Points）：艏部 V 形喷溅、两舷白浪、艉部翻腾与泡沫；
+  //   2. 艉流带（triangle-strip）：船身后拖出的持久泡沫尾迹，随时间
+  //      扩散、变淡，停船后逐渐消散。
+  // 所有发射强度由速度比 s = |speed|/maxSpeed 门控：低速只有轻微艉部
+  // 泡沫，高速才出现明显的艏波喷溅。下潜中的潜艇不产生水花。
   _initWake() {
-    const max = 480;
+    const max = 720;
     this._wakeMax = max;
     this._wakeData = new Array(max);
     this._wakeEmitAccum = 0;
@@ -269,18 +276,27 @@ export class Ship {
     const positions = new Float32Array(max * 3);
     const opacities = new Float32Array(max);
     const sizes = new Float32Array(max);
+    const rotations = new Float32Array(max);
+    const seeds = new Float32Array(max);
+    const types = new Float32Array(max);
 
     for (let i = 0; i < max; i++) {
       positions[i * 3 + 1] = -100;
       opacities[i] = 0;
       sizes[i] = 0;
-      this._wakeData[i] = { active: false, life: 0, maxLife: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+      this._wakeData[i] = {
+        active: false, life: 0, maxLife: 0, type: 0,
+        x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, size0: 1,
+      };
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     geo.setAttribute('aOpacity', new THREE.Float32BufferAttribute(opacities, 1));
     geo.setAttribute('aSize', new THREE.Float32BufferAttribute(sizes, 1));
+    geo.setAttribute('aRot', new THREE.Float32BufferAttribute(rotations, 1));
+    geo.setAttribute('aSeed', new THREE.Float32BufferAttribute(seeds, 1));
+    geo.setAttribute('aType', new THREE.Float32BufferAttribute(types, 1));
 
     const mat = new THREE.ShaderMaterial({
       transparent: true,
@@ -288,9 +304,15 @@ export class Ship {
       vertexShader: `
         attribute float aOpacity;
         attribute float aSize;
+        attribute float aRot;
+        attribute float aSeed;
+        attribute float aType;
         varying float vOpacity;
+        varying float vRot;
+        varying float vSeed;
+        varying float vType;
         void main() {
-          vOpacity = aOpacity;
+          vOpacity = aOpacity; vRot = aRot; vSeed = aSeed; vType = aType;
           vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
           gl_PointSize = aSize * (200.0 / -mvPos.z);
           gl_Position = projectionMatrix * mvPos;
@@ -298,13 +320,28 @@ export class Ship {
       `,
       fragmentShader: `
         varying float vOpacity;
+        varying float vRot;
+        varying float vSeed;
+        varying float vType;
         void main() {
-          float d = length(gl_PointCoord - vec2(0.5));
-          if (d > 0.5) discard;
-          float a = (1.0 - smoothstep(0.45, 0.5, d)) * vOpacity;
-          float ring = smoothstep(0.28, 0.45, d);
-          vec3 color = mix(vec3(1.0, 1.0, 1.0), vec3(0.18, 0.26, 0.34), ring);
-          gl_FragColor = vec4(color, a);
+          vec2 uv = gl_PointCoord - 0.5;
+          float c = cos(vRot);
+          float s = sin(vRot);
+          uv = mat2(c, -s, s, c) * uv;
+          float r = length(uv);
+          if (r > 0.5) discard;
+          float ang = atan(uv.y, uv.x);
+          // 不规则的团状轮廓 + 细颗粒质感，避免"整齐圆圈"的假感
+          float lump = 0.78 + 0.22 * sin(ang * 3.0 + vSeed * 6.2832) * sin(ang * 5.0 - vSeed * 9.0);
+          float grain = 0.72 + 0.28 * sin(ang * 11.0 + vSeed * 17.0 + r * 8.0);
+          // 喷溅(0)：亮白软边团；泡沫(1)：偏蓝白、边缘溶解成颗粒
+          float sprayA = pow(smoothstep(0.5, 0.06, r), 1.35) * lump;
+          float foamA = smoothstep(0.5, 0.18, r) * (lump * 0.6 + grain * 0.4);
+          float a = mix(sprayA, foamA, vType) * vOpacity;
+          if (a < 0.01) discard;
+          vec3 sprayCol = vec3(0.97, 0.99, 1.0);
+          vec3 foamCol = mix(vec3(0.82, 0.90, 0.97), vec3(1.0), grain * 0.35);
+          gl_FragColor = vec4(mix(sprayCol, foamCol, vType), a);
         }
       `,
     });
@@ -312,6 +349,8 @@ export class Ship {
     this._wakeMesh = new THREE.Points(geo, mat);
     this._wakeMesh.frustumCulled = false;
     this.scene.add(this._wakeMesh);
+
+    this._initWakeTrail();
   }
 
   _emitWake() {
@@ -319,47 +358,92 @@ export class Ship {
     this._wakeNextIdx = (this._wakeNextIdx + 1) % this._wakeMax;
 
     const p = this._wakeData[idx];
-    p.active = true;
-    p.life = 0;
-    p.maxLife = 1.2 + Math.random() * 0.8;
-
+    const speed = Math.abs(this.speed);
+    const s = Math.min(1, speed / this.maxSpeed);
     const halfLen = this.shipLength / 2;
-    const halfW = this.shipWidth * 0.25;
+    const halfW = this.shipWidth * 0.5;
     const sinH = Math.sin(this.heading);
     const cosH = Math.cos(this.heading);
+    const hull = 1 + this.shipWidth * 0.10;
 
-    const isBow = Math.random() < 0.20;
-    const sign = Math.random() < 0.5 ? -1 : 1;
+    // 部位按速度加权：高速时艏波占主导，低速以艉部泡沫为主
+    const bowP = s > 0.22 ? 0.16 + 0.30 * s * s : 0;
+    const roll = Math.random();
 
-    if (isBow) {
-      const bowZ = halfLen * 0.7;
-      const bowSide = sign * halfW;
-      p.x = this.position.x + sinH * bowZ + cosH * bowSide;
-      p.y = 1.6 + Math.random() * 1.0;
-      p.z = this.position.z + cosH * bowZ - sinH * bowSide;
-
-      const sideSpeed = Math.abs(this.speed) * 0.35 + Math.random() * 2.0;
-      p.vx = cosH * sign * sideSpeed - sinH * Math.abs(this.speed) * 0.15;
-      p.vy = 1.8 + Math.random() * 2.0;
-      p.vz = -sinH * sign * sideSpeed - cosH * Math.abs(this.speed) * 0.15;
+    let type; // 0 = 喷溅（抛物线飞行），1 = 泡沫（贴水面扩散）
+    if (roll < bowP) {
+      // 艏波：向前外侧掀起的 V 形水花，速度越快抛得越高越远
+      type = 0;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const bowZ = halfLen * (0.55 + Math.random() * 0.25);
+      const lat = side * halfW * (0.55 + Math.random() * 0.5);
+      p.x = this.position.x + sinH * bowZ + cosH * lat;
+      p.y = 0.5 + Math.random() * 0.6;
+      p.z = this.position.z + cosH * bowZ - sinH * lat;
+      const out = (1.6 + 3.4 * s) * (0.7 + Math.random() * 0.6);
+      const fwd = speed * (0.15 + 0.10 * Math.random());
+      p.vx = cosH * side * out + sinH * fwd;
+      p.vy = 1.1 + 2.2 * s + Math.random() * 1.2;
+      p.vz = -sinH * side * out + cosH * fwd;
+      p.maxLife = 0.5 + Math.random() * 0.5;
+      p.size0 = (0.9 + Math.random() * 0.5) * hull;
+    } else if (roll < bowP + 0.30) {
+      // 艉流泡沫：螺旋桨翻涌出的白色泡沫带，贴水面缓慢扩散
+      type = 1;
+      const lat = (Math.random() - 0.5) * 1.6 * halfW;
+      const stern = halfLen * (0.9 + Math.random() * 0.15);
+      p.x = this.position.x - sinH * stern + cosH * lat;
+      p.y = 0.18;
+      p.z = this.position.z - cosH * stern - sinH * lat;
+      p.vx = -sinH * speed * 0.05 + (Math.random() - 0.5) * 0.8;
+      p.vy = 0;
+      p.vz = -cosH * speed * 0.05 + (Math.random() - 0.5) * 0.8;
+      p.maxLife = 2.6 + Math.random() * 1.8;
+      p.size0 = (1.5 + Math.random() * 0.9) * hull;
+    } else if (roll < bowP + 0.60) {
+      // 两舷白浪：被船体推开的水线泡沫，沿船侧拖出白色条带
+      type = 1;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const along = (Math.random() - 0.4) * 1.2 * halfLen;
+      const lat = side * halfW * (1.0 + Math.random() * 0.25);
+      p.x = this.position.x + sinH * along + cosH * lat;
+      p.y = 0.18;
+      p.z = this.position.z + cosH * along - sinH * lat;
+      const out = 0.5 + 1.3 * s + Math.random() * 0.5;
+      p.vx = cosH * side * out;
+      p.vy = 0;
+      p.vz = -sinH * side * out;
+      p.maxLife = 1.8 + Math.random() * 1.4;
+      p.size0 = (1.2 + Math.random() * 0.6) * hull;
     } else {
-      const side = (Math.random() - 0.5) * 2 * halfW;
-      p.x = this.position.x - sinH * halfLen + cosH * side;
-      p.y = 1.6 + Math.random() * 1.0;
-      p.z = this.position.z - cosH * halfLen - sinH * side;
-
-      const backSpeed = Math.abs(this.speed) * 0.25 + Math.random() * 2.0;
-      const spread = (Math.random() - 0.5) * 3.5;
-      p.vx = -sinH * backSpeed + cosH * spread;
-      p.vy = 2.2 + Math.random() * 2.3;
-      p.vz = -cosH * backSpeed - sinH * spread;
+      // 艉部翻腾：艉流激起的小股碎水
+      type = 0;
+      const lat = (Math.random() - 0.5) * 2 * halfW;
+      const stern = halfLen * 0.85;
+      p.x = this.position.x - sinH * stern + cosH * lat;
+      p.y = 0.4 + Math.random() * 0.4;
+      p.z = this.position.z - cosH * stern - sinH * lat;
+      p.vx = -sinH * speed * 0.10 + (Math.random() - 0.5) * 2.4;
+      p.vy = 1.0 + 2.0 * s + Math.random() * 1.4;
+      p.vz = -cosH * speed * 0.10 + (Math.random() - 0.5) * 2.4;
+      p.maxLife = 0.45 + Math.random() * 0.45;
+      p.size0 = (0.7 + Math.random() * 0.4) * hull;
     }
+
+    p.active = true;
+    p.life = 0;
+    p.type = type;
+    const attrs = this._wakeMesh.geometry.attributes;
+    attrs.aRot.array[idx] = Math.random() * 6.2832;
+    attrs.aSeed.array[idx] = Math.random();
+    attrs.aType.array[idx] = type;
   }
 
   _updateWake(dt) {
-    const positions = this._wakeMesh.geometry.attributes.position.array;
-    const opacities = this._wakeMesh.geometry.attributes.aOpacity.array;
-    const sizes = this._wakeMesh.geometry.attributes.aSize.array;
+    const attrs = this._wakeMesh.geometry.attributes;
+    const positions = attrs.position.array;
+    const opacities = attrs.aOpacity.array;
+    const sizes = attrs.aSize.array;
 
     for (let i = 0; i < this._wakeMax; i++) {
       const p = this._wakeData[i];
@@ -370,24 +454,210 @@ export class Ship {
         positions[i * 3 + 1] = -100;
         opacities[i] = 0;
         sizes[i] = 0;
-      } else {
+        continue;
+      }
+      const t = p.life / p.maxLife;
+      if (p.type === 0) {
+        // 喷溅：抛物线飞行，落回水面后快速消散
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.z += p.vz * dt;
-        p.vy -= 4.0 * dt;
-        if (p.y < 0.3) { p.y = 0.3; p.vy = 0; }
+        p.vy -= 6.5 * dt;
         positions[i * 3] = p.x;
         positions[i * 3 + 1] = p.y;
         positions[i * 3 + 2] = p.z;
-        const t = p.life / p.maxLife;
-        opacities[i] = (1 - t) * 1.0;
-        sizes[i] = (1.4 + t * 2.6) * (1 + this.shipWidth * 0.12);
+        if (p.y <= 0.22) {
+          p.y = 0.22;
+          p.vy = 0;
+          p.vx *= 0.3;
+          p.vz *= 0.3;
+          p.maxLife = Math.min(p.maxLife, p.life + 0.22);
+        }
+        opacities[i] = Math.pow(1 - t, 1.5);
+        sizes[i] = p.size0 * (1 + t * 1.6);
+      } else {
+        // 泡沫：贴水面缓慢漂移扩散，先浮现再逐渐消散
+        p.x += p.vx * dt;
+        p.z += p.vz * dt;
+        const damp = Math.max(0, 1 - 1.1 * dt);
+        p.vx *= damp;
+        p.vz *= damp;
+        positions[i * 3] = p.x;
+        positions[i * 3 + 2] = p.z;
+        const rise = Math.min(1, p.life * 7);
+        opacities[i] = rise * Math.pow(1 - t, 1.2) * 0.85;
+        sizes[i] = p.size0 * (1 + t * 2.2);
       }
     }
 
-    this._wakeMesh.geometry.attributes.position.needsUpdate = true;
-    this._wakeMesh.geometry.attributes.aOpacity.needsUpdate = true;
-    this._wakeMesh.geometry.attributes.aSize.needsUpdate = true;
+    attrs.position.needsUpdate = true;
+    attrs.aOpacity.needsUpdate = true;
+    attrs.aSize.needsUpdate = true;
+    // 在 _emitWake 中写入、此处置脏（每帧统一上传）
+    attrs.aRot.needsUpdate = true;
+    attrs.aSeed.needsUpdate = true;
+    attrs.aType.needsUpdate = true;
+  }
+
+  // 每帧驱动水花（发射 + 粒子更新 + 尾迹更新）。单人/组队由 update()
+  // 调用；联机模式下 mesh 由服务器状态直接驱动、不经过 update()，由
+  // multiplayer_engine 显式调用。
+  tickWake(dt) {
+    if (this.alive && Math.abs(this.speed) > 1 && this.diveTransition < 0.4) {
+      const s = Math.min(1, Math.abs(this.speed) / this.maxSpeed);
+      // 单位距离的发射量随速度比增强，总量封顶避免高速舰打爆粒子池
+      const rate = Math.min(Math.abs(this.speed) * 18 * (0.35 + 0.65 * s), 240);
+      this._wakeEmitAccum += rate * dt;
+      while (this._wakeEmitAccum >= 1) {
+        this._emitWake();
+        this._wakeEmitAccum -= 1;
+      }
+    } else {
+      this._wakeEmitAccum = 0;
+    }
+    this._updateWake(dt);
+    this._updateWakeTrail(dt);
+  }
+
+  _initWakeTrail() {
+    const maxPts = 56;            // 采样点数；间距 4m → 最长约 220m 的尾迹
+    this._trailMax = maxPts;
+    this._trailSpacing = 4;
+    this._trailPts = [];
+    this._trailTime = 0;
+    this._trailLife = 9;          // 尾迹完全消散的时间（秒）
+
+    const positions = new Float32Array(maxPts * 2 * 3);
+    const fades = new Float32Array(maxPts * 2);
+    const across = new Float32Array(maxPts * 2);
+    const indices = new Uint16Array((maxPts - 1) * 6);
+    for (let i = 0; i < maxPts - 1; i++) {
+      const v = i * 6;
+      const a = i * 2;
+      indices[v] = a;
+      indices[v + 1] = a + 1;
+      indices[v + 2] = a + 2;
+      indices[v + 3] = a + 1;
+      indices[v + 4] = a + 3;
+      indices[v + 5] = a + 2;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute('aFade', new THREE.Float32BufferAttribute(fades, 1));
+    geo.setAttribute('aAcross', new THREE.Float32BufferAttribute(across, 1));
+    geo.setIndex(new THREE.Uint16BufferAttribute(indices, 1));
+    geo.setDrawRange(0, 0);
+
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: `
+        attribute float aFade;
+        attribute float aAcross;
+        varying float vFade;
+        varying float vAcross;
+        varying vec3 vWorld;
+        void main() {
+          vFade = aFade; vAcross = aAcross; vWorld = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        varying float vFade;
+        varying float vAcross;
+        varying vec3 vWorld;
+        void main() {
+          // 泡沫噪声：两圈正弦叠出的粗颗粒纹理，随时间缓慢流动
+          float n1 = sin(vWorld.x * 0.55 + uTime * 0.6) * sin(vWorld.z * 0.75 - uTime * 0.45);
+          float n2 = sin(vWorld.x * 1.9 - uTime * 0.9) * sin(vWorld.z * 2.2 + uTime * 0.7);
+          float n = 0.55 + 0.30 * n1 + 0.15 * n2;
+          float edge = smoothstep(1.0, 0.35, abs(vAcross));
+          float a = vFade * edge * (0.30 + 0.55 * n);
+          if (a < 0.01) discard;
+          vec3 col = mix(vec3(0.78, 0.87, 0.95), vec3(1.0), n * 0.45);
+          gl_FragColor = vec4(col, a);
+        }
+      `,
+    });
+
+    this._trailMesh = new THREE.Mesh(geo, mat);
+    this._trailMesh.frustumCulled = false;
+    this._trailMesh.renderOrder = 1;
+    this.scene.add(this._trailMesh);
+  }
+
+  _updateWakeTrail(dt) {
+    this._trailTime += dt;
+    this._trailMesh.material.uniforms.uTime.value = this._trailTime;
+
+    const speed = Math.abs(this.speed);
+    if (this.alive && speed > 0.8 && this.diveTransition < 0.4) {
+      // 采样点取艉部稍后方，沿实际运动方向（velocityHeading × 航速符号）拖尾
+      const dir = this.speed >= 0 ? 1 : -1;
+      const sinV = Math.sin(this.velocityHeading) * dir;
+      const cosV = Math.cos(this.velocityHeading) * dir;
+      const stemX = this.position.x - sinV * (this.shipLength / 2 + 1.5);
+      const stemZ = this.position.z - cosV * (this.shipLength / 2 + 1.5);
+      const last = this._trailPts[this._trailPts.length - 1];
+      if (!last) {
+        this._trailPts.push({ x: stemX, z: stemZ, h: this.velocityHeading, age: 0 });
+      } else {
+        const dx = stemX - last.x;
+        const dz = stemZ - last.z;
+        if (dx * dx + dz * dz >= this._trailSpacing * this._trailSpacing) {
+          this._trailPts.push({ x: stemX, z: stemZ, h: this.velocityHeading, age: 0 });
+          if (this._trailPts.length > this._trailMax) this._trailPts.shift();
+        }
+      }
+    }
+
+    const pts = this._trailPts;
+    const n = pts.length;
+    const geo = this._trailMesh.geometry;
+    if (n < 2) {
+      geo.setDrawRange(0, 0);
+      this._trailMesh.visible = false;
+      return;
+    }
+
+    const positions = geo.attributes.position.array;
+    const fades = geo.attributes.aFade.array;
+    const across = geo.attributes.aAcross.array;
+    let anyVisible = false;
+    for (let i = 0; i < n; i++) {
+      const pt = pts[i];
+      pt.age += dt;
+      // 尾迹按龄扩散（V 形张开），近艉处最亮
+      const width = this.shipWidth * 0.55 + Math.min(pt.age * (0.5 + 0.06 * speed), 15);
+      const fade = Math.max(0, 1 - pt.age / this._trailLife);
+      const bright = 0.45 + 0.55 * Math.exp(-pt.age * 0.7);
+      const f = fade * bright;
+      const sinH = Math.sin(pt.h);
+      const cosH = Math.cos(pt.h);
+      const o = i * 6;
+      positions[o] = pt.x + cosH * width;
+      positions[o + 1] = 0.16;
+      positions[o + 2] = pt.z - sinH * width;
+      positions[o + 3] = pt.x - cosH * width;
+      positions[o + 4] = 0.16;
+      positions[o + 5] = pt.z + sinH * width;
+      fades[i * 2] = f;
+      fades[i * 2 + 1] = f;
+      across[i * 2] = 1;
+      across[i * 2 + 1] = -1;
+      if (f > 0.01) anyVisible = true;
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.aFade.needsUpdate = true;
+    geo.attributes.aAcross.needsUpdate = true;
+    geo.setDrawRange(0, (n - 1) * 6);
+    this._trailMesh.visible = anyVisible;
+
+    // 完全消散的老点出队，避免停船后队列无限堆积
+    while (pts.length && pts[0].age >= this._trailLife) pts.shift();
   }
 
   _destroyWake() {
@@ -396,6 +666,12 @@ export class Ship {
       this._wakeMesh.geometry.dispose();
       this._wakeMesh.material.dispose();
       this._wakeMesh = null;
+    }
+    if (this._trailMesh) {
+      this.scene.remove(this._trailMesh);
+      this._trailMesh.geometry.dispose();
+      this._trailMesh.material.dispose();
+      this._trailMesh = null;
     }
   }
 
@@ -455,6 +731,7 @@ export class Ship {
         }
       }
       this._updateWake(dt);
+      this._updateWakeTrail(dt);
       return;
     }
 
@@ -499,14 +776,7 @@ export class Ship {
 
     this.mesh.rotation.y = this.heading;
 
-    if (Math.abs(this.speed) > 1) {
-      this._wakeEmitAccum += Math.abs(this.speed) * 15 * dt;
-      while (this._wakeEmitAccum >= 1) {
-        this._emitWake();
-        this._wakeEmitAccum -= 1;
-      }
-    }
-    this._updateWake(dt);
+    this.tickWake(dt);
 
     for (const t of this.turrets) {
       if (t.cooldown > 0) t.cooldown -= dt;

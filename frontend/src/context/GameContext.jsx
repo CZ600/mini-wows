@@ -8,6 +8,7 @@ import {
 import {
   loadAudioSettings, saveAudioSettings, applyAudioSettingsToManager,
 } from '../game/audio_settings.js';
+import { prefetchGameModules } from '../game/prefetch.js';
 
 // NOTE: engine.js / multiplayer_engine.js are intentionally NOT imported here.
 // They pull in three.js + the entire game module tree. Importing them statically
@@ -165,9 +166,14 @@ export function GameProvider({ children }) {
 
   // Lazily load + instantiate the game engines (three.js etc).
   // Safe to call repeatedly; only runs the heavy work once.
-  const loadEngines = useCallback(async () => {
+  // onProgress (optional) receives { loaded, total, speed } while the module
+  // graph is being prefetched — see game/prefetch.js.
+  const loadEngines = useCallback(async (onProgress) => {
     if (engineRef.current && mpEngineRef.current) return;
     try {
+      // Warm the HTTP cache with byte-level progress before the real dynamic
+      // imports (which have no progress events). Best-effort: never throws.
+      await prefetchGameModules(onProgress);
       const [{ GameEngine }, { MultiplayerEngine }] = await Promise.all([
         import('../game/engine.js'),
         import('../game/multiplayer_engine.js'),

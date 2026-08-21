@@ -1270,9 +1270,22 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
   color: var(--text-secondary); font-size: 18px; margin-bottom: 12px;
   letter-spacing: 2px;
 }
-.loading-countdown {
-  color: var(--text-tertiary); font-size: 16px; font-family: monospace;
-  margin-top: 4px;
+.loading-progress {
+  width: 340px; height: 8px; margin: 4px auto 10px;
+  background: rgba(110,192,255,0.12);
+  border: 1px solid rgba(110,192,255,0.25);
+  border-radius: 4px; overflow: hidden;
+}
+.loading-progress-fill {
+  height: 100%; width: 0;
+  background: linear-gradient(90deg, var(--accent), #8ad0ff);
+  border-radius: 4px;
+  transition: width 0.15s linear;
+}
+.loading-stats {
+  width: 340px; margin: 0 auto;
+  display: flex; justify-content: space-between;
+  color: var(--text-tertiary); font-size: 14px; font-family: monospace;
 }
 .loading-spinner {
   width: 56px; height: 56px; margin: 0 auto 28px;

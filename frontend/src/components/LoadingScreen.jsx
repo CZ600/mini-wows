@@ -2,56 +2,53 @@ import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useGame } from '../context/GameContext.jsx';
 
-// Upper bound wait (seconds). If engines load faster, we enter immediately.
-const MAX_WAIT = 20;
+function fmtBytes(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0 KB';
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 export default function LoadingScreen() {
   const { loadEngines, enginesError } = useGame();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const next = searchParams.get('next') || '/';
-  const [remaining, setRemaining] = useState(MAX_WAIT);
-  const [done, setDone] = useState(false);
+  const [progress, setProgress] = useState({ loaded: 0, total: 0, speed: 0 });
 
   useEffect(() => {
     let cancelled = false;
 
-    // Kick off the (dynamic) game-resource load; enter the game as soon as it
-    // resolves. Falls back to the timeout UI below if it never resolves.
-    loadEngines()
+    // No timeout: a slow link just takes longer, and the transfer readout
+    // below shows how it is going. Errors surface via enginesError.
+    loadEngines((p) => {
+      if (!cancelled) setProgress(p);
+    })
       .then(() => {
         if (cancelled) return;
-        setDone(true);
         navigate(next, { replace: true });
       })
       .catch(() => {
-        // enginesError is set in context; the timeout UI below will surface it.
+        // enginesError is set in context; the error UI below will surface it.
       });
-
-    // Countdown display (upper bound), ticks once per second.
-    const timer = setInterval(() => {
-      setRemaining((r) => (r > 0 ? r - 1 : 0));
-    }, 1000);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
   }, [loadEngines, navigate, next]);
 
-  const timedOut = remaining === 0 && !done;
-
-  if (enginesError || timedOut) {
+  if (enginesError) {
     return (
       <div className="loading-screen">
         <div className="loading-container">
           <h1 className="game-title">3D 海战</h1>
-          <p className="loading-text">加载游戏资源超时，请检查网络后重试。</p>
+          <p className="loading-text">加载游戏资源失败，请检查网络后重试。</p>
           <button className="loading-retry-btn" onClick={() => window.location.reload()}>重试</button>
         </div>
       </div>
     );
   }
+
+  const pct = progress.total > 0 ? Math.min(100, (progress.loaded / progress.total) * 100) : 0;
 
   return (
     <div className="loading-screen">
@@ -59,7 +56,14 @@ export default function LoadingScreen() {
         <h1 className="game-title">3D 海战</h1>
         <div className="loading-spinner" />
         <p className="loading-text">正在加载游戏资源...</p>
-        <p className="loading-countdown">{remaining}s</p>
+        <div className="loading-progress">
+          <div className="loading-progress-fill" style={{ width: `${pct}%` }} />
+        </div>
+        <div className="loading-stats">
+          <span>{fmtBytes(progress.loaded)} / {fmtBytes(progress.total)}</span>
+          <span>{pct.toFixed(0)}%</span>
+          <span>{fmtBytes(progress.speed)}/s</span>
+        </div>
       </div>
     </div>
   );

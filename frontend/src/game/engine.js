@@ -11,6 +11,7 @@ import { FriendlyAIShip, EnemyTeamShip, pickTeamShipType } from './team_ai.js';
 import { Controls } from './controls.js';
 import { AudioManager } from './audio.js';
 import { ShipSkills } from './skills.js';
+import { updateFpsEMA } from './fps.js';
 import { getMuzzleSpeed, getCannonDrag } from './config.js';
 import { Squadron, CarrierAirWing, SquadronManager } from './aircraft.js';
 import { CARRIER, getAirGroupConfig } from './config.js';
@@ -612,7 +613,7 @@ export class GameEngine {
     const now = performance.now();
     const dt = Math.min((now - this.lastTime) / 1000, 0.05);
     this.lastTime = now;
-    this._fps = 0.9 * this._fps + 0.1 * (1 / Math.max(dt, 0.001));
+    this._fps = updateFpsEMA(this._fps, dt, 0.1);
 
     if (this.water && this.water.material && this.water.material.uniforms) {
       this.water.material.uniforms['time'].value += dt * 0.5;
@@ -1273,7 +1274,7 @@ export class GameEngine {
 
     const dt = Math.min((time - this.lastTime) / 1000, 0.1);
     this.lastTime = time;
-    this._fps += ((1 / dt) - this._fps) * 0.05;
+    this._fps = updateFpsEMA(this._fps, dt);
 
     if (this.water) {
       this.water.material.uniforms['time'].value += dt * 0.5;

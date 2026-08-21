@@ -67,7 +67,10 @@ describe('Ship wake configuration', () => {
     for (let i = 0; i < s._wakeMax; i++) {
       s._emitWake();
     }
-    const stern = s._wakeData.filter(p => p.active && p.z < 0);
+    const halfLen = s.shipLength / 2;
+    // 船舯之后的发射点（艉流泡沫/艉部翻腾）应落在船体宽度投影内；
+    // 两舷白浪（沿船侧、略宽于船体）不在此判定范围内。
+    const stern = s._wakeData.filter(p => p.active && p.z < -halfLen * 0.5);
     expect(stern.length).toBeGreaterThan(0);
     const sternX = stern.map(p => p.x);
     const maxAbs = Math.max(...sternX.map(Math.abs));
@@ -106,10 +109,12 @@ describe('Ship wake configuration', () => {
     expect(maxSize).toBeGreaterThan(1.5);
   });
 
-  it('wake fragment shader keeps alpha high through the ring region', () => {
+  it('wake fragment shader renders rotated two-tone spray/foam sprites', () => {
     const s = createShip();
     const fs = s._wakeMesh.material.fragmentShader;
-    expect(fs).toMatch(/smoothstep\(\s*0\.4[0-9]+,\s*0\.5,\s*d\s*\)/);
+    expect(fs).toContain('vRot'); // 每粒子随机旋转，避免整齐圆圈的假感
+    expect(fs).toMatch(/mix\s*\(\s*sprayA,\s*foamA,\s*vType\s*\)/); // 喷溅/泡沫双形态
+    expect(fs).toMatch(/discard/);
   });
 
   it('wake mesh disables frustum culling to avoid stale bounding sphere', () => {
@@ -117,14 +122,15 @@ describe('Ship wake configuration', () => {
     expect(s._wakeMesh.frustumCulled).toBe(false);
   });
 
-  it('wake fragment shader has a dark ring color for outline visibility on bright backgrounds', () => {
+  it('wake colors stay bright (white / pale blue) for visibility on the water', () => {
     const s = createShip();
     const fs = s._wakeMesh.material.fragmentShader;
     const colors = [...fs.matchAll(/vec3\(\s*([0-9.]+),\s*([0-9.]+),\s*([0-9.]+)\s*\)/g)];
-    const dark = colors.filter(m =>
-      parseFloat(m[1]) < 0.5 && parseFloat(m[2]) < 0.5 && parseFloat(m[3]) < 0.5
-    );
-    expect(dark.length).toBeGreaterThan(0);
+    expect(colors.length).toBeGreaterThan(0);
+    for (const m of colors) {
+      const [r, g, b] = [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])];
+      expect(Math.min(r, g, b)).toBeGreaterThan(0.5);
+    }
   });
 
   it('wake fragment shader blends core and ring colors via mix()', () => {
