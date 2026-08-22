@@ -3,7 +3,8 @@ import { LEVEL_CONFIG, getClassConfig } from './ship.js';
 import { applyCannonSpread, compensateDragPitch, aimAaMountAtPoint, getTurretFireData } from './turret.js';
 import { buildShipModel, createMarkerSprite, CLASS_NAMES } from './ship_model.js';
 import { BASE_MAX_SPEED, getMuzzleSpeed, getCannonDrag, SUBMARINE, getClassAa, getAaTier, AA_DRAG,
-         getClassAsw, getAswTier, clampAswAim, ASW_MUZZLE_SPEED, ASW_DRAG, ASW_FUSE_DELAY, ASW_AIR } from './config.js';
+         getClassAsw, getAswTier, clampAswAim, ASW_MUZZLE_SPEED, ASW_DRAG, ASW_FUSE_DELAY, ASW_AIR,
+         getSubDetectRange } from './config.js';
 import { AswStrikePlane } from './asw.js';
 
 export const ENEMY_SCALE = {
@@ -262,9 +263,15 @@ export class EnemyShip {
   // the player). Team-mode subclasses override this with their own logic and
   // set this.fireTarget to whatever unit they want to shoot at.
   _decideAI(dt, playerPos, dist, dx, dz) {
+    // 对潜索敌：玩家是潜艇时改用本舰种的对潜索敌距离（护卫舰加大、
+    // 巡洋/战列削弱），圈外保持巡逻 —— 潜艇得以隐匿接敌。
+    const detectRange = playerPos.shipClass === 'submarine'
+      ? getSubDetectRange(this.shipType) ?? ENEMY_DETECT_RANGE
+      : ENEMY_DETECT_RANGE;
+
     if (dist < ENEMY_ORBIT_RANGE) {
       this.state = 'orbit';
-    } else if (dist < ENEMY_DETECT_RANGE) {
+    } else if (dist < detectRange) {
       this.state = 'chase';
     } else if (this.state !== 'idle') {
       this.state = 'idle';

@@ -15,6 +15,7 @@
 // shooter's `faction`; same-faction hits are ignored.
 
 import { EnemyShip, ENEMY_ORBIT_RANGE, ENEMY_ORBIT_MIN, ENEMY_ORBIT_MAX } from './enemy.js';
+import { getSubDetectRange } from './config.js';
 
 // ---- Tunables --------------------------------------------------------------
 const ENGAGE_RANGE = 1200;       // wingmen actively engage any foe within this
@@ -244,12 +245,16 @@ export class EnemyTeamShip extends EnemyShip {
     // or actively shooting get picked too - so the 10 reds don't all tunnel the
     // player and will actually fight the wingmen.
     const friendlies = (this._allFriendlies || []).filter(u => u.alive);
+    // 对潜索敌：本舰种对潜艇的专用索敌圈（护卫舰加大、巡洋/战列削弱），
+    // 圈外的潜艇视同未发现，不参与目标评分。
+    const subDetectRange = getSubDetectRange(this.shipType) ?? DETECT_RANGE;
     let target = p;
     if (friendlies.length > 0) {
       let bestScore = -Infinity;
       for (const f of friendlies) {
         const d = dist2D(this, f);
         if (d > 1400) continue;                 // ignore far-away friendlies
+        if (f.shipClass === 'submarine' && d > subDetectRange) continue;
         let score = 1000 - d;                   // closer = better
         if (f === p) score += this.role === 'focus' ? 350 : 0;  // player bias
         else score += this.role === 'intercept' ? 250 : 0;      // wingman bias for interceptors
@@ -260,14 +265,24 @@ export class EnemyTeamShip extends EnemyShip {
       }
     }
 
+    // The loop defaults to the player; a player sub outside this class's
+    // sub-detection ring (with no wingman picked either) must count as
+    // undetected so the ship keeps patrolling instead of psychic-engaging.
+    if (target && target.shipClass === 'submarine' && dist2D(this, target) > subDetectRange) {
+      target = null;
+    }
+
     this.target = target ? toFireTarget(target) : null;
     this.fireTarget = this.target;
 
     // --- Patrol gate -------------------------------------------------------
-    // Until a friendly comes within DETECT_RANGE, stay in the assigned patrol
+    // Until a friendly comes within detection range, stay in the assigned patrol
     // area wandering on a loose watch. No firing, no chasing - just警戒.
+    // The gate follows the chosen target's own detection ring (a sub inside the
+    // class's sub-detection ring counts as detected even beyond DETECT_RANGE).
+    const gateRange = (target && target.shipClass === 'submarine') ? subDetectRange : DETECT_RANGE;
     const nearestFriendlyD = target ? dist2D(this, target) : Infinity;
-    if (nearestFriendlyD > DETECT_RANGE) {
+    if (nearestFriendlyD > gateRange) {
       this.state = 'patrol';
       this.fireTarget = null;            // don't shoot while patrolling
       const ptDx = this._patrolTargetX - this.mesh.position.x;
@@ -334,10 +349,13 @@ export class EnemyTeamShip extends EnemyShip {
     }
 
     // --- Approach / focus-fire --------------------------------------------
+    // Player still far away: advance toward it as a group — unless the player
+    // is a sub outside this class's sub-detection ring (an undetected submarine
+    // must not act as psychic bait; advance on the actual target instead).
+    const playerDetected = !(p.shipClass === 'submarine' && dist2D(this, p) > subDetectRange);
     if (dist > APPROACH_RANGE) {
-      // Still far from the player: advance as a group.
       this.state = 'approach';
-      const targetHeading = Math.atan2(dx, dz);
+      const targetHeading = Math.atan2(playerDetected ? dx : tdx, playerDetected ? dz : tdz);
       const targetSpeed = this.maxSpeed * 0.7;
       return { targetHeading, targetSpeed };
     }

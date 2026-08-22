@@ -297,6 +297,25 @@ export function getClassAsw(shipClass) {
   return fit;
 }
 
+// ---- Per-class submarine detection (对潜索敌) — must mirror game/config.py ----
+// When an AI ship's target is a submarine, this table replaces the generic
+// detection range, so sub stealth depends on who is looking:
+//   destroyer  = 反潜特化：声纳优势，对潜索敌距离加大
+//   cruiser    = 削弱：只在较近的距离上才发现潜艇
+//   battleship = 削弱：对潜几乎盲目，潜艇可贴身雷击
+// Classes not listed (and class-less hulls) return null and callers fall back
+// to their base detection range (solo ENEMY_DETECT_RANGE / team DETECT_RANGE).
+export const SUB_DETECT_RANGE = {
+  destroyer:  1000,
+  cruiser:    400,
+  battleship: 300,
+};
+
+export function getSubDetectRange(shipClass) {
+  if (!shipClass) return null;
+  return SUB_DETECT_RANGE[shipClass] ?? null;
+}
+
 // Clamp an aim point into a fit's drop band (surface hull drop): distance from
 // the ship lands in [fit.min, fit.range] along the same bearing. Returns the
 // clamped point. (Battleship air strikes only clamp to fit.range.)

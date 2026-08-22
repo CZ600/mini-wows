@@ -65,6 +65,11 @@ function ScopeOverlay() {
         <circle cx="200" cy="200" r="3" fill="rgba(255,60,60,0.8)" />
         <text x="200" y="24" textAnchor="middle" fill="rgba(200,200,200,0.5)" fontSize="10" fontFamily="monospace">N</text>
       </svg>
+      {/* 左侧按键提示：Q/E 调整观察高度（controls.js 仅在开镜时响应） */}
+      <div className="scope-hints">
+        <div className="scope-hint"><kbd>Q</kbd>提升视角</div>
+        <div className="scope-hint"><kbd>E</kbd>降低视角</div>
+      </div>
     </div>
   );
 }

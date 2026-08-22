@@ -146,6 +146,32 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 #scope-crosshair {
   position: absolute; inset: 0; width: 100%; height: 100%;
 }
+/* 瞄准镜左侧按键提示（Q/E 视角高低） */
+.scope-hints {
+  position: absolute; left: 24px; top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.scope-hint {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(10, 25, 45, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.scope-hint kbd {
+  display: inline-block;
+  padding: 1px 7px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--accent);
+  background: rgba(110, 192, 255, 0.16);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
 
 /* 左上 */
 #hud-left { position: absolute; top: 56px; left: 20px; }
@@ -536,10 +562,10 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 
 /* ── Menu Mode Cards ── */
 .menu-mode-cards {
-  display: flex; gap: 24px; justify-content: center; margin-bottom: 32px;
+  display: flex; gap: 24px; justify-content: center; margin-bottom: 28px;
 }
 .menu-mode-card {
-  width: 200px; padding: 32px 24px; text-align: center;
+  width: 240px; padding: 28px 20px; text-align: center;
   background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--card-shadow);
   cursor: pointer; transition: 0.18s ease;
@@ -551,6 +577,35 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 .menu-mode-card .mode-icon { font-size: 48px; margin-bottom: 12px; }
 .menu-mode-card .mode-name { font-size: 20px; color: var(--text-primary); font-weight: bold; }
 .menu-mode-card .mode-desc { color: var(--text-secondary); font-size: 14px; margin-top: 8px; }
+.menu-mode-card .mode-intro {
+  color: var(--text-tertiary); font-size: 12px; line-height: 1.7;
+  margin-top: 10px; text-align: left;
+}
+
+/* ── Menu: 基本操作提示 ── */
+.menu-controls { margin-bottom: 28px; }
+.menu-controls-title {
+  color: var(--text-tertiary); font-size: 13px; margin-bottom: 10px;
+  letter-spacing: 2px;
+}
+.menu-controls-row {
+  display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+}
+.menu-control-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 14px;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 13px; color: var(--text-secondary);
+  box-shadow: var(--card-shadow);
+}
+.menu-control-item kbd {
+  display: inline-block; padding: 1px 7px;
+  font-family: monospace; font-size: 12px;
+  color: var(--accent);
+  background: rgba(110, 192, 255, 0.16);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
 
 /* ── Setup Screens ── */
 .setup-screen {
@@ -620,15 +675,15 @@ body { overflow: hidden; background: #000; font-family: 'Microsoft YaHei', sans-
 .mode-seg-item .mode-seg-desc { color: var(--text-secondary); font-size: 12px; }
 
 /* Team battle info panel */
-.team-battle-info {
+.team-battle-info, .battle-info {
   max-width: 500px; margin: 0 auto 24px auto; padding: 18px 20px;
   background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--card-shadow);
 }
-.team-battle-info .team-info-line {
+.team-battle-info .team-info-line, .battle-info .info-line {
   color: var(--text-secondary); font-size: 14px; line-height: 1.9;
 }
-.team-battle-info .team-info-line strong { color: var(--accent); }
+.team-battle-info .team-info-line strong, .battle-info .info-line strong { color: var(--accent); }
 
 /* Ship Class Cards */
 .ship-class-cards {

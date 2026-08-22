@@ -360,6 +360,27 @@ def get_class_asw(ship_class):
         return None
     return fit
 
+# ---- Per-class submarine detection (对潜索敌) ----
+# When an AI ship's target is a submarine, this table replaces the generic
+# ENEMY_DETECT_RANGE, so stealth depends on who is looking:
+#   destroyer  = 反潜特化：声纳优势，对潜索敌距离加大
+#   cruiser    = 削弱：只在较近的距离上才发现潜艇
+#   battleship = 削弱：对潜几乎盲目，潜艇可贴身雷击
+# Classes not listed (and class-less hulls) fall back to the caller's base
+# detection range (get_sub_detect_range returns None).
+# Must mirror frontend config.js SUB_DETECT_RANGE.
+SUB_DETECT_RANGE = {
+    "destroyer":  1000,
+    "cruiser":    400,
+    "battleship": 300,
+}
+
+def get_sub_detect_range(ship_class):
+    """对潜索敌距离；该舰种无专门配置时返回 None（调用方回退基础索敌距离）。"""
+    if not ship_class:
+        return None
+    return SUB_DETECT_RANGE.get(ship_class)
+
 def get_asw_tier(tier):
     """Resolve an ASW tier's stats (tier 0 / None -> no ASW, returns None)."""
     if not tier:

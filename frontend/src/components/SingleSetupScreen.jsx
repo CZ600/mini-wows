@@ -126,6 +126,13 @@ export default function SingleSetupScreen({ user, onStart, onBack }) {
                 </div>
               </>
             )}
+
+            <div className="battle-info">
+              <div className="info-line">刷怪：敌方舰队在周边<strong>随机位置</strong>刷新，成波来袭；清空当前波次后立即刷新下一波</div>
+              <div className="info-line">初始等级：自选 1-10 级开局（4 级起需选择舰种技术路线）</div>
+              <div className="info-line">成长：击沉敌舰获得分数与经验，达到阈值即<strong>升级</strong></div>
+              <div className="info-line">升级奖励：换装<strong>更强舰船</strong>（更高血量、更多炮塔）；升至 4 级时解锁舰种选择</div>
+            </div>
           </>
         )}
 

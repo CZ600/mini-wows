@@ -4,7 +4,7 @@ from game.config import (
     GRAVITY, PROJECTILE_INITIAL_SPEED, ENEMY_FIRE_COOLDOWN,
     ENEMY_DETECT_RANGE, ENEMY_FIRE_SPEED,
     ENEMY_SCALE, ENEMY_SHIP_SCALE, AI_DT, get_ship_config,
-    get_muzzle_speed, get_cannon_drag,
+    get_muzzle_speed, get_cannon_drag, get_sub_detect_range,
 )
 from game.projectile import apply_cannon_spread, compensate_drag_pitch
 
@@ -206,7 +206,9 @@ class ServerEnemyShip:
 
         self.torpedo_cooldown -= dt
 
-        # Find closest alive player
+        # Find closest alive player. 对潜索敌：潜艇只有进入本舰种的对潜
+        # 索敌圈（get_sub_detect_range，护卫舰加大、巡洋/战列削弱）才会被
+        # 选为目标 —— 圈外的潜艇视同未发现。
         closest_ship = None
         closest_dist = float('inf')
         for pid, ship in ships.items():
@@ -215,6 +217,10 @@ class ServerEnemyShip:
             dx = ship.pos_x - self.x
             dz = ship.pos_z - self.z
             dist = math.sqrt(dx * dx + dz * dz)
+            if ship.ship_class == "submarine":
+                sub_range = get_sub_detect_range(self.ship_type) or ENEMY_DETECT_RANGE
+                if dist > sub_range:
+                    continue
             if dist < closest_dist:
                 closest_dist = dist
                 closest_ship = ship
@@ -222,9 +228,15 @@ class ServerEnemyShip:
         if closest_ship is None:
             return
 
+        # Chase/fire gate follows the target's own detection ring: a destroyer
+        # hunts a sub out to its 1000 m sonar range, not just the generic 600 m.
+        detect_range = ENEMY_DETECT_RANGE
+        if closest_ship.ship_class == "submarine":
+            detect_range = get_sub_detect_range(self.ship_type) or ENEMY_DETECT_RANGE
+
         if closest_dist < 50:
             self.state = "orbit"
-        elif closest_dist < ENEMY_DETECT_RANGE:
+        elif closest_dist < detect_range:
             self.state = "chase"
         elif self.state != "idle":
             self.state = "idle"
@@ -273,8 +285,9 @@ class ServerEnemyShip:
             self.x = max(-5000, min(5000, new_x))
             self.z = max(-5000, min(5000, new_z))
 
-        # Fire at player - turret-based salvo
-        if (self.state in ("chase", "orbit") and closest_dist < ENEMY_DETECT_RANGE
+        # Fire at player - turret-based salvo (gated by the same per-target
+        # detection ring computed above)
+        if (self.state in ("chase", "orbit") and closest_dist < detect_range
                 and any(cd <= 0 for cd in self.turret_cooldowns)):
             self._fire_at(closest_ship, closest_dist, game_state)
 
