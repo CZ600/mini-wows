@@ -327,7 +327,7 @@ ASW_BLAST_RADIUS = 100.0
 # Battleship air-delivered ASW strike parameters.
 ASW_AIR = {
     "range":    900,   # m — max distance of the target rectangle centre from the ship
-    "box":      70,    # m — half-size of the target rectangle the charges scatter in
+    "box":      40,    # m — half-size of the target rectangle the charges scatter in
     "speed":    60,    # m/s — strike plane cruise speed
     "altitude": 80,    # m — release altitude
     "interval": 0.25,  # s between individual charge releases

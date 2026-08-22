@@ -267,7 +267,7 @@ export const ASW_FUSE_DELAY = 3.0;   // s a charge floats before detonating
 export const ASW_BLAST_RADIUS = 100.0;
 export const ASW_AIR = {
   range: 900,     // m — max target-rectangle distance from the ship
-  box: 70,        // m — half-size of the target rectangle
+  box: 40,        // m — half-size of the target rectangle
   speed: 60,      // m/s — strike plane cruise speed
   altitude: 80,   // m — release altitude
   interval: 0.25, // s between charge releases

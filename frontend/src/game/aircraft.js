@@ -144,7 +144,9 @@ export class Squadron {
   }
 
   // Aim-assist guides (drawn on the water, below the squadron). A torpedo
-  // guide is a straight projected track ahead along heading; a bomb guide is a
+  // guide is a projected fan sector ahead along heading — a bright centre
+  // axis plus a translucent wedge spanning the salvo spread the torpedoes
+  // will actually take (dropTorpedo's ±6°); a bomb guide is a
   // drop reticle (ring + crosshair) placed at the PREDICTED ballistic impact
   // point (not directly below the plane). Only the squadron's own-type guide is
   // shown. `show` lets the engine hide a non-active squadron's guide.
@@ -159,6 +161,15 @@ export class Squadron {
       this._torpGuide = new THREE.Line(torpGeo, torpMat);
       this._torpGuide.frustumCulled = false;
       this.scene.add(this._torpGuide);
+      // Translucent salvo wedge under the axis line, rebuilt per frame in
+      // updateGuides (same shape-space convention as torpedo.js's aim fan:
+      // with rotation.x = -π/2 a shape point (x, y) lands at world (x, 0, -y)).
+      this._torpFan = new THREE.Mesh(
+        new THREE.BufferGeometry(),
+        new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      this._torpFan.frustumCulled = false;
+      this.scene.add(this._torpFan);
     } else {
       // Bomb drop reticle: a bright outer ring + pulsing inner ring + crosshair
       // + center dot, all on the water, positioned at the predicted impact point.
@@ -204,6 +215,7 @@ export class Squadron {
     if (!this._torpGuide && !this._bombReticle) return;
     if (!this.alive || !show) {
       if (this._torpGuide) this._torpGuide.visible = false;
+      if (this._torpFan) this._torpFan.visible = false;
       if (this._bombReticle) this._bombReticle.visible = false;
       return;
     }
@@ -215,6 +227,28 @@ export class Squadron {
       const ez = sz + Math.cos(this.heading) * len;
       this._torpGuide.geometry.setFromPoints([onWater(sx, sz), onWater(ex, ez)]);
       this._torpGuide.visible = true;
+      // Salvo fan: same spread math as dropTorpedo() (±6° once the salvo has
+      // more than one shot); a thin floor keeps a lone torpedo's wedge visible.
+      // Angles are ABSOLUTE world yaws baked into the shape vertices (like
+      // torpedo.js updateAimFan) so the wedge turns with the heading.
+      const cfg = getAirGroupConfig(this.level).torpedo;
+      const count = Math.min(cfg.salvo, this.ammo);
+      const spread = count > 1 ? 6 * Math.PI / 180 : 0;
+      const half = Math.max(spread, 1.5 * Math.PI / 180);
+      const segs = 24;
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      for (let i = 0; i <= segs; i++) {
+        const a = this.heading - half + (2 * half * i) / segs;
+        shape.lineTo(Math.sin(a) * len, -Math.cos(a) * len);
+      }
+      shape.closePath();
+      this._torpFan.geometry.dispose();
+      this._torpFan.geometry = new THREE.ShapeGeometry(shape);
+      this._torpFan.rotation.x = -Math.PI / 2;
+      // A hair below the axis line (y 1.5) so fill and line never z-fight.
+      this._torpFan.position.set(sx, 1.4, sz);
+      this._torpFan.visible = true;
     } else {
       // Place the reticle at the predicted ballistic impact point.
       const impact = this._predictBombImpact();
@@ -359,6 +393,7 @@ export class Squadron {
     this.autoPilot = false;
     this.mesh.visible = false;
     if (this._torpGuide) this._torpGuide.visible = false;
+    if (this._torpFan) this._torpFan.visible = false;
     if (this._bombReticle) this._bombReticle.visible = false;
   }
 

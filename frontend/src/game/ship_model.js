@@ -710,7 +710,8 @@ function addGlassBand(parent, mats, w, h, l, yAbs) {
 //   战列舰 —— 金刚型宝塔式舰桥（三层收分塔楼 + 顶部测距仪）+ 双烟囱 +
 //             带探照灯平台的高桅；配合飞剪艏/圆艉船体，一眼可辨。
 //   巡洋舰 —— 两层舰桥 + 单烟囱 + 桅杆雷达。
-//   驱逐舰 —— 低干舷轻建筑：小舰桥 + 细单烟囱 + 短桅，纤瘦轻快。
+//   驱逐舰 —— 轻量建筑：小舰桥 + 细单烟囱 + 短桅；干舷基底与舰桥高度
+//             适度抬高，与 lengthMul 拉长的船体比例平衡，不再显得低平。
 function buildSurfaceSuperstructure(cfg, deckY, mats, turretTopZ, shipClass, deckYAt) {
   const isBB = shipClass === 'battleship';
   const isDD = shipClass === 'destroyer';
@@ -718,12 +719,12 @@ function buildSurfaceSuperstructure(cfg, deckY, mats, turretTopZ, shipClass, dec
   // 绝对值更短、船长更长，侧影上炮塔与舰桥合计占船长比例明显下降，
   // 整船更修长。烟囱/桅杆/救生艇等一切细节都从这三个量派生，自动跟随。
   const bw = cfg.width * (isBB ? 0.52 : isDD ? 0.44 : 0.50);
-  const bh = cfg.height * (isBB ? 1.05 : isDD ? 0.88 : 1.08);
+  const bh = cfg.height * (isBB ? 1.05 : isDD ? 0.98 : 1.08);
   const bl = cfg.length * (isBB ? 0.30 : isDD ? 0.20 : 0.22);
   const parts = [];
 
   // 低干舷建筑基底。
-  const deckhouseH = bh * (isBB ? 0.55 : isDD ? 0.42 : 0.5);
+  const deckhouseH = bh * (isBB ? 0.55 : isDD ? 0.48 : 0.5);
   const deckhouse = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.85, deckhouseH, bl), mats.super);
   deckhouse.position.set(0, deckY + deckhouseH / 2 + 0.1, 0);
   parts.push(deckhouse);
@@ -774,8 +775,8 @@ function buildSurfaceSuperstructure(cfg, deckY, mats, turretTopZ, shipClass, dec
     // ── 高桅：两道横桁 + 两座探照灯平台 + 顶部雷达 ──
     mastH = bh * 1.3;
   } else if (isDD) {
-    // ── 驱逐舰：紧凑小舰桥 ──
-    const brW = bw * 0.72, brH = bh * 0.55, brL = bl * 0.36;
+    // ── 驱逐舰：紧凑小舰桥（高度适度抬高，平衡修长船体）──
+    const brW = bw * 0.72, brH = bh * 0.68, brL = bl * 0.36;
     const bridge = new THREE.Mesh(new THREE.BoxGeometry(brW, brH, brL), mats.super);
     bridge.position.set(0, deckhouseH / 2 + brH / 2, bl * 0.26);
     deckhouse.add(bridge);
@@ -790,9 +791,9 @@ function buildSurfaceSuperstructure(cfg, deckY, mats, turretTopZ, shipClass, dec
     mastBase = bridge;
     mastBaseHalfH = brH / 2;
 
-    // 细单烟囱 + 短桅。
-    addFunnel(deckhouse, mats, Math.max(0.22, bw * 0.17), bh * 0.72, -bl * 0.30);
-    mastH = bh * 0.55;
+    // 细单烟囱 + 短桅（随舰桥一并抬高少许）。
+    addFunnel(deckhouse, mats, Math.max(0.22, bw * 0.17), bh * 0.78, -bl * 0.30);
+    mastH = bh * 0.68;
   } else {
     // ── 巡洋舰/早期舰：两层舰桥 + 单烟囱（原设计）──
     const fwdBlockW = bw * 0.7, fwdBlockH = bh * 0.8, fwdBlockL = bl * 0.32;
